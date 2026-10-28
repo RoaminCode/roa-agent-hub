@@ -4,13 +4,19 @@
 // Environment:
 //   CHAT_AUDIENCE   the endpoint URL configured in the Chat app (required)
 //   ALLOWED_USERS   comma-separated emails allowed to use Basecamp (shadow mode: Blake only)
+//   PROJECT_NUMBER  Google Cloud project number, to accept Workspace add-on signed requests
 //   PORT            set by Cloud Run
 
+const fs = require('fs');
 const http = require('http');
+const path = require('path');
 const { createVerifier } = require('./chat/verify');
 const { createRouter } = require('./router');
 
 const MAX_BODY_BYTES = 1024 * 1024;
+
+// Basecamp's avatar, served publicly so the Chat app configuration can point at it.
+const AVATAR = fs.readFileSync(path.join(__dirname, '..', 'assets', 'avatar-256.png'));
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -43,13 +49,22 @@ function start() {
   }
 
   const handle = createRouter({
-    verify: createVerifier({ audience }),
+    verify: createVerifier({
+      audience,
+      projectNumber: process.env.PROJECT_NUMBER,
+      onReject: (details) =>
+        console.log(JSON.stringify({ severity: 'WARNING', message: 'chat verification failed', ...details })),
+    }),
     allowedUsers: (process.env.ALLOWED_USERS || '').split(',').map((s) => s.trim()).filter(Boolean),
   });
 
   const server = http.createServer(async (req, res) => {
     // Not /healthz: Cloud Run reserves paths ending in "z" and never forwards them.
     if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });
+    if (req.method === 'GET' && req.url === '/avatar.png') {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+      return res.end(AVATAR);
+    }
     if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
 
     try {

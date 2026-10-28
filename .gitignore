@@ -7,6 +7,10 @@ data/
 *.local.json
 *DEA.JSON
 
+# Screenshots dropped in for review
+Screenshot*.png
+*.jpg
+
 # Editor and OS
 .vscode/
 .idea/
