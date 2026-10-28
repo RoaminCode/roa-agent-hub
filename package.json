@@ -1,0 +1,13 @@
+{
+  "name": "roa-agent-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ROA Agent Hub: the Basecamp router, tools and rules behind ROA's agents in Google Chat",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "show-rjb-view": "node scripts/show-rjb-view.js"
+  }
+}

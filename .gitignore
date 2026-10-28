@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+
+# Real Roamer data never goes in the repo. Test fixtures must be scrubbed.
+data/
+*.local.json
+*DEA.JSON
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
