@@ -16,7 +16,8 @@ Basecamp is ROA's Google Chat app. This repo is the hub behind it: the router th
 - GitHub: `RoaminCode/roa-agent-hub` (private). All ROA code lives under the ROA GitHub account `RoaminCode`, never Blake's personal account. Commits use `RoaminCode <258948938+RoaminCode@users.noreply.github.com>`.
 - Google Cloud project: `roa-agent-hub` (router service account `basecamp-router@roa-agent-hub.iam.gserviceaccount.com`).
 - The production LightSpeed/HubSpot sync lives in a separate project, `hs-ls-integration`. Never deploy to or change it from this repo. The hub only ever gets read-only access to specific endpoints there.
-- gcloud on this machine: `C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd` (may not be on PATH in a fresh shell).
+- gcloud may not be on PATH in an already-open shell. On the laptop it is at `C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd`; on other machines find it with `where gcloud`.
+- Basecamp runs on Cloud Run as service `basecamp` in `us-central1`. Deploy with `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (existing settings and env vars are kept).
 - Node.js 24. Run tests with `npm test`.
 - Design spec: "RJB Agent Spec" in Claude Docs, https://claude.ai/artifact/BuBh95ZHEVuLrFXrnSXht9
 
