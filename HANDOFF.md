@@ -16,9 +16,10 @@ Last updated: 2026-10-28
 
 ## Next steps
 
-1. Draft the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
-2. From Blake's desktop: the integration endpoint details for the deal lookup, and whether a repair order lookup with per-job completion exists (the integration project has functions for repair order parts and labor breakdown reporting; Utah only so far). Then grant `basecamp-router` read-only access to only those endpoints.
-3. Connect the RJB agent: Managed Agent config, router reads `anthropic-api-key` from Secret Manager, first read-only answers about a deal (Slice 2).
+1. **Critical path, Blake only:** from Blake's desktop, the integration endpoint details for the deal lookup, and whether a repair order lookup with per-job completion exists (the integration project has functions for repair order parts and labor breakdown reporting; Utah only so far). Then grant `basecamp-router` read-only access to only those endpoints.
+2. Slice 2: connect the RJB agent (Managed Agent config, router reads `anthropic-api-key` from Secret Manager) and have it answer one real Sales Coach question about one real Utah deal in Chat. Blake checks the answer against LightSpeed.
+3. Only if Slice 2 answers are good: draft the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval, shaped by what data the agent can actually reach. Nothing changes in HubSpot until approved.
+4. Before shadow mode starts, settle the shadow mode open questions below (volume to Blake, answer review, adoption metric).
 
 ## Setting up on another computer
 
@@ -30,6 +31,10 @@ Last updated: 2026-10-28
 - PowerShell 5.1 breaks commit messages that contain double quotes when passed with `-m`. Write the message to a file and use `git commit -F <file>`.
 
 ## Current decisions
+
+**Build order**
+- Prove before building. The delivery clock, deal spaces, direct message cards, note expiry, and commitment checks all wait until the agent answers real deal questions correctly from LightSpeed data (Slice 2).
+- HubSpot structure changes come after confirming what data the agent can reach, so fields are designed once.
 
 **Architecture**
 - One Chat app, Basecamp, routing to several agents (RJB first; later Kevin, Training, ROA Knowledge). One Anthropic API key; each agent is a Managed Agent config referenced by ID.
@@ -76,6 +81,7 @@ Last updated: 2026-10-28
 
 **Shadow mode success metrics**
 - Answered from data (rising), wrong answers (zero), routed answer time (improving), agent HubSpot tasks left open (zero), cost per deal (at or under estimate).
+- Proposed addition: adoption (questions Team Members ask Basecamp, and how often they answer direct message cards). Accuracy without use is not success.
 
 ## Open questions
 
@@ -83,6 +89,9 @@ Last updated: 2026-10-28
 - Mods payment standing rule (team decision in the deal space for now).
 - Parts quantity field meanings.
 - Whether Google Calendar out-of-office is readable for vacation routing.
+- Shadow mode volume: everything for about 80 deals a month across four Experience Centers goes to Blake. Options: a daily digest, or shadow one Experience Center (Utah) first.
+- How wrong answers get caught in shadow mode: a set review of agent answers against LightSpeed, not noticing by chance.
+- Deal space fatigue: a Sales Coach with 10 active deals sits in 10 spaces plus direct message cards. Watch adoption; consider fewer spaces if use drops.
 
 ## Later ideas
 

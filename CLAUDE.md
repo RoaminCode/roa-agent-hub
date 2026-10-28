@@ -31,5 +31,6 @@ Basecamp is ROA's Google Chat app. This repo is the hub behind it: the router th
 - **Every HubSpot task an agent opens, the agent closes.** Due within 3 business days at most, one per question, at most 3 open per deal, every one tagged "Created by RJB Agent", all auto-closed when the deal reaches Finalized or Lost Deal.
 - **Nothing is ever sent to a Roamer or Future Roamer by an agent.** Agents draft; people send.
 - **Shadow mode until Blake says otherwise:** every routed question, direct message, and HubSpot task goes to Blake, labeled with who it would have gone to.
+- **Prove before building.** Do not build the delivery clock, deal spaces, direct message cards, or HubSpot structure changes until the agent answers real deal questions correctly from LightSpeed data. Push back if asked to skip ahead.
 - **Basecamp helps Team Members; it does not reprimand them.** Escalation wording is deliberately undefined until designed with Blake. Follow-ups are logged for coaching.
 - ROA language applies in all code comments, messages, and docs: Roamers, Future Roamers, Team Members, Sales Coach, Experience Center, Leader. No em or en dashes.
