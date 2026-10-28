@@ -22,11 +22,11 @@ Last updated: 2026-10-28
 
 ## Setting up on another computer
 
-- Clone: `git clone https://RoaminCode@github.com/RoaminCode/roa-agent-hub.git` into `C:\Dev\roa-agent-hub`, then `npm install`.
+- Clone: `git clone https://RoaminCode@github.com/RoaminCode/roa-agent-hub.git` into `C:\Users\Support\Documents\Claude\Projects\roa-agent-hub`, then `npm install`.
 - Set the commit identity for this repo (it is not cloned with the code): `git config user.name "RoaminCode"` and `git config user.email "258948938+RoaminCode@users.noreply.github.com"`.
 - Git must be signed in to GitHub as RoaminCode, not the personal account. Keep `RoaminCode@` in the remote URL so Git Credential Manager picks the right account.
 - gcloud must be installed and signed in as blake@rvsofamerica.com. Find its path with `where gcloud`; it may not be on PATH in an already-open shell.
-- In Claude Code's `!` prompt (Git Bash), use forward slashes in Windows paths: `C:/Dev/roa-agent-hub`.
+- In Claude Code's `!` prompt (Git Bash), use forward slashes in Windows paths: `C:/Users/Support/Documents/Claude/Projects/roa-agent-hub`.
 - PowerShell 5.1 breaks commit messages that contain double quotes when passed with `-m`. Write the message to a file and use `git commit -F <file>`.
 
 ## Current decisions
