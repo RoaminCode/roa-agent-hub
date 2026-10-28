@@ -1,0 +1,10 @@
+.git/
+.gitignore
+.gitattributes
+.gcloudignore
+node_modules/
+test/
+scripts/
+*.md
+.env
+.env.*
