@@ -3,7 +3,8 @@
 // Runs one Roamer brief in the background and posts the result to the space it was
 // asked from. Logs timing and token usage, never Roamer details.
 
-const { writeBrief, renderBrief } = require('./agents/roamerBrief');
+const { writeBrief } = require('./agents/roamerBrief');
+const { renderBriefCard } = require('./chat/briefCard');
 
 const SORRY = {
   notFound: (n, store) => `I couldn't find ${store} deal ${n} in HubSpot. Check the number and try again.`,
@@ -11,7 +12,7 @@ const SORRY = {
   failed: (n) => `I couldn't finish the brief for deal ${n}. Blake can see what happened in the logs.`,
 };
 
-function createBriefJob({ loadContext, anthropic, sendMessage, log }) {
+function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl }) {
   return async function runBrief({ spaceName, dealNumber, store = 'UT' }) {
     const started = Date.now();
     try {
@@ -31,7 +32,7 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log }) {
         ms: Date.now() - started,
       });
       if (!result.ok) return await sendMessage(spaceName, SORRY.failed(dealNumber));
-      await sendMessage(spaceName, renderBrief({ dealNumber, context, brief: result.brief }));
+      await sendMessage(spaceName, renderBriefCard({ dealNumber, context, brief: result.brief, avatarUrl }));
     } catch (err) {
       log('ERROR', 'brief failed', { dealNumber, error: err.message, ms: Date.now() - started });
       await sendMessage(spaceName, SORRY.failed(dealNumber)).catch((e) =>

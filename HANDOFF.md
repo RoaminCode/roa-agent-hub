@@ -15,6 +15,8 @@ Last updated: 2026-10-28
 - 21 tests pass (`npm test`): LightSpeed trim, router, request verification.
 - 2026-10-28 read-only review of `hs-ls-integration`: no endpoint the hub can safely call exists. The deal lookups (`diagnose-deal`, `deal-report`) live inside `adminTools`, which needs a dashboard operator sign-in and also performs writes. All 10 services allow `allUsers` and check callers in code. Deploy bundles contain real Roamer data. No repair order lookup is deployed. A handoff (`handoff-from-agent-hub.md`, in a Gmail draft to Blake) asks the integration project to clean the bundles, report on how each function is protected, and build a read-only `rjbDealLookup` callable only by `basecamp-router`.
 - HubSpot private app "Basecamp" is live and verified: every read works, including call transcripts (2,723 calls have them). Token in Secret Manager as `hubspot-access-token`.
+- **The Roamer brief is live (Slice 1, first piece).** Blake sends "brief <deal#>" to Basecamp in Chat; Basecamp answers at once, reads every call, text, email, and note on the deal's Roamer in HubSpot, and posts a card: header (Roamer, deal, delivery, Sales Coach), headline, tags, key facts, then WOW, MODS, and JOURNEY sections, with buttons into HubSpot. Claude Opus 5.5 at high effort with default fallbacks. About 7 cents and 23 seconds for a small deal, 60 cents and 45 seconds for one with about 1,070 items. Arctic palette: WOW #2E9BD6, MODS #23858A, JOURNEY #4A6F94, buttons #2E7DB8. Avatar is the headset sasquatch (`assets/avatar-256.png`, served as `/avatar.png?v=2`); the Chat app configuration's avatar URL should point at the `?v=2` address.
+- Full call transcripts are not reachable through HubSpot's API (every transcript endpoint returns 404). Briefs read Aloware's and HubSpot's call summaries and say so on the card.
 - Aloware send is proven end to end: approved text, Aloware API, phone, and automatic HubSpot log. Sends go out as the company (`user_id: -1`), verified (see Aloware sending).
 
 ## Next steps
@@ -22,9 +24,10 @@ Last updated: 2026-10-28
 1. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
 2. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
 3. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
-4. Build Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]", the Wow and Utility summary from HubSpot communications, and the Service Advisor contact check with a draft. The first test is whether the summaries are WOW or generic. HubSpot access is ready, so this can start now.
-5. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
-6. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
+4. **Next build: App Home as "My deals"**: each Team Member's open Utah deals by projected delivery, days to delivery, last contact, and a Brief button. Code only, no AI until Brief is tapped. Confirm the add-on event format for Home first.
+5. Then the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post) and the Service Advisor contact check with a draft.
+6. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
+7. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
 
 ## Setting up on another computer
 

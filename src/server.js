@@ -64,6 +64,8 @@ function briefStarter() {
     anthropic: new Anthropic({ apiKey: ANTHROPIC_API_KEY }),
     sendMessage,
     log,
+    // Bump v when the avatar image changes.
+    avatarUrl: `${new URL(process.env.CHAT_AUDIENCE).origin}/avatar.png?v=2`,
   });
   return (job) => {
     runBrief(job);
@@ -91,7 +93,8 @@ function start() {
   const server = http.createServer(async (req, res) => {
     // Not /healthz: Cloud Run reserves paths ending in "z" and never forwards them.
     if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });
-    if (req.method === 'GET' && req.url === '/avatar.png') {
+    // A ?v= query is allowed so a new avatar can get past Chat's image cache.
+    if (req.method === 'GET' && req.url.split('?')[0] === '/avatar.png') {
       res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
       return res.end(AVATAR);
     }

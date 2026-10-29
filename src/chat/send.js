@@ -7,10 +7,12 @@
 const { GoogleAuth } = require('google-auth-library');
 
 function createChatSender({ auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/chat.bot'] }) } = {}) {
-  return async function sendMessage(spaceName, text) {
+  // `message` is plain text, or a Chat message object such as { fallbackText, cardsV2 }.
+  return async function sendMessage(spaceName, message) {
     if (!/^spaces\/[\w-]+$/.test(spaceName || '')) throw new Error('sendMessage: invalid space name');
     const client = await auth.getClient();
-    await client.request({ url: `https://chat.googleapis.com/v1/${spaceName}/messages`, method: 'POST', data: { text } });
+    const data = typeof message === 'string' ? { text: message } : message;
+    await client.request({ url: `https://chat.googleapis.com/v1/${spaceName}/messages`, method: 'POST', data });
   };
 }
 

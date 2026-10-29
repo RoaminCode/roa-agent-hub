@@ -17,17 +17,17 @@ const context = {
 
 const item = (detail) => ({ detail, date: '2026-10-03', channel: 'text' });
 
-test('renders a brief with Wow, Utility, and where it came from', () => {
-  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'Pat is excited.', wow: [item('First trailer.')], utility: [] } });
+test('renders a brief with Wow, Journey, and where it came from', () => {
+  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'Pat is excited.', wow: [item('First trailer.')], journey: [] } });
   assert.match(text, /^\*Deal 90001: Pat Sample\*\nPat is excited\./);
   assert.match(text, /\*Wow\*\n• First trailer\. \(Oct 3, text\)/);
-  assert.match(text, /\*Utility\*\n• Nothing yet in the record\./);
+  assert.match(text, /\*Journey\*\n• Nothing yet in the record\./);
   assert.match(text, /From 0 calls, 1 texts, 0 emails, and 0 notes/);
 });
 
 test('trims whole items, never mid-line, to fit Chat', () => {
   const long = Array.from({ length: 12 }, (_, i) => item(`${i} ${'x'.repeat(300)}`));
-  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'h', wow: long, utility: long } });
+  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'h', wow: long, journey: long } });
   assert.ok(text.length <= 4000);
   assert.match(text, /lower-priority items did not fit in Chat/);
   assert.match(text, /full transcripts are not available yet\._/);
@@ -46,7 +46,7 @@ test('marks the record as data and notes when old items were left out', () => {
 const fakeAnthropic = (message) => ({ beta: { messages: { stream: () => ({ finalMessage: async () => message }) } } });
 
 test('reads the structured brief from the model', async () => {
-  const brief = { headline: 'h', wow: [], utility: [] };
+  const brief = { headline: 'h', wow: [], journey: [] };
   const result = await writeBrief({ anthropic: fakeAnthropic({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(brief) }], usage: {} }), context });
   assert.deepStrictEqual(result.brief, brief);
 });
@@ -82,4 +82,19 @@ test('the brief job tells the user when something breaks, and logs no Roamer det
   await run({ spaceName: 'spaces/AAA', dealNumber: '2', store: 'UT' });
   assert.deepStrictEqual(sent, [SORRY.failed('2')]);
   assert.strictEqual(logs[0][1], 'brief failed');
+});
+
+test('the brief job posts the brief as a card', async () => {
+  const sent = [];
+  const brief = { headline: 'h', wow: [], journey: [] };
+  const run = createBriefJob({
+    loadContext: async () => ({ ...context, deal: { id: '111', properties: context.deal.properties }, contact: { id: '222', properties: context.contact.properties } }),
+    anthropic: fakeAnthropic({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(brief) }], usage: {} }),
+    sendMessage: async (space, message) => sent.push(message),
+    log: () => {},
+    avatarUrl: 'https://example.com/a.png',
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].cardsV2[0].cardId, 'brief-90001');
 });
