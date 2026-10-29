@@ -42,17 +42,22 @@ function cleanText(html) {
     .trim();
 }
 
+// A text sent through Aloware's API as the company has a blank sender.
+const COMPANY_SENDER = 'Basecamp or the company';
+
 // Aloware logs a text as "<sender> has sent an SMS to <number> | Line: ... | From: ... |
 // Creator Type: ... | Message: | <text>". Keep who sent it and the message itself.
+// `sender` is null when the record does not say.
 function parseAlowareText(body) {
   const text = cleanText(body);
   const marker = text.search(/Message:\s*/i);
   if (marker === -1) return { sender: null, message: text };
   const header = text.slice(0, marker);
   const message = text.slice(marker).replace(/^Message:\s*/i, '').trim();
-  const sentBy = header.match(/^(.*?) has sent an SMS/i);
-  const sender = sentBy && sentBy[1].trim() ? sentBy[1].trim() : 'Basecamp or the company';
-  return { sender, message };
+  // A company send has no name, so after cleaning its header starts at "has sent an SMS".
+  const sentBy = header.match(/^(.*?)\s*has sent an SMS/i);
+  if (!sentBy) return { sender: null, message };
+  return { sender: sentBy[1].trim() || COMPANY_SENDER, message };
 }
 
 // Drop quoted earlier messages from an email reply so each email is counted once.
@@ -64,7 +69,7 @@ function stripQuotedReply(text) {
 }
 
 function clip(text, max) {
-  return text.length > max ? `${text.slice(0, max)} [cut]` : text;
+  return text.length > max ? { text: `${text.slice(0, max)} [cut]`, clipped: true } : { text, clipped: false };
 }
 
 function toItem(type, record, ownerName) {
@@ -97,7 +102,7 @@ function toItem(type, record, ownerName) {
   }
 
   if (!text) return null;
-  return { id: record.id, channel, at, who, text: clip(text, maxChars) };
+  return { id: record.id, channel, at, who, ...clip(text, maxChars) };
 }
 
 // Keep the newest items that fit the budget; report how many older ones were left out.
@@ -117,6 +122,8 @@ function fitBudget(items, maxChars = MAX_TOTAL_CHARS) {
 function createDealContext({ hubspot }) {
   const owners = new Map();
 
+  // Names are cached for the life of the instance; a failed lookup is not, so the next
+  // brief tries again.
   async function ownerNames(ids) {
     for (const id of new Set(ids.filter(Boolean))) {
       if (owners.has(id)) continue;
@@ -124,7 +131,7 @@ function createDealContext({ hubspot }) {
         const o = await hubspot.get(`/crm/v3/owners/${id}`);
         owners.set(id, [o.firstName, o.lastName].filter(Boolean).join(' ') || null);
       } catch {
-        owners.set(id, null);
+        // Left out of the cache; this brief shows no name for this owner.
       }
     }
     return (id) => (id ? owners.get(id) || null : null);
@@ -143,6 +150,8 @@ function createDealContext({ hubspot }) {
     return ids;
   }
 
+  // A batch read can answer with some records and errors for the rest (HTTP 207), so
+  // `missing` counts what was asked for and not returned.
   async function batchRead(type, ids, properties) {
     const records = [];
     for (let i = 0; i < ids.length; i += 100) {
@@ -152,9 +161,10 @@ function createDealContext({ hubspot }) {
       });
       records.push(...(page.results || []));
     }
-    return records;
+    return { records, missing: Math.max(0, ids.length - records.length) };
   }
 
+  // Null when no deal matches; { duplicate: true } when more than one does, rather than guessing.
   async function findDeal(store, dealNumber) {
     const cmf = STORE_CMF[store];
     if (!cmf) throw new Error(`unknown store ${store}`);
@@ -170,23 +180,30 @@ function createDealContext({ hubspot }) {
       properties: DEAL_PROPS,
       limit: 2,
     });
-    return found.results && found.results[0] ? found.results[0] : null;
+    const results = found.results || [];
+    if (results.length > 1) return { duplicate: true };
+    return results[0] || null;
   }
 
   return async function load({ store = 'UT', dealNumber }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal) return { found: false };
+    if (deal.duplicate) return { found: false, duplicate: true };
 
     const contactIds = await associatedIds('deals', deal.id, 'contacts');
-    if (contactIds.length === 0) return { found: true, deal, contact: null, items: [], omitted: 0, counts: {} };
+    if (contactIds.length === 0) return { found: true, deal, contact: null, items: [], omitted: 0, clipped: 0, missing: 0, counts: {} };
 
     // The first associated contact is the Roamer; co-buyers come later and are not read yet.
-    const [contact] = await batchRead('contacts', [contactIds[0]], CONTACT_PROPS);
+    const contact = (await batchRead('contacts', [contactIds[0]], CONTACT_PROPS)).records[0];
+    if (!contact) throw new Error('the Roamer contact could not be read');
 
     const records = {};
+    let missing = 0;
     for (const [type, source] of Object.entries(SOURCES)) {
       const ids = await associatedIds('contacts', contact.id, type);
-      records[type] = await batchRead(type, ids, source.props);
+      const read = await batchRead(type, ids, source.props);
+      records[type] = read.records;
+      missing += read.missing;
     }
 
     const ownerIds = [deal.properties.hubspot_owner_id];
@@ -209,9 +226,12 @@ function createDealContext({ hubspot }) {
       contact,
       items,
       omitted,
+      // Items kept but shortened to fit, and records HubSpot did not return.
+      clipped: items.filter((i) => i.clipped).length,
+      missing,
       counts,
     };
   };
 }
 
-module.exports = { createDealContext, cleanText, parseAlowareText, stripQuotedReply, fitBudget, STORE_CMF };
+module.exports = { createDealContext, cleanText, parseAlowareText, stripQuotedReply, fitBudget, STORE_CMF, COMPANY_SENDER };

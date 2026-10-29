@@ -8,6 +8,7 @@ const { renderBriefCard } = require('./chat/briefCard');
 
 const SORRY = {
   notFound: (n, store) => `I couldn't find ${store} deal ${n} in HubSpot. Check the number and try again.`,
+  duplicate: (n, store) => `HubSpot has more than one ${store} deal ${n}, so I can't tell which Roamer to read up on. Blake can sort out the duplicate.`,
   noContact: (n) => `Deal ${n} has no Roamer contact attached in HubSpot, so there's nothing to read yet.`,
   failed: (n) => `I couldn't finish the brief for deal ${n}. Blake can see what happened in the logs.`,
 };
@@ -19,6 +20,7 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl })
     try {
       if (announce) await sendMessage(spaceName, announce);
       const context = await loadContext({ store, dealNumber });
+      if (context.duplicate) return await sendMessage(spaceName, SORRY.duplicate(dealNumber, store));
       if (!context.found) return await sendMessage(spaceName, SORRY.notFound(dealNumber, store));
       if (!context.contact) return await sendMessage(spaceName, SORRY.noContact(dealNumber));
 
@@ -29,6 +31,8 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl })
         reason: result.reason || null,
         items: context.items.length,
         omitted: context.omitted,
+        clipped: context.clipped,
+        missing: context.missing,
         inputTokens: result.usage ? result.usage.input_tokens : null,
         outputTokens: result.usage ? result.usage.output_tokens : null,
         ms: Date.now() - started,

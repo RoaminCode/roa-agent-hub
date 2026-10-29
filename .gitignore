@@ -16,3 +16,6 @@ Screenshot*.png
 .idea/
 .DS_Store
 Thumbs.db
+
+# Codex review output (local only)
+.codex-reviews/

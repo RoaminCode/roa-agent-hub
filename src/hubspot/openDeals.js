@@ -5,7 +5,7 @@
 // Roamer and trailer come from the deal name, and last contact comes from batch reads and
 // a few searches across all deals together.
 
-const { STORE_CMF, parseAlowareText } = require('./dealContext');
+const { STORE_CMF, parseAlowareText, COMPANY_SENDER } = require('./dealContext');
 
 // The engagement types that move Last Contacted, and what to read from each to say who
 // made the contact.
@@ -20,7 +20,7 @@ const MOMENTS_PER_SEARCH = 5;
 // Sales Pipeline stage "Deals". Finalized and Lost Deal are the closed stages.
 const OPEN_STAGE = '85341732';
 
-const PROPS = ['dealname', 'ls_deal_number', 'projected_delivery_date', 'notes_last_contacted', 'hubspot_owner_id'];
+const PROPS = ['dealname', 'ls_deal_number', 'projected_delivery_date', 'hubspot_owner_id'];
 
 // Deal names read "51436 - Scott Henderson - 2026 Pause PETRE19.6-AR".
 function parseDealName(dealname) {
@@ -33,6 +33,8 @@ function parseDealName(dealname) {
 function createOpenDeals({ hubspot }) {
   const owners = new Map();
 
+  // Names are cached for the life of the instance; a failed lookup is not, so it is tried
+  // again next time instead of hiding the name until a restart.
   async function ownerName(id) {
     if (!id) return null;
     if (!owners.has(id)) {
@@ -40,7 +42,7 @@ function createOpenDeals({ hubspot }) {
         const o = await hubspot.get(`/crm/v3/owners/${id}`);
         owners.set(id, o.firstName || [o.firstName, o.lastName].filter(Boolean).join(' ') || null);
       } catch {
-        owners.set(id, null);
+        return null;
       }
     }
     return owners.get(id);
@@ -71,14 +73,19 @@ function createOpenDeals({ hubspot }) {
     } while (after);
 
     const contactLast = await contactLastContacted(deals.map((d) => d.id));
-    const by = await lastContactBy([...contactLast.values()]);
+    // Who made the last contact is extra: if finding it fails, Home still shows the deals.
+    const by = await lastContactBy([...contactLast.values()]).catch((err) => {
+      console.log(JSON.stringify({ severity: 'WARNING', message: 'last contact names unavailable', error: err.message }));
+      return new Map();
+    });
 
     const out = [];
     for (const d of deals) {
       const p = d.properties || {};
       const { roamer, trailer } = parseDealName(p.dealname);
+      // Only the Roamer's own Last Contacted counts; the deal's copy lags and is never used.
       const fromContact = contactLast.get(d.id);
-      const last = (fromContact && fromContact.at) || p.notes_last_contacted;
+      const last = fromContact ? fromContact.at : null;
       const who = fromContact ? by.get(fromContact.contactId) : null;
       out.push({
         id: d.id,
@@ -86,7 +93,8 @@ function createOpenDeals({ hubspot }) {
         roamer,
         trailer,
         projectedDelivery: p.projected_delivery_date ? String(p.projected_delivery_date).slice(0, 10) : null,
-        lastContacted: last ? String(last).slice(0, 10) : null,
+        // The full timestamp: Home turns it into a date in the Experience Center's time zone.
+        lastContacted: last ? String(last) : null,
         lastContactBy: who ? who.who : null,
         lastContactChannel: who ? who.channel : null,
         salesCoach: await ownerName(p.hubspot_owner_id),
@@ -111,10 +119,17 @@ function createOpenDeals({ hubspot }) {
       for (const e of wanted) {
         if (found.has(e.contactId)) continue;
         const at = Date.parse(e.at);
-        const match = candidates.find(
+        const matches = candidates.filter(
           (c) => Math.abs(Date.parse(c.properties.hs_timestamp) - at) <= 1000 && (contactsOf.get(String(c.id)) || new Set()).has(e.contactId),
         );
-        if (match) found.set(e.contactId, { who: await contactMaker(type, match.properties), channel: spec.channel });
+        // The first match that shows who made it; one that does not is skipped, not guessed.
+        for (const match of matches) {
+          const who = await contactMaker(type, match.properties);
+          if (who) {
+            found.set(e.contactId, { who, channel: spec.channel });
+            break;
+          }
+        }
       }
     }
     return found;
@@ -149,11 +164,14 @@ function createOpenDeals({ hubspot }) {
 
   // Who made one contact: the Roamer, Basecamp (texts sent through the API), or the Team
   // Member, by first name.
+  // Null when the record does not show who it was.
   async function contactMaker(type, p) {
     if (type === 'emails') return p.hs_email_direction === 'INCOMING_EMAIL' ? 'the Roamer' : (await ownerName(p.hubspot_owner_id)) || 'a Team Member';
     if (type === 'calls') return (await ownerName(p.hubspot_owner_id)) || (p.hs_call_direction === 'INBOUND' ? 'the Roamer' : 'a Team Member');
+    if (p.hs_communication_channel_type && p.hs_communication_channel_type !== 'SMS') return null;
     const { sender } = parseAlowareText(p.hs_communication_body);
-    if (!sender || sender === 'Basecamp or the company') return 'Basecamp';
+    if (!sender) return null;
+    if (sender === COMPANY_SENDER) return 'Basecamp';
     if (/^\+?\d[\d\s()-]+$/.test(sender)) return 'the Roamer';
     return sender.replace(/\s*\(.*\)\s*$/, '').split(/\s+/)[0];
   }

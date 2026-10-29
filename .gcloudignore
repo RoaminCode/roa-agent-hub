@@ -1,10 +1,10 @@
+# Everything git ignores stays out of deploys too (raw Roamer data in data/, local
+# exports, screenshots, review output). Without this line gcloud ignores .gitignore.
+#!include:.gitignore
 .git/
 .gitignore
 .gitattributes
 .gcloudignore
-node_modules/
 test/
 scripts/
 *.md
-.env
-.env.*

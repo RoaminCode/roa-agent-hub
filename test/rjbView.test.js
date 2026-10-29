@@ -15,13 +15,29 @@ test('maps the store to its Experience Center', () => {
   assert.strictEqual(view.deal.experienceCenter, 'Utah');
 });
 
-test('marks the unit on the lot when it has a received date', () => {
-  assert.strictEqual(view.unit.onLot, true);
+test('keeps the received date without claiming the unit is on the lot', () => {
+  assert.ok(view.unit.dateReceived);
+  assert.ok(!('onLot' in view.unit));
 });
 
 test('keeps Dealer Add and Customer Add labor lines as mods', () => {
   assert.strictEqual(view.mods.filter((m) => m.type === 'Dealer Add').length, 4);
   assert.ok(titles(view.mods).includes('DC TO DC ANDERSEN INSTALL 120'));
+});
+
+test("keeps a labor line's retail price under a name that says it is labor only", () => {
+  const sensors = view.mods.find((m) => /Mopeka/.test(m.title));
+  assert.strictEqual(sensors.laborRetailPrice, 118);
+  assert.ok(!('price' in sensors));
+});
+
+test('leaves an unknown labor price as null, not zero', () => {
+  const lookup = JSON.parse(raw);
+  const labor = lookup.result.found[0].deal.Units[0].Labor;
+  const mopeka = labor.find((l) => /Mopeka/.test(l.RepairOrderJobTitle || ''));
+  delete mopeka.RetailPrice;
+  const again = toRjbView(lookup).mods.find((m) => /Mopeka/.test(m.title));
+  assert.strictEqual(again.laborRetailPrice, null);
 });
 
 test('counts a "charge sales" Prep line as an included mod', () => {
@@ -44,6 +60,6 @@ test('leaves out contact and finance fields', () => {
   assert.ok(!/HomePhone|EMail|Birthdate|AmtFinanced|femargin/.test(out));
 });
 
-test('shrinks the lookup by at least 90%', () => {
-  assert.ok(JSON.stringify(view).length < raw.length * 0.1);
+test('shrinks the lookup by at least 85%, both compared without whitespace', () => {
+  assert.ok(JSON.stringify(view).length < JSON.stringify(JSON.parse(raw)).length * 0.15);
 });

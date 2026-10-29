@@ -35,7 +35,9 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
 
   // A brief takes about a minute and Home gives no progress bar, so a second tap on the
-  // same deal is common. Within this window it gets the notice but no second brief.
+  // same deal is common. Within this window it starts no second brief. A typed "brief" is
+  // not checked: it gets a visible reply, and may be a deliberate retry or another space.
+  // The memory is per instance; with two instances a repeat tap can slip through.
   const REPEAT_MS = 2 * 60 * 1000;
   const recentBriefs = new Map();
   function isRepeat(userEmail, dealNumber) {

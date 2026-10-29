@@ -1,6 +1,7 @@
 'use strict';
 
-// Basecamp's App Home: "My deals". Open deals grouped by how soon they deliver, each with
+// Basecamp's App Home: "Utah deals" in shadow mode, "My deals" once Team Members have
+// access. Open deals grouped by how soon they deliver, each with
 // the Roamer, trailer, delivery, last contact, Sales Coach, and a Brief button. Built from
 // one HubSpot search on every open; no AI until someone taps Brief.
 
@@ -39,8 +40,26 @@ function todayIn(timeZone, now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
 }
 
+// A real calendar date as YYYY-MM-DD (not "2026-02-30", which Date would roll forward).
+function isCalendarDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const at = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(at.getTime()) && at.toISOString().slice(0, 10) === value;
+}
+
+// Null when either date is unreadable, so the deal still shows, as having no date.
 function daysBetween(from, to) {
+  if (!isCalendarDate(from) || !isCalendarDate(to)) return null;
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+}
+
+// A timestamp (when someone made contact) as a date where the Experience Center is. HubSpot
+// stores it in UTC, so an evening contact in Utah would otherwise read as the next day.
+// A plain YYYY-MM-DD is already a date and is kept.
+function localDate(value, timeZone) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return isCalendarDate(value) ? value : null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : todayIn(timeZone, at);
 }
 
 // The orange line on an urgent tile.
@@ -84,7 +103,8 @@ function briefButton(deal, endpoint, sent) {
 // row, then last contact on its own row with the Brief button.
 function dealWidgets(deal, today, endpoint, sent) {
   const days = deal.projectedDelivery ? daysBetween(today, deal.projectedDelivery) : null;
-  const quietFor = deal.lastContacted ? daysBetween(deal.lastContacted, today) : null;
+  const contacted = deal.lastContacted ? localDate(deal.lastContacted, TIME_ZONE) : null;
+  const quietFor = contacted ? daysBetween(contacted, today) : null;
   const urgent = isUrgent(days);
 
   const roamer = {
@@ -109,7 +129,7 @@ function dealWidgets(deal, today, endpoint, sent) {
   };
 
   let deliveryText = 'No delivery date';
-  if (deal.projectedDelivery) {
+  if (days !== null) {
     deliveryText = urgent
       ? `<font color="${URGENT}"><b>${deliversLabel(days)}</b></font> · ${shortDate(deal.projectedDelivery)}`
       : `Delivery ${shortDate(deal.projectedDelivery)} (${whenLabel(days)})`;
@@ -119,12 +139,12 @@ function dealWidgets(deal, today, endpoint, sent) {
   const by = deal.lastContactBy ? `, ${escape(deal.lastContactBy)} (${deal.lastContactChannel})` : '';
   const flagged = days !== null && days <= FLAG_WITHIN_DAYS;
   let contactText;
-  if (!deal.lastContacted) {
+  if (!contacted) {
     contactText = flagged ? `<font color="${AMBER}">No contact logged yet</font>` : 'No contact logged yet';
   } else if (flagged && quietFor > QUIET_DAYS) {
-    contactText = `<font color="${AMBER}">No contact in ${quietFor} days · last ${shortDate(deal.lastContacted)}${by}</font>`;
+    contactText = `<font color="${AMBER}">No contact in ${quietFor} days · last ${shortDate(contacted)}${by}</font>`;
   } else {
-    contactText = `Last contact ${shortDate(deal.lastContacted)}${by}`;
+    contactText = `Last contact ${shortDate(contacted)}${by}`;
   }
   const contact = { decoratedText: { startIcon: { materialIcon: { name: 'forum' } }, text: contactText, wrapText: true } };
   if (deal.dealNumber) contact.decoratedText.button = briefButton(deal, endpoint, sent.has(String(deal.dealNumber)));
@@ -172,4 +192,4 @@ function renderNotAllowedHome() {
   return { sections: [{ widgets: [{ textParagraph: { text: "Basecamp isn't available to you yet." } }] }] };
 }
 
-module.exports = { renderHome, renderNotAllowedHome, todayIn, daysBetween, whenLabel, deliversLabel, QUIET_DAYS, FLAG_WITHIN_DAYS };
+module.exports = { renderHome, renderNotAllowedHome, todayIn, daysBetween, localDate, whenLabel, deliversLabel, QUIET_DAYS, FLAG_WITHIN_DAYS };

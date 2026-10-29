@@ -146,11 +146,12 @@ test('lists open deals from one search, pages included', async () => {
   const hubspot = fakeHubSpot({
     pages: [
       {
-        results: [{ id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001', projected_delivery_date: '2026-11-03', notes_last_contacted: '2026-10-28T15:00:00Z', hubspot_owner_id: '9' } }],
+        results: [{ id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001', projected_delivery_date: '2026-11-03', hubspot_owner_id: '9' } }],
         paging: { next: { after: '1' } },
       },
       { results: [{ id: '2', properties: { dealname: '90002 - Sam Example - 2027 Test', ls_deal_number: '90002', hubspot_owner_id: '9' } }] },
     ],
+    contactLast: { 51: '2026-10-28T15:00:00Z' },
   });
   const deals = await createOpenDeals({ hubspot })({ store: 'UT' });
   assert.deepStrictEqual(deals[0], {
@@ -159,7 +160,7 @@ test('lists open deals from one search, pages included', async () => {
     roamer: 'Pat Sample',
     trailer: '2026 Test',
     projectedDelivery: '2026-11-03',
-    lastContacted: '2026-10-28',
+    lastContacted: '2026-10-28T15:00:00Z',
     lastContactBy: null,
     lastContactChannel: null,
     salesCoach: 'Casey',
@@ -178,7 +179,7 @@ test("uses the Roamer's Last Contacted over the deal's, and names who made it", 
     },
   });
   const [d] = await createOpenDeals({ hubspot })({ store: 'UT' });
-  assert.strictEqual(d.lastContacted, '2026-08-06');
+  assert.strictEqual(d.lastContacted, '2026-08-06T16:50:00Z');
   assert.deepStrictEqual([d.lastContactBy, d.lastContactChannel], ['Coby', 'call']);
 });
 
@@ -202,6 +203,87 @@ test('says the Roamer or Basecamp made the last contact when a text shows it', a
   });
   const deals = await createOpenDeals({ hubspot })({ store: 'UT' });
   assert.deepStrictEqual(deals.map((d) => d.lastContactBy), ['the Roamer', 'Basecamp']);
+});
+
+test("never falls back to the deal's own Last Contacted", async () => {
+  const hubspot = fakeHubSpot({
+    pages: [{ results: [{ id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001', notes_last_contacted: '2026-07-16T15:33:00Z' } }] }],
+  });
+  const [d] = await createOpenDeals({ hubspot })({ store: 'UT' });
+  assert.strictEqual(d.lastContacted, null);
+});
+
+test('does not credit Basecamp with a text it cannot read, or with a non-SMS message', async () => {
+  const hubspot = fakeHubSpot({
+    pages: [
+      {
+        results: [
+          { id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001' } },
+          { id: '2', properties: { dealname: '90002 - Sam Example - 2026 Test', ls_deal_number: '90002' } },
+        ],
+      },
+    ],
+    contactLast: { 51: '2026-10-27T22:03:00Z', 52: '2026-10-28T10:00:00Z' },
+    engagements: {
+      communications: [
+        { id: 't1', contact: 51, properties: { hs_timestamp: '2026-10-27T22:03:00Z', hs_communication_body: 'A format we have not seen<br>Message:<br>Hi' } },
+        { id: 't2', contact: 52, properties: { hs_timestamp: '2026-10-28T10:00:00Z', hs_communication_channel_type: 'WHATSAPP', hs_communication_body: ' has sent an SMS<br>Message:<br>Hello' } },
+      ],
+    },
+  });
+  const deals = await createOpenDeals({ hubspot })({ store: 'UT' });
+  assert.deepStrictEqual(deals.map((d) => d.lastContactBy), [null, null]);
+});
+
+test('looks past an unreadable record to another at the same moment that shows who it was', async () => {
+  const hubspot = fakeHubSpot({
+    pages: [{ results: [{ id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001' } }] }],
+    contactLast: { 51: '2026-10-27T22:03:00Z' },
+    engagements: {
+      communications: [
+        { id: 't1', contact: 51, properties: { hs_timestamp: '2026-10-27T22:03:00Z', hs_communication_channel_type: 'WHATSAPP', hs_communication_body: 'x' } },
+        { id: 't2', contact: 51, properties: { hs_timestamp: '2026-10-27T22:03:00Z', hs_communication_body: '+1 555-010-0000 has sent an SMS<br>Message:<br>Hi' } },
+      ],
+    },
+  });
+  const [d] = await createOpenDeals({ hubspot })({ store: 'UT' });
+  assert.strictEqual(d.lastContactBy, 'the Roamer');
+});
+
+test('still lists deals when finding who made the last contact fails', async () => {
+  const hubspot = fakeHubSpot({
+    pages: [{ results: [{ id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001' } }] }],
+    contactLast: { 51: '2026-10-27T22:03:00Z' },
+  });
+  const post = hubspot.post;
+  hubspot.post = async (path, body) => {
+    if (/objects\/(calls|communications|emails)\/search$/.test(path)) throw new Error('HubSpot POST failed: HTTP 500');
+    return post(path, body);
+  };
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    const [d] = await createOpenDeals({ hubspot })({ store: 'UT' });
+    assert.deepStrictEqual([d.dealNumber, d.lastContacted, d.lastContactBy], ['90001', '2026-10-27T22:03:00Z', null]);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test('tries a failed Sales Coach lookup again instead of remembering the failure', async () => {
+  let fail = true;
+  const hubspot = fakeHubSpot({ pages: [], owners: { 9: 'Casey' } });
+  const get = hubspot.get;
+  hubspot.get = async (path) => {
+    if (fail) throw new Error('HubSpot GET failed: HTTP 500');
+    return get(path);
+  };
+  const page = () => ({ results: [{ id: '1', properties: { dealname: '90001 - Pat Sample - 2026 Test', ls_deal_number: '90001', hubspot_owner_id: '9' } }] });
+  const list = createOpenDeals({ hubspot });
+  hubspot.post = ((post) => async (path, body) => (path.endsWith('/deals/search') ? page() : post(path, body)))(hubspot.post);
+  assert.strictEqual((await list({ store: 'UT' }))[0].salesCoach, null);
+  fail = false;
+  assert.strictEqual((await list({ store: 'UT' }))[0].salesCoach, 'Casey');
 });
 
 test('does not credit an engagement at the same moment on another Roamer', async () => {
@@ -242,6 +324,22 @@ function tile(section) {
   };
 }
 const tiles = (card) => card.sections.filter((s) => s.widgets[0].columns).map(tile);
+
+test('dates an evening contact in Utah on the day it happened, not the next UTC day', () => {
+  const { localDate } = require('../src/chat/homeCard');
+  assert.strictEqual(localDate('2026-10-30T01:00:00Z', 'America/Denver'), '2026-10-29');
+  assert.strictEqual(localDate('2026-10-28', 'America/Denver'), '2026-10-28');
+  assert.strictEqual(localDate('not a date', 'America/Denver'), null);
+  assert.strictEqual(localDate('2026-99-99', 'America/Denver'), null);
+  assert.strictEqual(daysBetween('2026-02-28', '2026-02-30'), null);
+  const [t] = tiles(home([deal('90001', '2026-11-03', '2026-10-28T02:30:00Z', 'Coby', 'text')]));
+  assert.strictEqual(t.contact, 'Last contact Oct 27, Coby (text)');
+});
+
+test('keeps a deal with an unreadable delivery date on Home, as having none', () => {
+  const card = home([deal('90001', 'garbage', '2026-10-28')]);
+  assert.deepStrictEqual(tiles(card).map((t) => [t.header, t.delivery]), [['NO DELIVERY DATE 1', 'No delivery date']]);
+});
 
 test('counts days in Mountain time', () => {
   assert.strictEqual(todayIn('America/Denver', new Date('2026-10-30T03:00:00Z')), '2026-10-29');

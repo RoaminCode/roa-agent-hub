@@ -5,7 +5,7 @@
 // buttons into HubSpot. Card text supports a small HTML subset, so all record text is
 // escaped first.
 
-const { noDashes, shortDate } = require('../agents/roamerBrief');
+const { noDashes, shortDate, basisLine } = require('../agents/roamerBrief');
 
 // HubSpot portal for rvsofamerica.com, used to build record links.
 const HUBSPOT_PORTAL_ID = '39605104';
@@ -122,14 +122,7 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
     .filter(Boolean)
     .join(' · ');
 
-  const n = context.counts || {};
-  const basis = [
-    `From ${n.call || 0} calls, ${n.text || 0} texts, ${n.email || 0} emails, and ${n.note || 0} notes in HubSpot.`,
-    context.omitted ? `The ${context.omitted} oldest items did not fit and were left out.` : null,
-    'Calls are read from their summaries; full transcripts are not available yet.',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  const basis = basisLine(context);
 
   const record = `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record`;
   const buttons = [link('Open deal in HubSpot', `${record}/0-3/${context.deal.id}`)];

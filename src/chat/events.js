@@ -15,10 +15,11 @@ function fromMessage(message) {
   };
 }
 
+// userName is the resource name ("users/123"), which finds the user's direct message.
 function userOf(user) {
   return {
     userEmail: user && user.email ? user.email.toLowerCase() : null,
-    userName: user ? user.displayName || null : null,
+    userName: user ? user.name || null : null,
   };
 }
 
@@ -30,6 +31,8 @@ function parseClassic(body) {
     spaceType: body.space ? body.space.spaceType || body.space.type || null : null,
     ...userOf(body.user),
     ...fromMessage(body.message),
+    // Card buttons are add-on events; a classic click carries no parameters Basecamp reads.
+    parameters: {},
   };
 }
 
@@ -66,7 +69,6 @@ function parseAddOn(body) {
     spaceType: payload.space ? payload.space.spaceType || null : null,
     ...userOf(chat.user),
     ...fromMessage(payload.message),
-    userName: chat.user ? chat.user.name || null : null,
     parameters: common.parameters || {},
   };
 }

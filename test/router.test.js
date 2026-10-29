@@ -74,6 +74,20 @@ test('strips the @Basecamp mention from add-on messages', () => {
   assert.strictEqual(event.format, 'addon');
 });
 
+test('a typed "brief" always starts a brief, even right after another for the same deal', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job.spaceName) });
+  await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  await r({ headers, body: { ...classicMessage(BLAKE, 'brief 51431'), space: { name: 'spaces/OTHER' } } });
+  assert.deepStrictEqual(started, ['spaces/AAA', 'spaces/OTHER']);
+});
+
+test('ignores a classic-format card click instead of failing', async () => {
+  const body = { type: 'CARD_CLICKED', space: { name: 'spaces/AAA' }, user: { email: BLAKE }, action: {} };
+  const result = await router({ headers, body });
+  assert.strictEqual(result.status, 200);
+});
+
 test('parses the brief command, with Utah as the default store', () => {
   const { parseCommand } = require('../src/router');
   assert.deepStrictEqual(parseCommand('brief 51431'), { command: 'brief', dealNumber: '51431', store: 'UT' });

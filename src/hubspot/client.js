@@ -9,7 +9,10 @@ const READ_POST = /\/(search|batch\/read)$/;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep }) {
+// No single HubSpot read should take this long; past it, the read fails instead of hanging.
+const TIMEOUT_MS = 20 * 1000;
+
+function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs = TIMEOUT_MS }) {
   if (!token) throw new Error('createHubSpotClient: token is required');
 
   async function request(method, path, body) {
@@ -21,6 +24,7 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep }) {
         method,
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(timeoutMs),
       });
     let res = await send();
     // HubSpot caps searches per second. One wait and retry covers a burst like App Home's.

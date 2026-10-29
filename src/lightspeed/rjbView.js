@@ -26,6 +26,13 @@ function cleanText(value) {
   return text.length ? text : null;
 }
 
+// Null when LightSpeed gives no number, so an unknown price is never read as free.
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function repairOrder(line) {
   if (!line.RepairOrderNumber) return null;
   return { number: line.RepairOrderNumber, status: cleanText(line.rostatus) };
@@ -35,7 +42,8 @@ function laborLine(line) {
   const out = {
     title: cleanText(line.RepairOrderJobTitle) || cleanText(line.Description),
     description: cleanText(line.Description),
-    price: Number(line.RetailPrice) || 0,
+    // RetailPrice on a labor line, not the mod's total: parts on the line are not included.
+    laborRetailPrice: numberOrNull(line.RetailPrice),
     repairOrder: repairOrder(line),
   };
   // RO status from LightSpeed is per repair order, not per job; a job-level status is not in the deal feed.
@@ -138,8 +146,8 @@ function toRjbView(lookup) {
       newUsed: unit.Newused === 'N' ? 'New' : unit.Newused === 'U' ? 'Used' : cleanText(unit.Newused),
       stockNumber: cleanText(unit.stocknumber),
       vin: cleanText(unit.VIN),
+      // Not read as "on the lot" until the arrival signal is decided (HANDOFF open question).
       dateReceived,
-      onLot: Boolean(dateReceived),
       daysInStore: unit.DaysInStore ?? null,
     },
     mods,
