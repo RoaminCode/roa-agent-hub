@@ -5,6 +5,7 @@
 //   CHAT_AUDIENCE   the endpoint URL configured in the Chat app (required)
 //   ALLOWED_USERS   comma-separated emails allowed to use Basecamp (shadow mode: Blake only)
 //   PROJECT_NUMBER  Google Cloud project number, to accept Workspace add-on signed requests
+//   BRIEFS_PAUSED   "true" turns Roamer briefs off (Home stays on); remove it to turn them back on
 //   HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY
 //                   from Secret Manager; without both, briefs are turned off
 //   PORT            set by Cloud Run
@@ -57,7 +58,7 @@ function log(severity, message, fields = {}) {
 
 // Briefs and App Home. Both need HubSpot; briefs also need Anthropic. Without the keys,
 // each says it is not switched on rather than failing.
-function features(audience) {
+function features(audience, briefsPaused) {
   const { HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY } = process.env;
   const sendMessage = createChatSender();
   const findDirectMessage = createDirectMessageFinder();
@@ -105,7 +106,7 @@ function features(audience) {
     if (!listOpenDeals) return { sections: [{ widgets: [{ textParagraph: { text: "Home isn't switched on yet." } }] }] };
     try {
       // Shadow mode: everyone allowed sees every open Utah deal.
-      return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent });
+      return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent, briefsPaused });
     } catch (err) {
       log('ERROR', 'home failed', { error: errorFields(err) });
       return { sections: [{ widgets: [{ textParagraph: { text: "I couldn't load deals from HubSpot just now. Close and reopen Home to try again." } }] }] };
@@ -122,8 +123,12 @@ function start() {
     process.exit(1);
   }
 
+  const briefsPaused = process.env.BRIEFS_PAUSED === 'true';
+  if (briefsPaused) console.log(JSON.stringify({ severity: 'INFO', message: 'briefs are paused (BRIEFS_PAUSED)' }));
+
   const handle = createRouter({
-    ...features(audience),
+    ...features(audience, briefsPaused),
+    briefsPaused,
     verify: createVerifier({
       audience,
       projectNumber: process.env.PROJECT_NUMBER,

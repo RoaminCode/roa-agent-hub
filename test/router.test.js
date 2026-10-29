@@ -141,6 +141,26 @@ test('ignores a picker tap with a malformed contact, an unknown store, or outsid
   assert.strictEqual(started.length, 0);
 });
 
+test('while briefs are paused, a typed brief gets a short answer and starts nothing', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job), briefsPaused: true });
+  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  assert.deepStrictEqual(result.body, { text: MESSAGES.paused });
+  const help = await r({ headers, body: classicMessage(BLAKE, 'hi') });
+  assert.deepStrictEqual(help.body, { text: MESSAGES.help });
+  assert.strictEqual(started.length, 0);
+});
+
+test('while briefs are paused, an old Brief or picker button starts nothing', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job), buildHome: async () => ({ sections: [] }), briefsPaused: true });
+  const home = await r({ headers, body: { commonEventObject: { invokedFunction: 'https://example.com/', parameters: { action: 'brief', dealNumber: '90001' } }, chat: { user: { name: 'users/123', email: BLAKE }, eventTime: 't', buttonClickedPayload: {} } } });
+  assert.deepStrictEqual(home.body, { action: { navigations: [{ updateCard: { sections: [] } }] } });
+  const picker = await r({ headers, body: pickerClick({ contactId: '78' }) });
+  assert.strictEqual(picker.body.hostAppDataAction.chatDataAction.updateMessageAction.message.text, MESSAGES.paused);
+  assert.strictEqual(started.length, 0);
+});
+
 test('parses the brief command, with Utah as the default store', () => {
   const { parseCommand } = require('../src/router');
   assert.deepStrictEqual(parseCommand('brief 51431'), { command: 'brief', dealNumber: '51431', store: 'UT' });

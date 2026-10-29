@@ -442,6 +442,13 @@ test('a deal with more than one contact says so on its tile', () => {
   assert.strictEqual(one.roamer.topLabel, '90002 · 2026 Test');
 });
 
+test('while briefs are paused, Home has no Brief buttons and says why', () => {
+  const card = home([deal('90001', '2026-11-03', '2026-10-28')], { briefsPaused: true });
+  const [t] = tiles(card);
+  assert.strictEqual(t.button, undefined);
+  assert.match(JSON.stringify(card.sections.at(-1)), /briefs are paused/);
+});
+
 test('a sent deal shows a disabled In Messages button instead of Brief', () => {
   const [sentTile, other] = tiles(home([deal('90001', '2026-11-03', '2026-10-28'), deal('90002', '2026-11-04', '2026-10-28')], { sent: new Set(['90001']) }));
   assert.deepStrictEqual([sentTile.button.text, sentTile.button.disabled], ['In Messages', true]);

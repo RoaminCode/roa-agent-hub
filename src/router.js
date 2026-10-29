@@ -14,6 +14,7 @@ const MESSAGES = {
   help: 'Try "brief 51431" for a Roamer brief on a Utah deal.',
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
+  paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out. Home still shows every deal, delivery, and last contact.",
   directOnly: (n) => `Roamer briefs stay private for now: ask me for deal ${n} in a direct message with me.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
@@ -33,7 +34,9 @@ function log(severity, message, fields = {}) {
 
 // buildHome({ userEmail, sent }) returns the App Home card; `sent` is the set of deal
 // numbers whose brief this user started recently. See chat/homeCard.js.
-function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now }) {
+// `briefsPaused` turns briefs off without a deploy (BRIEFS_PAUSED in server.js): a typed
+// "brief" gets a short answer and starts nothing, and Home shows no Brief buttons.
+function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
 
   // A brief takes about a minute and Home gives no progress bar, so a second tap on the
@@ -104,6 +107,11 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     }
 
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'brief') {
+      // A button drawn before the pause (an old Home or contact picker) starts nothing.
+      if (briefsPaused) {
+        if (event.parameters.from === 'picker') return { status: 200, body: updateMessageFor(event, MESSAGES.paused) };
+        return { status: 200, body: homeUpdateFor(await buildHome({ userEmail: event.userEmail, sent: new Set() })) };
+      }
       const dealNumber = String(event.parameters.dealNumber || '');
       if (!/^\d{3,8}$/.test(dealNumber)) return { status: 200, body: {} };
 
@@ -145,6 +153,7 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     if (event.type === 'MESSAGE') {
       const cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
+      if (briefsPaused) return { status: 200, body: replyFor(event, MESSAGES.paused) };
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
       // A brief holds a Roamer's personal details, so it is posted only where the reader
       // should see them: a direct message with Basecamp. When deal spaces exist, a deal's

@@ -101,7 +101,7 @@ function briefButton(deal, endpoint, sent) {
 
 // One deal's tile: the Roamer with the Sales Coach at top right, then delivery on its own
 // row, then last contact on its own row with the Brief button.
-function dealWidgets(deal, today, endpoint, sent) {
+function dealWidgets(deal, today, endpoint, sent, briefsPaused) {
   const days = deal.projectedDelivery ? daysBetween(today, deal.projectedDelivery) : null;
   const contacted = deal.lastContacted ? localDate(deal.lastContacted, TIME_ZONE) : null;
   const quietFor = contacted ? daysBetween(contacted, today) : null;
@@ -147,13 +147,14 @@ function dealWidgets(deal, today, endpoint, sent) {
     contactText = `Last contact ${shortDate(contacted)}${by}`;
   }
   const contact = { decoratedText: { startIcon: { materialIcon: { name: 'forum' } }, text: contactText, wrapText: true } };
-  if (deal.dealNumber) contact.decoratedText.button = briefButton(deal, endpoint, sent.has(String(deal.dealNumber)));
+  if (deal.dealNumber && !briefsPaused) contact.decoratedText.button = briefButton(deal, endpoint, sent.has(String(deal.dealNumber)));
 
   return { days, widgets: [top, delivery, contact] };
 }
-function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date() }) {
+// With `briefsPaused`, tiles have no Brief button and the footer says why.
+function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(), briefsPaused = false }) {
   const today = todayIn(TIME_ZONE, now);
-  const rows = deals.map((d) => dealWidgets(d, today, endpoint, sent));
+  const rows = deals.map((d) => dealWidgets(d, today, endpoint, sent, briefsPaused));
 
   const sections = [];
 
@@ -175,7 +176,11 @@ function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(
         textParagraph: {
           text: `<font color="${COLORS.muted}">${
             shadow ? 'Shadow mode: showing every open Utah deal. ' : ''
-          }Tap Brief and the Roamer brief arrives in the Messages tab in about a minute.</font>`,
+          }${
+            briefsPaused
+              ? "Roamer briefs are paused for now while Basecamp's AI funding is sorted out."
+              : 'Tap Brief and the Roamer brief arrives in the Messages tab in about a minute.'
+          }</font>`,
         },
       },
     ],
