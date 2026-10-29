@@ -118,7 +118,10 @@ async function writeBrief({ anthropic, context }) {
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: 'high', format: { type: 'json_schema', schema: SCHEMA } },
+    // Medium, not high: compared on three Utah deals (2026-10-29), quality held, briefs
+    // came 9 to 16 seconds sooner, and cost about 16% less. Set explicitly; it is also the
+    // model's default.
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCHEMA } },
     system: SYSTEM,
     messages: [{ role: 'user', content: formatRecord(context) }],
   });
