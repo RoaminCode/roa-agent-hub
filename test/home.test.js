@@ -67,14 +67,14 @@ test('Home shows a not-yet card to anyone else and never loads deals', async () 
   assert.strictEqual(loaded, false);
 });
 
-test('tapping Brief starts the brief and answers with a pop-up, not a redrawn card', async () => {
+test('tapping Brief starts the brief and answers with Home, that deal marked sent', async () => {
   const started = [];
-  let rebuilt = false;
+  const builds = [];
   const router = createRouter({
     verify: accept,
     allowedUsers: [BLAKE],
     startBrief: (job) => started.push(job),
-    buildHome: async () => ((rebuilt = true), {}),
+    buildHome: async ({ sent }) => (builds.push([...sent]), { sections: [] }),
   });
   const result = await router({ headers, body: clickEvent(BLAKE, '51455', 'Pat Sample') });
   assert.deepStrictEqual(started, [
@@ -87,11 +87,21 @@ test('tapping Brief starts the brief and answers with a pop-up, not a redrawn ca
       announce: "I'll need just a moment to read up on Pat Sample (deal 51455).",
     },
   ]);
-  assert.deepStrictEqual(result.body, { action: { notification: { text: "Pat Sample's brief (51455) is on its way to your messages." } } });
-  assert.strictEqual(rebuilt, false);
-  assert.strictEqual(MESSAGES.briefOnTheWay('51455'), 'The brief for deal 51455 is on its way to your messages.');
+  assert.deepStrictEqual(builds, [['51455']]);
+  assert.deepStrictEqual(result.body, { action: { navigations: [{ updateCard: { sections: [] } }] } });
 });
 
+test('reopening Home soon after a tap still shows that deal as sent', async () => {
+  let clock = 1000000;
+  const builds = [];
+  const router = createRouter({ verify: accept, allowedUsers: [BLAKE], buildHome: async ({ sent }) => (builds.push([...sent]), {}), now: () => clock });
+  await router({ headers, body: clickEvent(BLAKE, '51455') });
+  clock += 60 * 1000;
+  await router({ headers, body: homeEvent(BLAKE) });
+  clock += 2 * 60 * 1000;
+  await router({ headers, body: homeEvent(BLAKE) });
+  assert.deepStrictEqual(builds, [['51455'], ['51455'], []]);
+});
 test('ignores a Brief tap with a malformed deal number', async () => {
   const started = [];
   const router = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job) });
@@ -318,10 +328,15 @@ test('a second Brief tap on the same deal within two minutes does not start anot
   const router = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job.dealNumber), now: () => clock });
   await router({ headers, body: clickEvent(BLAKE, '51455') });
   clock += 30 * 1000;
-  const repeat = (await router({ headers, body: clickEvent(BLAKE, '51455') })).body;
+  await router({ headers, body: clickEvent(BLAKE, '51455') });
   await router({ headers, body: clickEvent(BLAKE, '51431') });
   clock += 3 * 60 * 1000;
   await router({ headers, body: clickEvent(BLAKE, '51455') });
   assert.deepStrictEqual(started, ['51455', '51431', '51455']);
-  assert.match(repeat.action.notification.text, /on its way/);
+});
+test('a sent deal shows a disabled In Messages button instead of Brief', () => {
+  const [sentTile, other] = tiles(home([deal('90001', '2026-11-03', '2026-10-28'), deal('90002', '2026-11-04', '2026-10-28')], { sent: new Set(['90001']) }));
+  assert.deepStrictEqual([sentTile.button.text, sentTile.button.disabled], ['In Messages', true]);
+  assert.deepStrictEqual(sentTile.button.icon, { materialIcon: { name: 'check' } });
+  assert.deepStrictEqual([other.button.text, other.button.disabled], ['Brief', undefined]);
 });

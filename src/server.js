@@ -89,11 +89,21 @@ function features(audience) {
   }
 
   const listOpenDeals = hubspot ? createOpenDeals({ hubspot }) : null;
-  async function buildHome() {
+  // Loading deals takes about 4 seconds; a Brief tap redraws Home and should answer at
+  // once, so a list loaded in the last 90 seconds is reused.
+  const DEALS_FRESH_MS = 90 * 1000;
+  let dealsCache = null;
+  async function openDeals() {
+    if (dealsCache && Date.now() - dealsCache.at < DEALS_FRESH_MS) return dealsCache.deals;
+    const deals = await listOpenDeals({ store: 'UT' });
+    dealsCache = { at: Date.now(), deals };
+    return deals;
+  }
+  async function buildHome({ sent } = {}) {
     if (!listOpenDeals) return { sections: [{ widgets: [{ textParagraph: { text: "Home isn't switched on yet." } }] }] };
     try {
       // Shadow mode: everyone allowed sees every open Utah deal.
-      return renderHome({ deals: await listOpenDeals({ store: 'UT' }), endpoint: audience, shadow: true });
+      return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent });
     } catch (err) {
       log('ERROR', 'home failed', { error: err.message });
       return { sections: [{ widgets: [{ textParagraph: { text: "I couldn't load deals from HubSpot just now. Close and reopen Home to try again." } }] }] };

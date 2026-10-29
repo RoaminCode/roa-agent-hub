@@ -59,7 +59,10 @@ function whenLabel(days) {
   return `${-days} days past`;
 }
 
-function briefButton(deal, endpoint) {
+// After a tap, the button reads "In Messages" and is disabled: Home cannot update itself when
+// the brief lands, so the label has to stay true until Home is reopened.
+function briefButton(deal, endpoint, sent) {
+  if (sent) return { text: 'In Messages', type: 'OUTLINED', disabled: true, icon: { materialIcon: { name: 'check' } }, onClick: { action: { function: endpoint } } };
   return {
     text: 'Brief',
     type: 'FILLED_TONAL',
@@ -79,7 +82,7 @@ function briefButton(deal, endpoint) {
 
 // One deal's tile: the Roamer with the Sales Coach at top right, then delivery on its own
 // row, then last contact on its own row with the Brief button.
-function dealWidgets(deal, today, endpoint) {
+function dealWidgets(deal, today, endpoint, sent) {
   const days = deal.projectedDelivery ? daysBetween(today, deal.projectedDelivery) : null;
   const quietFor = deal.lastContacted ? daysBetween(deal.lastContacted, today) : null;
   const urgent = isUrgent(days);
@@ -124,13 +127,13 @@ function dealWidgets(deal, today, endpoint) {
     contactText = `Last contact ${shortDate(deal.lastContacted)}${by}`;
   }
   const contact = { decoratedText: { startIcon: { materialIcon: { name: 'forum' } }, text: contactText, wrapText: true } };
-  if (deal.dealNumber) contact.decoratedText.button = briefButton(deal, endpoint);
+  if (deal.dealNumber) contact.decoratedText.button = briefButton(deal, endpoint, sent.has(String(deal.dealNumber)));
 
   return { days, widgets: [top, delivery, contact] };
 }
-function renderHome({ deals, endpoint, shadow, now = new Date() }) {
+function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date() }) {
   const today = todayIn(TIME_ZONE, now);
-  const rows = deals.map((d) => dealWidgets(d, today, endpoint));
+  const rows = deals.map((d) => dealWidgets(d, today, endpoint, sent));
 
   const sections = [];
 
@@ -152,7 +155,7 @@ function renderHome({ deals, endpoint, shadow, now = new Date() }) {
         textParagraph: {
           text: `<font color="${COLORS.muted}">${
             shadow ? 'Shadow mode: showing every open Utah deal. ' : ''
-          }Tap Brief and the Roamer brief arrives in your Basecamp messages in about a minute.</font>`,
+          }Tap Brief and the Roamer brief arrives in the Messages tab in about a minute.</font>`,
         },
       },
     ],

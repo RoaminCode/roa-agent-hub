@@ -5,7 +5,7 @@
 // which answers right away and posts the Roamer brief when it is ready. App Home shows
 // open deals, each with a Brief button that does the same.
 
-const { parseEvent, replyFor, homeFor, notificationFor, shapeOf } = require('./chat/events');
+const { parseEvent, replyFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
 const { renderNotAllowedHome } = require('./chat/homeCard');
 
 const MESSAGES = {
@@ -13,8 +13,6 @@ const MESSAGES = {
   help: 'Try "brief 51431" for a Roamer brief on a Utah deal.',
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
-  briefOnTheWay: (n, roamer) =>
-    roamer ? `${roamer}'s brief (${n}) is on its way to your messages.` : `The brief for deal ${n} is on its way to your messages.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
 
@@ -31,7 +29,8 @@ function log(severity, message, fields = {}) {
   console.log(JSON.stringify({ severity, message, ...fields }));
 }
 
-// buildHome({ userEmail }) returns the App Home card; see chat/homeCard.js.
+// buildHome({ userEmail, sent }) returns the App Home card; `sent` is the set of deal
+// numbers whose brief this user started recently. See chat/homeCard.js.
 function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
 
@@ -46,6 +45,15 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     if (last && now() - last <= REPEAT_MS) return true;
     recentBriefs.set(key, now());
     return false;
+  }
+  // Deals whose brief this user started within the window, so Home can mark them sent.
+  function sentDeals(userEmail) {
+    const sent = new Set();
+    for (const [k, t] of recentBriefs) {
+      const [user, deal] = k.split('|');
+      if (user === userEmail && now() - t <= REPEAT_MS) sent.add(deal);
+    }
+    return sent;
   }
 
   return async function handle({ headers, body }) {
@@ -83,7 +91,7 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     const isAllowed = Boolean(event.userEmail && allowed.has(event.userEmail));
 
     if (event.type === 'APP_HOME') {
-      const card = isAllowed ? await buildHome({ userEmail: event.userEmail }) : renderNotAllowedHome();
+      const card = isAllowed ? await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail) }) : renderNotAllowedHome();
       return { status: 200, body: homeFor(card) };
     }
 
@@ -95,8 +103,8 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
       const dealNumber = String(event.parameters.dealNumber || '');
       if (!/^\d{3,8}$/.test(dealNumber)) return { status: 200, body: {} };
       if (!isRepeat(event.userEmail, dealNumber)) {
-        // Home shows no sign of progress, so the brief job first posts a line in the
-        // user's Basecamp messages, the same words a typed "brief" command gets back.
+        // The brief job first posts a line in the user's Basecamp messages, the same words
+        // a typed "brief" command gets back, for anyone viewing Home and Messages side by side.
         startBrief({
           spaceName: event.spaceName,
           userName: event.userName,
@@ -106,7 +114,10 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
           announce: MESSAGES.working(dealNumber, event.parameters.roamer),
         });
       }
-      return { status: 200, body: notificationFor(MESSAGES.briefOnTheWay(dealNumber, event.parameters.roamer)) };
+      // On a phone or full screen Messages is out of sight, so Home itself changes: the
+      // tapped deal's button now reads "In Messages" and cannot be tapped again.
+      const card = await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail) });
+      return { status: 200, body: homeUpdateFor(card) };
     }
 
     if (event.type === 'ADDED_TO_SPACE') {

@@ -93,14 +93,14 @@ function replyFor(event, text) {
 }
 
 // App Home responses are bare RenderActions; Chat rejects a "renderActions" wrapper on
-// add-on apps. Opening Home pushes the card. A button tap answers with a notification
-// only, so Chat shows a pop-up and leaves the card where it was instead of redrawing it.
+// add-on apps. Opening Home pushes the card; a button tap answers with the card updated.
+// (Notification pop-ups do not show on Home, so a tap's feedback lives on the card.)
 function homeFor(card) {
   return { action: { navigations: [{ pushCard: card }] } };
 }
 
-function notificationFor(text) {
-  return { action: { notification: { text } } };
+function homeUpdateFor(card) {
+  return { action: { navigations: [{ updateCard: card }] } };
 }
 
-module.exports = { parseEvent, replyFor, homeFor, notificationFor, shapeOf };
+module.exports = { parseEvent, replyFor, homeFor, homeUpdateFor, shapeOf };
