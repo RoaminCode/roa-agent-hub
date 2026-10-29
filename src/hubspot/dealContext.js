@@ -4,6 +4,8 @@
 // (the associated contact), and every call, text, email, and note on that contact.
 // Communications live on the contact, not the deal, whichever department sent them.
 
+const { safeError } = require('../errors');
+
 // LightSpeed store CMF numbers as HubSpot stores them in `ls_cmf`.
 const STORE_CMF = { UT: '76218125' };
 
@@ -21,6 +23,9 @@ const SOURCES = {
   emails: { channel: 'email', props: ['hs_timestamp', 'hs_email_direction', 'hs_email_subject', 'hs_email_text', 'hubspot_owner_id'], maxChars: 3000 },
   notes: { channel: 'note', props: ['hs_timestamp', 'hs_note_body', 'hubspot_owner_id'], maxChars: 3000 },
 };
+
+// Buttons offered when a deal has several contacts and Basecamp asks which is the Roamer.
+const MAX_CHOICES = 6;
 
 // About 100K tokens of record. Past this, the oldest items are left out and the brief says so.
 const MAX_TOTAL_CHARS = 400000;
@@ -167,7 +172,7 @@ function createDealContext({ hubspot }) {
   // Null when no deal matches; { duplicate: true } when more than one does, rather than guessing.
   async function findDeal(store, dealNumber) {
     const cmf = STORE_CMF[store];
-    if (!cmf) throw new Error(`unknown store ${store}`);
+    if (!cmf) throw safeError(`unknown store ${store}`);
     const found = await hubspot.post('/crm/v3/objects/deals/search', {
       filterGroups: [
         {
@@ -185,7 +190,10 @@ function createDealContext({ hubspot }) {
     return results[0] || null;
   }
 
-  return async function load({ store = 'UT', dealNumber }) {
+  // `contactId` is the Roamer someone picked when the deal has more than one contact.
+  // Without it, a deal with several contacts returns `choices` instead of a context, so
+  // Basecamp can ask which one is the Roamer rather than guess.
+  return async function load({ store = 'UT', dealNumber, contactId }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal) return { found: false };
     if (deal.duplicate) return { found: false, duplicate: true };
@@ -193,9 +201,19 @@ function createDealContext({ hubspot }) {
     const contactIds = await associatedIds('deals', deal.id, 'contacts');
     if (contactIds.length === 0) return { found: true, deal, contact: null, items: [], omitted: 0, clipped: 0, missing: 0, counts: {} };
 
-    // The first associated contact is the Roamer; co-buyers come later and are not read yet.
-    const contact = (await batchRead('contacts', [contactIds[0]], CONTACT_PROPS)).records[0];
-    if (!contact) throw new Error('the Roamer contact could not be read');
+    let roamerId = contactIds[0];
+    if (contactId) {
+      // A picked contact must still be on this deal; an old button must not read someone else.
+      if (!contactIds.includes(String(contactId))) return { found: true, deal, notOnDeal: true };
+      roamerId = String(contactId);
+    } else if (contactIds.length > 1) {
+      const { records: people } = await batchRead('contacts', contactIds.slice(0, MAX_CHOICES), CONTACT_PROPS);
+      const choices = people.map((p) => ({ id: String(p.id), name: [p.properties.firstname, p.properties.lastname].filter(Boolean).join(' ') || `Contact ${p.id}` }));
+      return { found: true, deal, choices, contactCount: contactIds.length };
+    }
+
+    const contact = (await batchRead('contacts', [roamerId], CONTACT_PROPS)).records[0];
+    if (!contact) throw safeError('the Roamer contact could not be read');
 
     const records = {};
     let missing = 0;

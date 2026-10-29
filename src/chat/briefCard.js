@@ -110,6 +110,48 @@ function link(text, url) {
   return { text, type: 'FILLED', color: rgb(COLORS.button), onClick: { openLink: { url } } };
 }
 
+// Asked when a deal has more than one contact: one button per contact, and the tapped one
+// is read as the Roamer. The button carries the contact ID; Basecamp checks it is still on
+// the deal before reading anything.
+function renderContactChoice({ dealNumber, store, choices, contactCount, endpoint }) {
+  const shown = contactCount > choices.length ? ` (the first ${choices.length} are shown)` : '';
+  const buttons = choices.map((c) => ({
+    text: noDashes(c.name).slice(0, 60),
+    type: 'FILLED_TONAL',
+    onClick: {
+      action: {
+        function: endpoint,
+        parameters: [
+          { key: 'action', value: 'brief' },
+          { key: 'from', value: 'picker' },
+          { key: 'dealNumber', value: String(dealNumber) },
+          { key: 'store', value: store },
+          { key: 'contactId', value: c.id },
+          { key: 'roamer', value: noDashes(c.name).slice(0, 60) },
+        ],
+      },
+    },
+  }));
+  return {
+    fallbackText: `Deal ${dealNumber} has ${contactCount} contacts in HubSpot. Which one is the Roamer?`,
+    cardsV2: [
+      {
+        cardId: `choose-${dealNumber}`,
+        card: {
+          sections: [
+            {
+              widgets: [
+                { textParagraph: { text: `Deal ${escape(String(dealNumber))} has ${contactCount} contacts in HubSpot${shown}. <b>Which one is the Roamer?</b>` } },
+                { buttonList: { buttons } },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
   const c = (context.contact && context.contact.properties) || {};
   const d = context.deal.properties;
@@ -156,4 +198,4 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
   };
 }
 
-module.exports = { renderBriefCard, HUBSPOT_PORTAL_ID, VISIBLE_ROWS, COLORS };
+module.exports = { renderBriefCard, renderContactChoice, HUBSPOT_PORTAL_ID, VISIBLE_ROWS, COLORS };

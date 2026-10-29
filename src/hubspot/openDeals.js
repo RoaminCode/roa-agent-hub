@@ -5,6 +5,7 @@
 // Roamer and trailer come from the deal name, and last contact comes from batch reads and
 // a few searches across all deals together.
 
+const { safeError, errorFields } = require('../errors');
 const { STORE_CMF, parseAlowareText, COMPANY_SENDER } = require('./dealContext');
 
 // The engagement types that move Last Contacted, and what to read from each to say who
@@ -50,7 +51,7 @@ function createOpenDeals({ hubspot }) {
 
   return async function listOpenDeals({ store = 'UT' } = {}) {
     const cmf = STORE_CMF[store];
-    if (!cmf) throw new Error(`unknown store ${store}`);
+    if (!cmf) throw safeError(`unknown store ${store}`);
     const deals = [];
     let after;
     do {
@@ -75,7 +76,7 @@ function createOpenDeals({ hubspot }) {
     const contactLast = await contactLastContacted(deals.map((d) => d.id));
     // Who made the last contact is extra: if finding it fails, Home still shows the deals.
     const by = await lastContactBy([...contactLast.values()]).catch((err) => {
-      console.log(JSON.stringify({ severity: 'WARNING', message: 'last contact names unavailable', error: err.message }));
+      console.log(JSON.stringify({ severity: 'WARNING', message: 'last contact names unavailable', error: errorFields(err) }));
       return new Map();
     });
 
@@ -97,6 +98,8 @@ function createOpenDeals({ hubspot }) {
         lastContacted: last ? String(last) : null,
         lastContactBy: who ? who.who : null,
         lastContactChannel: who ? who.channel : null,
+        // More than one means Basecamp will ask which is the Roamer when a brief is asked for.
+        contacts: fromContact ? fromContact.contacts : 0,
         salesCoach: await ownerName(p.hubspot_owner_id),
       });
     }
@@ -178,17 +181,22 @@ function createOpenDeals({ hubspot }) {
 
   // Last Contacted from each deal's Roamer, not the deal. Texts and calls are logged on
   // the contact, and the deal's own copy can lag by weeks (seen on a Utah deal, 2026-10-29).
-  // Two batch calls for all deals. Returns Map(dealId -> { contactId, at }).
+  // Two batch calls for all deals. Returns Map(dealId -> { contactId, at, contacts }), where
+  // `contacts` is how many contacts the deal has and `at` is null when there is no contact yet.
   async function contactLastContacted(dealIds) {
     const byDeal = new Map();
     if (!dealIds.length) return byDeal;
     const firstContact = new Map();
+    const contactCount = new Map();
     for (let i = 0; i < dealIds.length; i += 100) {
       const page = await hubspot.post('/crm/v4/associations/deals/contacts/batch/read', {
         inputs: dealIds.slice(i, i + 100).map((id) => ({ id })),
       });
       for (const r of page.results || []) {
-        if (r.to && r.to[0]) firstContact.set(String(r.from.id), String(r.to[0].toObjectId));
+        if (r.to && r.to[0]) {
+          firstContact.set(String(r.from.id), String(r.to[0].toObjectId));
+          contactCount.set(String(r.from.id), r.to.length);
+        }
       }
     }
     const contactIds = [...new Set(firstContact.values())];
@@ -201,8 +209,7 @@ function createOpenDeals({ hubspot }) {
       for (const c of page.results || []) lastByContact.set(String(c.id), c.properties && c.properties.notes_last_contacted);
     }
     for (const [dealId, contactId] of firstContact) {
-      const last = lastByContact.get(contactId);
-      if (last) byDeal.set(dealId, { contactId, at: last });
+      byDeal.set(dealId, { contactId, at: lastByContact.get(contactId) || null, contacts: contactCount.get(dealId) });
     }
     return byDeal;
   }

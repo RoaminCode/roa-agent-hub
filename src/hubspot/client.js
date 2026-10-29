@@ -4,6 +4,8 @@
 // batch-read endpoints, which read data. Agents never edit HubSpot fields; when note
 // writing arrives it gets its own narrow method, not a general POST.
 
+const { safeError } = require('../errors');
+
 const BASE = 'https://api.hubapi.com';
 const READ_POST = /\/(search|batch\/read)$/;
 
@@ -17,7 +19,7 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
 
   async function request(method, path, body) {
     if (method === 'POST' && !READ_POST.test(path)) {
-      throw new Error(`HubSpot client refuses POST to ${path}: only search and batch read are allowed`);
+      throw safeError(`HubSpot client refuses POST to ${path}: only search and batch read are allowed`);
     }
     const send = () =>
       fetchImpl(BASE + path, {
@@ -35,7 +37,7 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     }
     if (!res.ok) {
       // The status and path are enough to debug; response bodies can hold Roamer details.
-      throw new Error(`HubSpot ${method} ${path.split('?')[0]} failed: HTTP ${res.status}`);
+      throw safeError(`HubSpot ${method} ${path.split('?')[0]} failed: HTTP ${res.status}`);
     }
     return res.json();
   }

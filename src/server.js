@@ -9,6 +9,7 @@
 //                   from Secret Manager; without both, briefs are turned off
 //   PORT            set by Cloud Run
 
+const { safeError, errorFields } = require('./errors');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -34,7 +35,7 @@ function readBody(req) {
     req.on('data', (chunk) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error('body too large'));
+        reject(safeError('body too large'));
         req.destroy();
         return;
       }
@@ -80,11 +81,12 @@ function features(audience) {
       log,
       // Bump v when the avatar image changes.
       avatarUrl: `${new URL(audience).origin}/avatar.png?v=2`,
+      endpoint: audience,
     });
     startBrief = (job) => {
       spaceFor(job)
         .then((spaceName) => runBrief({ ...job, spaceName }))
-        .catch((err) => log('ERROR', 'could not find where to send the brief', { dealNumber: job.dealNumber, error: err.message }));
+        .catch((err) => log('ERROR', 'could not find where to send the brief', { dealNumber: job.dealNumber, error: errorFields(err) }));
     };
   }
 
@@ -105,7 +107,7 @@ function features(audience) {
       // Shadow mode: everyone allowed sees every open Utah deal.
       return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent });
     } catch (err) {
-      log('ERROR', 'home failed', { error: err.message });
+      log('ERROR', 'home failed', { error: errorFields(err) });
       return { sections: [{ widgets: [{ textParagraph: { text: "I couldn't load deals from HubSpot just now. Close and reopen Home to try again." } }] }] };
     }
   }
@@ -146,7 +148,7 @@ function start() {
       const result = await handle({ headers: req.headers, body });
       send(res, result.status, result.body);
     } catch (err) {
-      console.error(JSON.stringify({ severity: 'ERROR', message: 'request failed', error: err.message }));
+      console.error(JSON.stringify({ severity: 'ERROR', message: 'request failed', error: errorFields(err) }));
       send(res, 400, { error: 'bad request' });
     }
   });

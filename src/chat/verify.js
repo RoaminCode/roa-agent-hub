@@ -7,6 +7,7 @@
 //   Chat app as a Workspace add-on: service-<project number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com
 // Anything else is rejected.
 
+const { errorFields } = require('../errors');
 const { OAuth2Client } = require('google-auth-library');
 
 const CHAT_ISSUER_EMAIL = 'chat@system.gserviceaccount.com';
@@ -46,7 +47,7 @@ function createVerifier({ audience, projectNumber, client = new OAuth2Client(), 
       onReject({ reason: 'unexpected signer', ...peekClaims(match[1]) });
       return false;
     } catch (err) {
-      onReject({ reason: err.message, ...peekClaims(match[1]) });
+      onReject({ reason: 'token did not verify', error: errorFields(err), ...peekClaims(match[1]) });
       return false;
     }
   };

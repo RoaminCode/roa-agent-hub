@@ -62,7 +62,9 @@ test('keeps the newest items that fit and counts what was left out', () => {
   assert.strictEqual(omitted, 1);
 });
 
-function fakeHubSpot({ deals = 1, lose = [], longNote = false } = {}) {
+const PEOPLE = { 77: ['Pat', 'Sample'], 78: ['Chris', 'Sample'] };
+
+function fakeHubSpot({ deals = 1, lose = [], longNote = false, contacts = [77] } = {}) {
   const posts = [];
   const data = {
     calls: [{ id: 'c1', properties: { hs_timestamp: '2026-10-02T10:00:00Z', hs_call_direction: 'OUTBOUND', hs_call_summary: 'Talked about the Lake Test trip.', hubspot_owner_id: '9' } }],
@@ -78,8 +80,8 @@ function fakeHubSpot({ deals = 1, lose = [], longNote = false } = {}) {
     get: async (path) => {
       if (path.startsWith('/crm/v3/owners/9')) return { firstName: 'Casey', lastName: 'Coach' };
       if (path.startsWith('/crm/v3/owners/')) return { firstName: null };
-      if (path.includes('/deals/d1/associations/contacts')) return { results: [{ toObjectId: 77 }] };
-      const m = /contacts\/77\/associations\/(\w+)/.exec(path);
+      if (path.includes('/deals/d1/associations/contacts')) return { results: contacts.map((id) => ({ toObjectId: id })) };
+      const m = /contacts\/\d+\/associations\/(\w+)/.exec(path);
       if (m) return { results: data[m[1]].map((r) => ({ toObjectId: r.id })) };
       throw new Error(`unexpected GET ${path}`);
     },
@@ -90,7 +92,9 @@ function fakeHubSpot({ deals = 1, lose = [], longNote = false } = {}) {
         return { results: deals === 2 ? [deal('d1'), deal('d2')] : [deal('d1')] };
       }
       const type = /objects\/(\w+)\/batch\/read/.exec(path)[1];
-      if (type === 'contacts') return { results: [{ id: '77', properties: { firstname: 'Pat', lastname: 'Sample' } }] };
+      if (type === 'contacts') {
+        return { results: body.inputs.map(({ id }) => ({ id: String(id), properties: { firstname: PEOPLE[id][0], lastname: PEOPLE[id][1] } })) };
+      }
       const wanted = new Set(body.inputs.map((i) => i.id));
       // Ids in `lose` come back as errors, as in a partial (HTTP 207) batch response.
       return { results: data[type].filter((r) => wanted.has(r.id) && !lose.includes(r.id)) };
@@ -119,6 +123,29 @@ test('counts records HubSpot did not return and items that were shortened', asyn
   const ctx = await createDealContext({ hubspot: fakeHubSpot({ lose: ['c1'], longNote: true }) })({ store: 'UT', dealNumber: '90001' });
   assert.deepStrictEqual([ctx.missing, ctx.clipped], [1, 1]);
   assert.ok(ctx.items.find((i) => i.channel === 'note').text.endsWith('[cut]'));
+});
+
+test('asks which contact is the Roamer when a deal has more than one', async () => {
+  const load = createDealContext({ hubspot: fakeHubSpot({ contacts: [77, 78] }) });
+  const ask = await load({ store: 'UT', dealNumber: '90001' });
+  assert.deepStrictEqual(ask.choices, [
+    { id: '77', name: 'Pat Sample' },
+    { id: '78', name: 'Chris Sample' },
+  ]);
+  assert.strictEqual(ask.contactCount, 2);
+  assert.strictEqual(ask.items, undefined);
+  const picked = await load({ store: 'UT', dealNumber: '90001', contactId: '78' });
+  assert.strictEqual(picked.contact.properties.firstname, 'Chris');
+});
+
+test('refuses a picked contact that is not on the deal', async () => {
+  const ctx = await createDealContext({ hubspot: fakeHubSpot({ contacts: [77] }) })({ store: 'UT', dealNumber: '90001', contactId: '78' });
+  assert.deepStrictEqual([ctx.found, ctx.notOnDeal, ctx.contact], [true, true, undefined]);
+});
+
+test('HubSpot client errors are marked safe to log', async () => {
+  const hubspot = createHubSpotClient({ token: 't', fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }) });
+  await assert.rejects(hubspot.get('/crm/v3/owners/1'), (err) => err.safe === true);
 });
 
 test('refuses to pick between two deals with the same number', async () => {

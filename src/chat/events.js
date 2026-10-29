@@ -5,6 +5,8 @@
 //   add-on:  { chat: { user, messagePayload, ... } }  (Chat apps built as Workspace add-ons)
 // parseEvent normalizes both; replyFor builds a reply in the shape the event came in.
 
+const { safeError } = require('../errors');
+
 function fromMessage(message) {
   if (!message) return {};
   return {
@@ -16,6 +18,12 @@ function fromMessage(message) {
 }
 
 // userName is the resource name ("users/123"), which finds the user's direct message.
+// A one-to-one conversation between a user and Basecamp. Chat names it several ways
+// depending on API version and event format.
+function isDirect(space) {
+  return Boolean(space) && (space.spaceType === 'DIRECT_MESSAGE' || space.type === 'DM' || space.singleUserBotDm === true);
+}
+
 function userOf(user) {
   return {
     userEmail: user && user.email ? user.email.toLowerCase() : null,
@@ -29,6 +37,7 @@ function parseClassic(body) {
     type: body.type || 'UNKNOWN',
     spaceName: body.space ? body.space.name : null,
     spaceType: body.space ? body.space.spaceType || body.space.type || null : null,
+    isDirectMessage: isDirect(body.space),
     ...userOf(body.user),
     ...fromMessage(body.message),
     // Card buttons are add-on events; a classic click carries no parameters Basecamp reads.
@@ -67,6 +76,7 @@ function parseAddOn(body) {
     type,
     spaceName: payload.space ? payload.space.name : null,
     spaceType: payload.space ? payload.space.spaceType || null : null,
+    isDirectMessage: isDirect(payload.space),
     ...userOf(chat.user),
     ...fromMessage(payload.message),
     parameters: common.parameters || {},
@@ -83,7 +93,7 @@ function shapeOf(value, depth = 0) {
 }
 
 function parseEvent(body) {
-  if (!body || typeof body !== 'object') throw new Error('parseEvent: body is not an object');
+  if (!body || typeof body !== 'object') throw safeError('parseEvent: body is not an object');
   return body.chat ? parseAddOn(body) : parseClassic(body);
 }
 
@@ -92,6 +102,14 @@ function replyFor(event, text) {
     return { hostAppDataAction: { chatDataAction: { createMessageAction: { message: { text } } } } };
   }
   return { text };
+}
+
+// Replaces the message whose button was tapped, such as the contact picker, with plain text.
+function updateMessageFor(event, text) {
+  if (event.format === 'addon') {
+    return { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text } } } } };
+  }
+  return { actionResponse: { type: 'UPDATE_MESSAGE' }, text };
 }
 
 // App Home responses are bare RenderActions; Chat rejects a "renderActions" wrapper on
@@ -105,4 +123,4 @@ function homeUpdateFor(card) {
   return { action: { navigations: [{ updateCard: card }] } };
 }
 
-module.exports = { parseEvent, replyFor, homeFor, homeUpdateFor, shapeOf };
+module.exports = { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf };

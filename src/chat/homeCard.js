@@ -110,7 +110,7 @@ function dealWidgets(deal, today, endpoint, sent) {
   const roamer = {
     decoratedText: {
       startIcon: { materialIcon: urgent ? { name: 'rv_hookup', fill: true } : { name: 'rv_hookup' } },
-      topLabel: [deal.dealNumber, deal.trailer].filter(Boolean).map(noDashes).join(' · '),
+      topLabel: [deal.dealNumber, deal.trailer, deal.contacts > 1 ? `${deal.contacts} contacts` : null].filter(Boolean).map(noDashes).join(' · '),
       text: `<b>${escape(deal.roamer || 'Roamer')}</b>`,
       wrapText: true,
     },

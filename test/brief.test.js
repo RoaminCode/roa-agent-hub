@@ -131,7 +131,8 @@ test('the brief job tells the user when something breaks, and logs no Roamer det
   const logs = [];
   const run = createBriefJob({
     loadContext: async () => {
-      throw new Error('HubSpot GET /crm/v3/owners failed: HTTP 500');
+      // A library error that quotes what it was reading, as Node's JSON errors do.
+      throw new SyntaxError('Unexpected token in "Pat Sample said the gate code is 4471"');
     },
     anthropic: null,
     sendMessage: async (space, text) => sent.push(text),
@@ -140,6 +141,55 @@ test('the brief job tells the user when something breaks, and logs no Roamer det
   await run({ spaceName: 'spaces/AAA', dealNumber: '2', store: 'UT' });
   assert.deepStrictEqual(sent, [SORRY.failed('2')]);
   assert.strictEqual(logs[0][1], 'brief failed');
+  const logged = JSON.stringify(logs);
+  assert.ok(!/Pat Sample|gate code|4471/.test(logged), logged);
+  assert.strictEqual(logs[0][2].error.type, 'SyntaxError');
+});
+
+test('the brief job asks which contact is the Roamer when there are several', async () => {
+  const sent = [];
+  const run = createBriefJob({
+    loadContext: async () => ({ found: true, deal: { id: '1', properties: {} }, choices: [{ id: '77', name: 'Pat Sample' }, { id: '78', name: 'Chris Sample' }], contactCount: 2 }),
+    anthropic: null,
+    sendMessage: async (s, m) => sent.push(m),
+    log: () => {},
+    endpoint: 'https://example.com/',
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
+  assert.strictEqual(sent.length, 1);
+  const buttons = sent[0].cardsV2[0].card.sections[0].widgets[1].buttonList.buttons;
+  assert.deepStrictEqual(buttons.map((b) => b.text), ['Pat Sample', 'Chris Sample']);
+  const params = Object.fromEntries(buttons[1].onClick.action.parameters.map((p) => [p.key, p.value]));
+  assert.deepStrictEqual(params, { action: 'brief', from: 'picker', dealNumber: '90001', store: 'UT', contactId: '78', roamer: 'Chris Sample' });
+  assert.strictEqual(buttons[1].onClick.action.function, 'https://example.com/');
+});
+
+test('the brief job passes the picked contact to the loader', async () => {
+  const asked = [];
+  const run = createBriefJob({ loadContext: async (q) => (asked.push(q), { found: false }), anthropic: null, sendMessage: async () => {}, log: () => {} });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT', contactId: '78' });
+  assert.deepStrictEqual(asked, [{ store: 'UT', dealNumber: '90001', contactId: '78' }]);
+});
+
+test('the brief job says when a picked contact is no longer on the deal', async () => {
+  const sent = [];
+  const run = createBriefJob({ loadContext: async () => ({ found: true, notOnDeal: true }), anthropic: null, sendMessage: async (s, t) => sent.push(t), log: () => {} });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT', contactId: '78' });
+  assert.deepStrictEqual(sent, [SORRY.notOnDeal('90001')]);
+});
+
+test('a deal with no Roamer contact is flagged with a warning, not just answered', async () => {
+  const sent = [];
+  const logs = [];
+  const run = createBriefJob({
+    loadContext: async () => ({ found: true, deal: { id: '1', properties: {} }, contact: null }),
+    anthropic: null,
+    sendMessage: async (s, t) => sent.push(t),
+    log: (...args) => logs.push(args),
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
+  assert.deepStrictEqual(sent, [SORRY.noContact('90001')]);
+  assert.deepStrictEqual(logs, [['WARNING', 'deal has no Roamer contact', { dealNumber: '90001', store: 'UT' }]]);
 });
 
 test('the brief job posts the brief as a card', async () => {

@@ -5,7 +5,8 @@
 // which answers right away and posts the Roamer brief when it is ready. App Home shows
 // open deals, each with a Brief button that does the same.
 
-const { parseEvent, replyFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
+const { errorFields } = require('./errors');
+const { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
 const { renderNotAllowedHome } = require('./chat/homeCard');
 
 const MESSAGES = {
@@ -13,6 +14,7 @@ const MESSAGES = {
   help: 'Try "brief 51431" for a Roamer brief on a Utah deal.',
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
+  directOnly: (n) => `Roamer briefs stay private for now: ask me for deal ${n} in a direct message with me.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
 
@@ -68,7 +70,7 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     try {
       event = parseEvent(body);
     } catch (err) {
-      log('ERROR', 'could not parse Chat event', { error: err.message });
+      log('ERROR', 'could not parse Chat event', { error: errorFields(err) });
       return { status: 400, body: { error: 'bad event' } };
     }
 
@@ -104,11 +106,25 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'brief') {
       const dealNumber = String(event.parameters.dealNumber || '');
       if (!/^\d{3,8}$/.test(dealNumber)) return { status: 200, body: {} };
+
+      // A tap on the contact picker: that contact is the Roamer. It always starts the brief
+      // (it is the answer to a question Basecamp asked), and the picker is replaced by the
+      // usual "reading up" line so it cannot be tapped twice.
+      if (event.parameters.from === 'picker') {
+        const contactId = String(event.parameters.contactId || '');
+        const store = String(event.parameters.store || 'UT');
+        if (!/^\d{1,20}$/.test(contactId) || !STORES.has(store) || !event.isDirectMessage) return { status: 200, body: {} };
+        isRepeat(event.userEmail, dealNumber);
+        startBrief({ spaceName: event.spaceName, userName: event.userName, dealNumber, store, contactId, userEmail: event.userEmail });
+        return { status: 200, body: updateMessageFor(event, MESSAGES.working(dealNumber, event.parameters.roamer)) };
+      }
+
       if (!isRepeat(event.userEmail, dealNumber)) {
         // The brief job first posts a line in the user's Basecamp messages, the same words
         // a typed "brief" command gets back, for anyone viewing Home and Messages side by side.
         startBrief({
-          spaceName: event.spaceName,
+          // Home has no space of its own; the brief goes to the user's direct message.
+          spaceName: event.isDirectMessage ? event.spaceName : null,
           userName: event.userName,
           dealNumber,
           store: 'UT',
@@ -130,6 +146,10 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
       const cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
+      // A brief holds a Roamer's personal details, so it is posted only where the reader
+      // should see them: a direct message with Basecamp. When deal spaces exist, a deal's
+      // space will also get briefs for that deal, and only that deal.
+      if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.directOnly(cmd.dealNumber)) };
       // Not awaited: the brief outlives this request and posts itself when done.
       startBrief({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
       return { status: 200, body: replyFor(event, MESSAGES.working(cmd.dealNumber)) };

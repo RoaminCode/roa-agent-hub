@@ -163,6 +163,7 @@ test('lists open deals from one search, pages included', async () => {
     lastContacted: '2026-10-28T15:00:00Z',
     lastContactBy: null,
     lastContactChannel: null,
+    contacts: 1,
     salesCoach: 'Casey',
   });
   assert.strictEqual(deals[1].projectedDelivery, null);
@@ -257,17 +258,20 @@ test('still lists deals when finding who made the last contact fails', async () 
   });
   const post = hubspot.post;
   hubspot.post = async (path, body) => {
-    if (/objects\/(calls|communications|emails)\/search$/.test(path)) throw new Error('HubSpot POST failed: HTTP 500');
+    if (/objects\/(calls|communications|emails)\/search$/.test(path)) throw new Error('failed reading "Pat Sample, gate code 4471"');
     return post(path, body);
   };
   const originalLog = console.log;
-  console.log = () => {};
+  const lines = [];
+  console.log = (line) => lines.push(line);
   try {
     const [d] = await createOpenDeals({ hubspot })({ store: 'UT' });
     assert.deepStrictEqual([d.dealNumber, d.lastContacted, d.lastContactBy], ['90001', '2026-10-27T22:03:00Z', null]);
   } finally {
     console.log = originalLog;
   }
+  assert.strictEqual(lines.length, 1);
+  assert.ok(!/Pat Sample|4471/.test(lines[0]), lines[0]);
 });
 
 test('tries a failed Sales Coach lookup again instead of remembering the failure', async () => {
@@ -432,6 +436,12 @@ test('a second Brief tap on the same deal within two minutes does not start anot
   await router({ headers, body: clickEvent(BLAKE, '51455') });
   assert.deepStrictEqual(started, ['51455', '51431', '51455']);
 });
+test('a deal with more than one contact says so on its tile', () => {
+  const [two, one] = tiles(home([{ ...deal('90001', '2026-11-03', '2026-10-28'), contacts: 2 }, { ...deal('90002', '2026-11-04', '2026-10-28'), contacts: 1 }]));
+  assert.strictEqual(two.roamer.topLabel, '90001 · 2026 Test · 2 contacts');
+  assert.strictEqual(one.roamer.topLabel, '90002 · 2026 Test');
+});
+
 test('a sent deal shows a disabled In Messages button instead of Brief', () => {
   const [sentTile, other] = tiles(home([deal('90001', '2026-11-03', '2026-10-28'), deal('90002', '2026-11-04', '2026-10-28')], { sent: new Set(['90001']) }));
   assert.deepStrictEqual([sentTile.button.text, sentTile.button.disabled], ['In Messages', true]);
