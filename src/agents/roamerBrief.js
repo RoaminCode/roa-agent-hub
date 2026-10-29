@@ -135,7 +135,7 @@ const CHAT_LIMIT = 4000;
 
 // ROA writing never uses em or en dashes; replace any the model lets slip.
 function noDashes(text) {
-  return String(text).replace(/\s*[–—]\s*/g, ', ');
+  return String(text).replace(/\s*[\u2013\u2014]\s*/g, ', ');
 }
 
 function renderBrief({ dealNumber, context, brief }) {
