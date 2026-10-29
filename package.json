@@ -13,6 +13,7 @@
     "show-rjb-view": "node scripts/show-rjb-view.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "google-auth-library": "^11.3.1"
   }
 }

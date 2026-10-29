@@ -5,12 +5,19 @@
 //   CHAT_AUDIENCE   the endpoint URL configured in the Chat app (required)
 //   ALLOWED_USERS   comma-separated emails allowed to use Basecamp (shadow mode: Blake only)
 //   PROJECT_NUMBER  Google Cloud project number, to accept Workspace add-on signed requests
+//   HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY
+//                   from Secret Manager; without both, briefs are turned off
 //   PORT            set by Cloud Run
 
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const Anthropic = require('@anthropic-ai/sdk');
 const { createVerifier } = require('./chat/verify');
+const { createChatSender } = require('./chat/send');
+const { createHubSpotClient } = require('./hubspot/client');
+const { createDealContext } = require('./hubspot/dealContext');
+const { createBriefJob } = require('./briefJob');
 const { createRouter } = require('./router');
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -41,6 +48,28 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function log(severity, message, fields = {}) {
+  console.log(JSON.stringify({ severity, message, ...fields }));
+}
+
+function briefStarter() {
+  const { HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY } = process.env;
+  const sendMessage = createChatSender();
+  if (!HUBSPOT_ACCESS_TOKEN || !ANTHROPIC_API_KEY) {
+    log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
+    return ({ spaceName }) => sendMessage(spaceName, "Briefs aren't switched on yet.").catch(() => {});
+  }
+  const runBrief = createBriefJob({
+    loadContext: createDealContext({ hubspot: createHubSpotClient({ token: HUBSPOT_ACCESS_TOKEN }) }),
+    anthropic: new Anthropic({ apiKey: ANTHROPIC_API_KEY }),
+    sendMessage,
+    log,
+  });
+  return (job) => {
+    runBrief(job);
+  };
+}
+
 function start() {
   const audience = process.env.CHAT_AUDIENCE;
   if (!audience) {
@@ -49,6 +78,7 @@ function start() {
   }
 
   const handle = createRouter({
+    startBrief: briefStarter(),
     verify: createVerifier({
       audience,
       projectNumber: process.env.PROJECT_NUMBER,

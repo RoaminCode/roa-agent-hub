@@ -1,22 +1,33 @@
 'use strict';
 
-// Basecamp's router. For now (Slice 0) it only proves the plumbing: it verifies the
-// request came from Google Chat, checks the sender is allowed, and replies. No AI yet.
+// Basecamp's router. It verifies the request came from Google Chat, checks the sender is
+// allowed, and routes the message. The one command so far is "brief <deal#> [store]",
+// which answers right away and posts the Roamer brief when it is ready.
 
 const { parseEvent, replyFor } = require('./chat/events');
 
 const MESSAGES = {
-  added: "Basecamp is here. I'm in shadow mode, so for now I'm only listening.",
-  listening: 'Basecamp is listening.',
+  added: "Basecamp is here. I'm in shadow mode. Try \"brief 51431\" for a Roamer brief on a Utah deal.",
+  help: 'Try "brief 51431" for a Roamer brief on a Utah deal.',
   notAllowed: "Basecamp isn't available to you yet.",
+  working: (n) => `On it. Reading everything in HubSpot for deal ${n}; the brief takes about a minute.`,
+  unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
+
+const STORES = new Set(['UT']);
+
+// "brief 51431" or "brief 51431 UT". Deal numbers are digits only.
+function parseCommand(text) {
+  const m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(text || '');
+  return m ? { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() } : null;
+}
 
 function log(severity, message, fields = {}) {
   // One JSON line per entry so Cloud Logging picks up severity and fields.
   console.log(JSON.stringify({ severity, message, ...fields }));
 }
 
-function createRouter({ verify, allowedUsers }) {
+function createRouter({ verify, allowedUsers, startBrief = () => {} }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
 
   return async function handle({ headers, body }) {
@@ -54,11 +65,16 @@ function createRouter({ verify, allowedUsers }) {
     }
 
     if (event.type === 'MESSAGE') {
-      return { status: 200, body: replyFor(event, MESSAGES.listening) };
+      const cmd = parseCommand(event.text);
+      if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
+      if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
+      // Not awaited: the brief outlives this request and posts itself when done.
+      startBrief({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
+      return { status: 200, body: replyFor(event, MESSAGES.working(cmd.dealNumber)) };
     }
 
     return { status: 200, body: {} };
   };
 }
 
-module.exports = { createRouter, MESSAGES };
+module.exports = { createRouter, parseCommand, MESSAGES };
