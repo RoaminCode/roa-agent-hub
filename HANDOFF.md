@@ -8,7 +8,7 @@ Last updated: 2026-10-29
 - Google Cloud project `roa-agent-hub` is set up: billing linked, APIs enabled (Chat, Cloud Run, Cloud Build, Artifact Registry, Secret Manager).
 - The Anthropic API key is in Secret Manager as `anthropic-api-key` (format checked, value never displayed). Only `basecamp-router` can read it, granted on that one secret.
 - Basecamp is live on Cloud Run as service `basecamp` in `us-central1`, running as `basecamp-router`, max 2 instances, CPU always allocated so a brief keeps running after the reply: https://basecamp-732941376364.us-central1.run.app
-  - Live revision `basecamp-00025-jch` (deployed 2026-10-29). Roll back with `gcloud run services update-traffic basecamp --to-revisions=<revision>=100 --region us-central1 --project roa-agent-hub`; the previous good revision is `basecamp-00024-4nj`.
+  - Live revision `basecamp-00026-cf4` (deployed 2026-10-29). Roll back with `gcloud run services update-traffic basecamp --to-revisions=<revision>=100 --region us-central1 --project roa-agent-hub`; the previous good revision is `basecamp-00025-jch`.
   - Verifies every request came from Google Chat and allows only `ALLOWED_USERS` (Blake). Message text and Roamer details are never logged; logs carry counts, timing, and event shapes (keys only). Error logs keep type, status, provider error code, request ID, and file-and-line stack frames; a message is logged only when the hub wrote it (`safeError` in `src/errors.js`), never a library's, which can quote its input. A test puts fake private text in errors and fails if it reaches a log.
   - gcloud's default project on the laptop is `hs-ls-integration`; always pass `--project roa-agent-hub`.
   - `GET /health` for health checks, `GET /avatar.png` serves the Basecamp avatar.
