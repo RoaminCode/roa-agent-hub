@@ -12,7 +12,7 @@ Last updated: 2026-10-29
   - Verifies every request came from Google Chat and allows only `ALLOWED_USERS` (Blake). Message text and Roamer details are never logged; logs carry counts, timing, and event shapes (keys only). Error logs keep type, status, provider error code, request ID, and file-and-line stack frames; a message is logged only when the hub wrote it (`safeError` in `src/errors.js`), never a library's, which can quote its input. A test puts fake private text in errors and fails if it reaches a log.
   - gcloud's default project on the laptop is `hs-ls-integration`; always pass `--project roa-agent-hub`.
   - `GET /health` for health checks, `GET /avatar.png` serves the Basecamp avatar.
-  - Env vars: `CHAT_AUDIENCE` (endpoint URL), `ALLOWED_USERS`, `PROJECT_NUMBER` (732941376364); secrets `HUBSPOT_ACCESS_TOKEN` and `ANTHROPIC_API_KEY` from Secret Manager.
+  - Env vars: `CHAT_AUDIENCE` (endpoint URL), `ALLOWED_USERS`, `PROJECT_NUMBER` (732941376364), `BRIEFS_PAUSED` (`true` while briefs are paused); secrets `HUBSPOT_ACCESS_TOKEN` and `ANTHROPIC_API_KEY` from Secret Manager.
 - The Chat app "Basecamp" is configured (visible only to Blake, App Home on, headset sasquatch avatar).
 - 121 tests pass (`npm test`).
 - **App Home is live ("Utah deals" in shadow mode).** Opening Basecamp's Home tab lists every open Utah deal (stage "Deals"), one rounded tile each, grouped ON DECK (delivery under 3 days or past due, orange #E2692E), THIS WEEK, NEXT TWO WEEKS, LATER, NO DELIVERY DATE. Each tile: deal number and trailer, Roamer in bold, Sales Coach top right; delivery on its own row; last contact date and who made it on its own row with a Brief button. Tapping Brief redraws Home with that deal's button as a disabled "In Messages" with a check icon (so the tap shows on a phone or full screen, where Messages is a separate tab), posts "I'll need just a moment to read up on [Roamer] (deal N)" in Basecamp messages, then the brief card. About 4 seconds to open; a tap answers at once from a deal list cached for 90 seconds. Code only, no AI until Brief. Verified on phone and full screen 2026-10-29. Last contact is dated in Mountain time (HubSpot stores UTC; an evening contact used to show as the next day). Deals with more than one contact show "2 contacts" on the tile. Checked against live HubSpot 2026-10-29: 16 of 16 Utah deals shown, every date and every "who made it" correct.
@@ -33,12 +33,13 @@ Last updated: 2026-10-29
 2. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
 3. **Try the contact picker live** on the first Utah deal with two contacts, then check that one event in the logs and the add-on error log.
 4. **Set up a Cloud Monitoring alert** on the WARNING log entry "deal has no Roamer contact" so Blake is notified. The log entry exists; the alert does not.
-5. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
-6. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
-7. **Next build:** the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post, and Home can get an Open space button) and the Service Advisor contact check with a draft.
-8. When Team Members get access: Home switches from every Utah deal to "My deals" (deals the viewer owns, or is Service Advisor on).
-9. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
-10. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
+5. **Small fixes, not started:** a third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender, so Home leaves the name off; and an Anthropic billing error should reach the log and the requester in plain words (the out-of-credits failure on 2026-10-29 logged only a request ID).
+6. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+7. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
+8. **Next build:** the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post, and Home can get an Open space button) and the Service Advisor contact check with a draft.
+9. When Team Members get access: Home switches from every Utah deal to "My deals" (deals the viewer owns, or is Service Advisor on).
+10. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
+11. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
 
 ## Setting up on another computer
 
