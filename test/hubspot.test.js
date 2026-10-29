@@ -37,6 +37,13 @@ test('reads who sent an Aloware text and the message', () => {
   assert.strictEqual(parseAlowareText(' has sent an SMS to +1 555-010-0000<br>Message:<br>Hi').sender, COMPANY_SENDER);
 });
 
+test('reads the sender of a text sent from the HubSpot conversations inbox, which has no Message line', () => {
+  const out = parseAlowareText(
+    'Sam Sample (Browser / Apps) has sent an SMS to +1 555-010-0000<br>Line: UT - Sales - IVR - (555) 010-0001<br>From: Sam Sample (Browser / Apps)<br>Source: HubSpot Conversation',
+  );
+  assert.strictEqual(out.sender, 'Sam Sample (Browser / Apps)');
+});
+
 test('does not guess who sent a text in an unfamiliar format', () => {
   assert.strictEqual(parseAlowareText('Something new<br>Message:<br>Hi').sender, null);
   assert.strictEqual(parseAlowareText('No marker at all').sender, null);

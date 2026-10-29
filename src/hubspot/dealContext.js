@@ -52,13 +52,14 @@ const COMPANY_SENDER = 'Basecamp or the company';
 
 // Aloware logs a text as "<sender> has sent an SMS to <number> | Line: ... | From: ... |
 // Creator Type: ... | Message: | <text>". Keep who sent it and the message itself.
+// Texts sent from HubSpot's conversations inbox carry the same header, ending in "Source:
+// HubSpot Conversation", but no "Message:" line; the sender is still read from the header.
 // `sender` is null when the record does not say.
 function parseAlowareText(body) {
   const text = cleanText(body);
   const marker = text.search(/Message:\s*/i);
-  if (marker === -1) return { sender: null, message: text };
-  const header = text.slice(0, marker);
-  const message = text.slice(marker).replace(/^Message:\s*/i, '').trim();
+  const header = marker === -1 ? text : text.slice(0, marker);
+  const message = marker === -1 ? text : text.slice(marker).replace(/^Message:\s*/i, '').trim();
   // A company send has no name, so after cleaning its header starts at "has sent an SMS".
   const sentBy = header.match(/^(.*?)\s*has sent an SMS/i);
   if (!sentBy) return { sender: null, message };
