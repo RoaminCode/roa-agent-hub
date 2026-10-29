@@ -24,13 +24,13 @@ Basecamp is ROA's Google Chat app. This repo is the hub behind it: the router th
 ## Rules
 
 - **No real Roamer data in this repo.** Raw LightSpeed exports stay in `G:\My Drive\Service Management\RJB`. Test fixtures must be scrubbed (fake name, VIN, customer and deal numbers).
-- **LightSpeed is the source of truth for deal facts.** Agents never edit HubSpot fields or LightSpeed. They write only HubSpot notes and HubSpot tasks.
-- **Podium is fully retired.** Never mention it, suggest it, or read from it. HubSpot is the source of truth for Roamer communication. Aloware is touched only when Blake explicitly says so.
+- **LightSpeed is the source of truth for deal facts.** Agents never edit HubSpot fields or LightSpeed. They write only HubSpot notes.
+- **Podium is fully retired.** Never mention it, suggest it, or read from it. HubSpot is the source of truth for Roamer communication. Aloware is used only to send messages a Team Member approved, and touched otherwise only when Blake explicitly says so.
 - **Say "Service Advisor", never "Service Writer"**, even where older HubSpot properties or skills still say Writer.
 - **Say "HubSpot task", never just "task",** when meaning a HubSpot task. The agent's own background work is a "run".
-- **Every HubSpot task an agent opens, the agent closes.** Due within 3 business days at most, one per question, at most 3 open per deal, every one tagged "Created by RJB Agent", all auto-closed when the deal reaches Finalized or Lost Deal.
-- **Nothing is ever sent to a Roamer or Future Roamer by an agent.** Agents draft; people send.
-- **Shadow mode until Blake says otherwise:** every routed question, direct message, and HubSpot task goes to Blake, labeled with who it would have gone to.
-- **Prove before building.** Do not build the delivery clock, deal spaces, direct message cards, or HubSpot structure changes until the agent answers real deal questions correctly from LightSpeed data. Push back if asked to skip ahead.
+- **No HubSpot tasks** unless Blake decides otherwise. Basecamp keeps its own clock; accountability lives in deal space notifications.
+- **Nothing reaches a Roamer or Future Roamer without a Team Member's approval of that exact message.** Agents draft. The approval shows the recipient's name and number and the exact text, covers only that one draft, and is logged. Agents never send on their own.
+- **Shadow mode until Blake says otherwise:** every routed question, nudge, and draft goes to Blake, labeled with who it would have gone to, and nothing is sent to a Roamer.
+- **Prove before trusting the agent.** Deal spaces and deal watches may be built before the agent answers questions; they work without AI. The agent answers questions in deal spaces only after its answers are proven correct against LightSpeed in shadow mode. Do not build the delivery clock or HubSpot structure changes until then. Push back if asked to skip ahead.
 - **Basecamp helps Team Members; it does not reprimand them.** Escalation wording is deliberately undefined until designed with Blake. Follow-ups are logged for coaching.
 - ROA language applies in all code comments, messages, and docs: Roamers, Future Roamers, Team Members, Sales Coach, Experience Center, Leader. No em or en dashes.

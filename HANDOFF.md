@@ -13,13 +13,17 @@ Last updated: 2026-10-28
   - Env vars: `CHAT_AUDIENCE` (endpoint URL), `ALLOWED_USERS`, `PROJECT_NUMBER` (732941376364).
 - The Chat app "Basecamp" is configured (visible only to Blake, compass avatar) and tested end to end: Blake messages it in Google Chat and gets a reply.
 - 21 tests pass (`npm test`): LightSpeed trim, router, request verification.
+- 2026-10-28 read-only review of `hs-ls-integration`: no endpoint the hub can safely call exists. The deal lookups (`diagnose-deal`, `deal-report`) live inside `adminTools`, which needs a dashboard operator sign-in and also performs writes. All 10 services allow `allUsers` and check callers in code. Deploy bundles contain real Roamer data. No repair order lookup is deployed. A handoff (`handoff-from-agent-hub.md`, in a Gmail draft to Blake) asks the integration project to clean the bundles, report on how each function is protected, and build a read-only `rjbDealLookup` callable only by `basecamp-router`.
 
 ## Next steps
 
-1. **Critical path, Blake only:** from Blake's desktop, the integration endpoint details for the deal lookup, and whether a repair order lookup with per-job completion exists (the integration project has functions for repair order parts and labor breakdown reporting; Utah only so far). Then grant `basecamp-router` read-only access to only those endpoints.
-2. Slice 2: connect the RJB agent (Managed Agent config, router reads `anthropic-api-key` from Secret Manager) and have it answer one real Sales Coach question about one real Utah deal in Chat. Blake checks the answer against LightSpeed.
-3. Only if Slice 2 answers are good: draft the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval, shaped by what data the agent can actually reach. Nothing changes in HubSpot until approved.
-4. Before shadow mode starts, settle the shadow mode open questions below (volume to Blake, answer review, adoption metric).
+1. **Blake: HubSpot private app for the hub** (permissions under "HubSpot access" below). The token goes into Secret Manager as `hubspot-access-token`, readable only by `basecamp-router`. Slice 1 needs only this.
+2. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
+3. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+4. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
+5. Build Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]", the Wow and Utility summary from HubSpot communications, and the Service Advisor contact check with a draft. The first test is whether the summaries are WOW or generic.
+6. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
+7. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
 
 ## Setting up on another computer
 
@@ -33,14 +37,17 @@ Last updated: 2026-10-28
 ## Current decisions
 
 **Build order**
-- Prove before building. The delivery clock, deal spaces, direct message cards, note expiry, and commitment checks all wait until the agent answers real deal questions correctly from LightSpeed data (Slice 2).
-- HubSpot structure changes come after confirming what data the agent can reach, so fields are designed once.
+- Deal spaces and deal watches come first, at Utah only. They give value without AI. A LightSpeed lookup bot alone is not worth a Team Member's time, since they already work in LightSpeed; the value is the communication and follow-through LightSpeed does not hold.
+- The agent answers questions in deal spaces only after its answers are proven in shadow mode, using the real questions from the pilot spaces as the test set.
+- Slice 1 runs on HubSpot alone. Most of the journey reads HubSpot communications, not LightSpeed. LightSpeed (`rjbDealLookup`) is needed for pinned deal facts, the mod check, and PDI.
+- The rest of the journey reuses six building blocks: read and summarize, nudge with a draft, watch for the action, route a question, answer from what is known, write to HubSpot.
+- The delivery clock and HubSpot structure changes wait until the agent is proven. HubSpot structure changes come after confirming what data the agent can reach, so fields are designed once.
 
 **Architecture**
 - One Chat app, Basecamp, routing to several agents (RJB first; later Kevin, Training, ROA Knowledge). One Anthropic API key; each agent is a Managed Agent config referenced by ID.
 - Managed Agents is the primary approach. If the beta changes, fall back to calling the Messages API directly; only the hub's Anthropic-facing code changes.
-- Code-only work (dates, deadlines, trimming, closing HubSpot tasks) uses no AI tokens. The agent is called only for language.
-- Agents read LightSpeed facts live from the integration endpoint by deal number and store (not from HubSpot copies). The HubSpot sync drives triggers; HubSpot holds transcripts, notes, HubSpot tasks, and the Delivery record.
+- Code-only work (dates, deadlines, trimming, watches, reminders) uses no AI tokens. The agent is called only for language.
+- Agents read LightSpeed facts live by deal number and store (not from HubSpot copies), through a dedicated read-only integration function (`rjbDealLookup`), never through `adminTools`. The HubSpot sync drives triggers; HubSpot holds communications, transcripts, notes, and the Delivery record. Basecamp keeps its own clock (commitments, reminders, watch state) in a small database in the hub.
 - The trim function's deploy location (integration `?view=rjb` or the hub) is Blake's call.
 - The hub runs in `us-central1`, the same region as the `hs-ls-integration` functions.
 
@@ -54,8 +61,15 @@ Last updated: 2026-10-28
 - Estimate about $2.00 per deal, about $160/month at 80 deals; budget double until measured.
 
 **Deal spaces and routing**
-- A space opens when a Deal enters Deals (deposit received) and is deleted 48 hours after Finalized or Lost Deal. HubSpot is the archive.
-- Members: Sales Coach, Service Advisor (at open), Delivery Coach (assigned no later than 7 business days before projected delivery). Business days are Monday to Friday.
+- Spaces open on demand, not at deposit: anyone on the deal says "@Basecamp open a space for [deal#]". Many deposits are scheduled months out, and auto-opening would leave quiet spaces open for months. Basecamp checks the deal exists, is not finalized, and has no open space. Store defaults to Utah for the pilot; past Utah the command takes a store ("51xxx UT").
+- Spaces opened by Team Members (not Blake) are the adoption signal. Auto-opening when the trailer arrives is a later decision, made from the on-demand numbers.
+- A space is deleted 48 hours after Finalized or Lost Deal. HubSpot is the archive.
+- Members: Sales Coach and Service Advisor as primary, Parts in the space but engaged by @mention, GM as watcher. Delivery Coach joins when assigned (no later than 7 business days before projected delivery). Business days are Monday to Friday.
+- Deal facts from LightSpeed are pinned at the top. Basecamp writes requests and answers to HubSpot as notes (not every message), on the HubSpot Deal until the Delivery object exists.- Deal watches run on every Utah deal with no space, code only: Service Advisor contact with the Future Roamer within the contact window after deposit, and the Sales Coach's update to the Roamer after the trailer arrives.
+- Completion is detected, never reported. Basecamp looks for the work in HubSpot (calls, transcripts, SMS, and email all log there) or in what people say in the space. No "reply done". When everything is on track Basecamp stays quiet; when something is missing it posts in the deal space, where the team sees it, worded as a teammate's heads-up with a draft, never a callout. Deals with no space get the nudge as a direct message. In the pilot these go to Blake, labeled with who they would have gone to.
+- Reminders: one reminder before a commitment a person made ("call Bob at 2"), inside business hours, and no further follow-ups. Keeping commitments, or speaking up before they are due, is the ROA communication standard.
+- When the Service Advisor cannot keep a commitment to a Future Roamer, Basecamp hands it to the Sales Coach, who owns the relationship. This is a handoff, not escalation. If the Sales Coach cannot either, Basecamp gives the Service Advisor a draft to reschedule.
+- Sends: Basecamp drafts; on a Team Member's approval of that exact draft it sends through Aloware. The approval shows the recipient's name and number and the exact text, covers only that draft, and is logged.
 - The Sales Coach owns the deal and the Roamer relationship until delivery, including date changes in LightSpeed and telling the Roamer.
 - People outside the space get a direct message card (Answer / Not mine), one thread per question.
 - Role fallback: role at that Experience Center, then Service Advisor, then GM.
@@ -72,16 +86,24 @@ Last updated: 2026-10-28
 - Mods come from LightSpeed labor lines: Dealer Add, Customer Add, and "(Charge sales)" Prep lines (included at no charge). Prep lines are the PDI and its findings. Install status is per repair order only in the deal feed.
 - Parts quantity fields (Requested vs Qty, I vs S) are not understood yet; parts questions go to people.
 
-**Deal Knowledge and HubSpot tasks**
+**Deal Knowledge**
 - Answers and explicit notes are saved as attributed, timestamped notes on the Delivery record. Facts are reused; status notes expire after 48 hours. Commitments ("tomorrow") get a check at that time.
-- HubSpot tasks only when something is genuinely outstanding; quick Chat answers become notes. See the HubSpot task rule in `CLAUDE.md`.
+- Mods from a call: Basecamp writes the list as a note labeled "From the call, not yet matched to the deal". When mods appear on the deal it compares them; a match updates the label, a mismatch asks the Service Advisor and corrects the note. If nothing appears after a reasonable window, it asks.
+- No HubSpot tasks. Team Members do not use them; accountability lives in deal space notifications.
+
+**HubSpot access (private app for the hub)**
+- Read: `crm.objects.contacts.read`, `crm.objects.deals.read`, `crm.objects.owners.read`, `crm.objects.custom.read` (Delivery, LS Deals, Repair Orders, Units), `crm.schemas.deals.read`, `crm.schemas.custom.read`, `sales-email-read` (one-to-one email bodies), and the call transcript read scope if listed separately.
+- Write, for notes only: notes are engagements, which HubSpot gates behind `crm.objects.contacts.write` (and possibly `crm.objects.deals.write` and `crm.objects.custom.write` to attach a note to a deal or Delivery). HubSpot cannot narrow these to notes, so the no-field-edits rule is enforced in hub code: the only write call is note creation, and a test fails if any other write appears.
+- Not granted: anything for workflows, marketing, files, settings, or users. After the token exists, run each call once; a 403 names the missing scope.
+- SMS is Aloware. All communications (any department, any sending or receiving number) are on the contact, not necessarily on the deal or LS Deal object, so Basecamp reads communications from the contact. The to and from numbers on each message show which inbox sent it.
+- Calls carry `hs_call_has_transcript` and `hs_call_transcription_id`; transcript text comes from a separate API. `hs_call_summary` and `hs_ai_summary` are on the call itself.
 
 **Clock (business days before projected delivery)**
 - At deposit welcome and profile draft; weekly update in the shop; 7 Delivery Coach assigned; 5 walkthrough video; 4 brief posted; 3 Delivery Coach intro; 1 date and time confirmed plus showroom check; delivery day walkthrough with no extra message.
 
 **Shadow mode success metrics**
-- Answered from data (rising), wrong answers (zero), routed answer time (improving), agent HubSpot tasks left open (zero), cost per deal (at or under estimate).
-- Proposed addition: adoption (questions Team Members ask Basecamp, and how often they answer direct message cards). Accuracy without use is not success.
+- Answered from data (rising), wrong answers (zero), routed answer time (improving), commitments missed without notice (falling), cost per deal (at or under estimate).
+- Adoption: spaces Team Members open themselves, and how often a nudge is followed by the work showing up in HubSpot. Accuracy without use is not success.
 
 ## Open questions
 
@@ -89,9 +111,11 @@ Last updated: 2026-10-28
 - Mods payment standing rule (team decision in the deal space for now).
 - Parts quantity field meanings.
 - Whether Google Calendar out-of-office is readable for vacation routing.
-- Shadow mode volume: everything for about 80 deals a month across four Experience Centers goes to Blake. Options: a daily digest, or shadow one Experience Center (Utah) first.
+- Utah GM name; the Service Advisor contact window (business days); the trailer arrival signal (LightSpeed field, HubSpot stage, or a person).
+- Whether deal spaces with real Team Members end shadow mode for Utah, and the exact wording of nudges (helping, never reprimanding).
+- False nudges: work done off HubSpot (personal cell, in person on the lot) looks missing. A note in the space counts; early false nudges cost trust, so watch for them.
 - How wrong answers get caught in shadow mode: a set review of agent answers against LightSpeed, not noticing by chance.
-- Deal space fatigue: a Sales Coach with 10 active deals sits in 10 spaces plus direct message cards. Watch adoption; consider fewer spaces if use drops.
+- Noise: Parts and the GM sit in every open space. Keep Parts to @mentions and the GM to watching; watch for muting.
 
 ## Later ideas
 
