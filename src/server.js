@@ -14,9 +14,11 @@ const http = require('http');
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const { createVerifier } = require('./chat/verify');
-const { createChatSender } = require('./chat/send');
+const { createChatSender, createDirectMessageFinder } = require('./chat/send');
+const { renderHome } = require('./chat/homeCard');
 const { createHubSpotClient } = require('./hubspot/client');
 const { createDealContext } = require('./hubspot/dealContext');
+const { createOpenDeals } = require('./hubspot/openDeals');
 const { createBriefJob } = require('./briefJob');
 const { createRouter } = require('./router');
 
@@ -52,24 +54,53 @@ function log(severity, message, fields = {}) {
   console.log(JSON.stringify({ severity, message, ...fields }));
 }
 
-function briefStarter() {
+// Briefs and App Home. Both need HubSpot; briefs also need Anthropic. Without the keys,
+// each says it is not switched on rather than failing.
+function features(audience) {
   const { HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY } = process.env;
   const sendMessage = createChatSender();
-  if (!HUBSPOT_ACCESS_TOKEN || !ANTHROPIC_API_KEY) {
+  const findDirectMessage = createDirectMessageFinder();
+  const hubspot = HUBSPOT_ACCESS_TOKEN ? createHubSpotClient({ token: HUBSPOT_ACCESS_TOKEN }) : null;
+
+  // A brief started from App Home has no space on the event; send it to the user's DM.
+  const spaceFor = async ({ spaceName, userName }) => spaceName || findDirectMessage(userName);
+
+  let startBrief;
+  if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
-    return ({ spaceName }) => sendMessage(spaceName, "Briefs aren't switched on yet.").catch(() => {});
+    startBrief = (job) =>
+      spaceFor(job)
+        .then((space) => sendMessage(space, "Briefs aren't switched on yet."))
+        .catch(() => {});
+  } else {
+    const runBrief = createBriefJob({
+      loadContext: createDealContext({ hubspot }),
+      anthropic: new Anthropic({ apiKey: ANTHROPIC_API_KEY }),
+      sendMessage,
+      log,
+      // Bump v when the avatar image changes.
+      avatarUrl: `${new URL(audience).origin}/avatar.png?v=2`,
+    });
+    startBrief = (job) => {
+      spaceFor(job)
+        .then((spaceName) => runBrief({ ...job, spaceName }))
+        .catch((err) => log('ERROR', 'could not find where to send the brief', { dealNumber: job.dealNumber, error: err.message }));
+    };
   }
-  const runBrief = createBriefJob({
-    loadContext: createDealContext({ hubspot: createHubSpotClient({ token: HUBSPOT_ACCESS_TOKEN }) }),
-    anthropic: new Anthropic({ apiKey: ANTHROPIC_API_KEY }),
-    sendMessage,
-    log,
-    // Bump v when the avatar image changes.
-    avatarUrl: `${new URL(process.env.CHAT_AUDIENCE).origin}/avatar.png?v=2`,
-  });
-  return (job) => {
-    runBrief(job);
-  };
+
+  const listOpenDeals = hubspot ? createOpenDeals({ hubspot }) : null;
+  async function buildHome() {
+    if (!listOpenDeals) return { sections: [{ widgets: [{ textParagraph: { text: "Home isn't switched on yet." } }] }] };
+    try {
+      // Shadow mode: everyone allowed sees every open Utah deal.
+      return renderHome({ deals: await listOpenDeals({ store: 'UT' }), endpoint: audience, shadow: true });
+    } catch (err) {
+      log('ERROR', 'home failed', { error: err.message });
+      return { sections: [{ widgets: [{ textParagraph: { text: "I couldn't load deals from HubSpot just now. Close and reopen Home to try again." } }] }] };
+    }
+  }
+
+  return { startBrief, buildHome };
 }
 
 function start() {
@@ -80,7 +111,7 @@ function start() {
   }
 
   const handle = createRouter({
-    startBrief: briefStarter(),
+    ...features(audience),
     verify: createVerifier({
       audience,
       projectNumber: process.env.PROJECT_NUMBER,

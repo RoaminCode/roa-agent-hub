@@ -13,9 +13,11 @@ const SORRY = {
 };
 
 function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl }) {
-  return async function runBrief({ spaceName, dealNumber, store = 'UT' }) {
+  // `announce`, when given, is posted before any work so the user knows the brief is coming.
+  return async function runBrief({ spaceName, dealNumber, store = 'UT', announce }) {
     const started = Date.now();
     try {
+      if (announce) await sendMessage(spaceName, announce);
       const context = await loadContext({ store, dealNumber });
       if (!context.found) return await sendMessage(spaceName, SORRY.notFound(dealNumber, store));
       if (!context.contact) return await sendMessage(spaceName, SORRY.noContact(dealNumber));

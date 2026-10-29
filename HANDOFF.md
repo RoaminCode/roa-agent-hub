@@ -1,18 +1,19 @@
 # Handoff
 
-Last updated: 2026-10-28
+Last updated: 2026-10-29
 
 ## Where things stand
 
 - Spec is complete enough to build from: "RJB Agent Spec" (link in `CLAUDE.md`).
 - Google Cloud project `roa-agent-hub` is set up: billing linked, APIs enabled (Chat, Cloud Run, Cloud Build, Artifact Registry, Secret Manager).
 - The Anthropic API key is in Secret Manager as `anthropic-api-key` (format checked, value never displayed). Only `basecamp-router` can read it, granted on that one secret.
-- The minimal router is live on Cloud Run as service `basecamp` in `us-central1`, running as `basecamp-router`, max 2 instances: https://basecamp-732941376364.us-central1.run.app
-  - Verifies every request came from Google Chat, allows only `ALLOWED_USERS` (Blake), replies "Basecamp is listening". No AI yet. Message text is never logged.
+- Basecamp is live on Cloud Run as service `basecamp` in `us-central1`, running as `basecamp-router`, max 2 instances, CPU always allocated so a brief keeps running after the reply: https://basecamp-732941376364.us-central1.run.app
+  - Verifies every request came from Google Chat and allows only `ALLOWED_USERS` (Blake). Message text and Roamer details are never logged; logs carry counts, timing, and event shapes (keys only).
   - `GET /health` for health checks, `GET /avatar.png` serves the Basecamp avatar.
-  - Env vars: `CHAT_AUDIENCE` (endpoint URL), `ALLOWED_USERS`, `PROJECT_NUMBER` (732941376364).
-- The Chat app "Basecamp" is configured (visible only to Blake, compass avatar) and tested end to end: Blake messages it in Google Chat and gets a reply.
-- 21 tests pass (`npm test`): LightSpeed trim, router, request verification.
+  - Env vars: `CHAT_AUDIENCE` (endpoint URL), `ALLOWED_USERS`, `PROJECT_NUMBER` (732941376364); secrets `HUBSPOT_ACCESS_TOKEN` and `ANTHROPIC_API_KEY` from Secret Manager.
+- The Chat app "Basecamp" is configured (visible only to Blake, App Home on, headset sasquatch avatar).
+- 76 tests pass (`npm test`).
+- **App Home is live ("Utah deals" in shadow mode).** Opening Basecamp's Home tab lists every open Utah deal (stage "Deals"), one rounded tile each, grouped ON DECK (delivery under 3 days or past due, orange #E2692E), THIS WEEK, NEXT TWO WEEKS, LATER, NO DELIVERY DATE. Each tile: deal number and trailer, Roamer in bold, Sales Coach top right; delivery on its own row; last contact date and who made it on its own row with a Brief button. Tapping Brief posts "I'll need just a moment to read up on [Roamer] (deal N)" in Basecamp messages, then the brief card. About 4 seconds to open; code only, no AI until Brief.
 - 2026-10-28 read-only review of `hs-ls-integration`: no endpoint the hub can safely call exists. The deal lookups (`diagnose-deal`, `deal-report`) live inside `adminTools`, which needs a dashboard operator sign-in and also performs writes. All 10 services allow `allUsers` and check callers in code. Deploy bundles contain real Roamer data. No repair order lookup is deployed. A handoff (`handoff-from-agent-hub.md`, in a Gmail draft to Blake) asks the integration project to clean the bundles, report on how each function is protected, and build a read-only `rjbDealLookup` callable only by `basecamp-router`.
 - HubSpot private app "Basecamp" is live and verified: every read works, including call transcripts (2,723 calls have them). Token in Secret Manager as `hubspot-access-token`.
 - **The Roamer brief is live (Slice 1, first piece).** Blake sends "brief <deal#>" to Basecamp in Chat; Basecamp answers at once, reads every call, text, email, and note on the deal's Roamer in HubSpot, and posts a card: header (Roamer, deal, delivery, Sales Coach), headline, tags, key facts, then WOW, MODS, and JOURNEY sections, with buttons into HubSpot. Claude Opus 5.5 at high effort with default fallbacks. About 7 cents and 23 seconds for a small deal, 60 cents and 45 seconds for one with about 1,070 items. Arctic palette: WOW #2E9BD6, MODS #23858A, JOURNEY #4A6F94, buttons #2E7DB8. Avatar is the headset sasquatch (`assets/avatar-256.png`, served as `/avatar.png?v=2`); the Chat app configuration's avatar URL should point at the `?v=2` address.
@@ -24,8 +25,8 @@ Last updated: 2026-10-28
 1. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
 2. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
 3. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
-4. **Next build: App Home as "My deals"**: each Team Member's open Utah deals by projected delivery, days to delivery, last contact, and a Brief button. Code only, no AI until Brief is tapped. Confirm the add-on event format for Home first.
-5. Then the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post) and the Service Advisor contact check with a draft.
+4. **Next build:** the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post, and Home can get an Open space button) and the Service Advisor contact check with a draft.
+5. When Team Members get access: Home switches from every Utah deal to "My deals" (deals the viewer owns, or is Service Advisor on).
 6. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
 7. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
 
@@ -58,7 +59,11 @@ Last updated: 2026-10-28
 **Google Chat specifics**
 - The Basecamp Chat app is configured as a Google Workspace add-on. Events arrive in the add-on format (`{ chat: { messagePayload, ... } }`) and are signed by `service-732941376364@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`. Replies must use the add-on response shape (`hostAppDataAction`). The router also accepts the classic format.
 - Cloud Run swallows paths ending in "z" (like `/healthz`); use `/health`.
-- The Chat console rejects URLs with a leading space without saying so.
+- The Chat console accepts URLs with a leading or trailing space without warning, and the app then fails silently. A trailing space in the App home field broke Home on 2026-10-29.
+- When Chat fails without calling Basecamp (nothing in the Cloud Run logs), check the add-on error log first: `logName="projects/roa-agent-hub/logs/gsuiteaddons.googleapis.com%2Ferrors"`. It names the exact problem (bad URL, unparseable response).
+- App Home: the opening event is `{ chat: { user, eventTime }, commonEventObject }` with no payload; answer with bare RenderActions `{ action: { navigations: [{ pushCard: card }] } }`. A button tap arrives as `chat.buttonClickedPayload` with `commonEventObject.parameters`. Chat rejects a `renderActions` wrapper, redraws Home on any tap (a brief loading bar), and does not show `action.notification` pop-ups on Home, so feedback for a tap goes in the conversation as a message.
+- Chat cards cannot change fonts, color a section's background, or draw gradients. Available: bold, italic, colored text, section titles, icons (Material Symbols, filled or outlined), chips, columns, dividers, colored filled buttons, collapsible sections. Each section draws as its own rounded tile.
+- Card text is escaped before it reaches a card (record text can hold HTML-like characters).
 
 **Models and cost**
 - Sonnet 5.5 for the RJB agent's everyday work; Opus 5.5 for the Roamer profile and Delivery Coach brief; Haiku for narrow mechanical jobs. Compare Haiku vs Sonnet on real questions during shadow weeks.
@@ -69,7 +74,8 @@ Last updated: 2026-10-28
 - Spaces opened by Team Members (not Blake) are the adoption signal. Auto-opening when the trailer arrives is a later decision, made from the on-demand numbers.
 - A space is deleted 48 hours after Finalized or Lost Deal. HubSpot is the archive.
 - Members: Sales Coach and Service Advisor as primary, Parts in the space but engaged by @mention, GM as watcher. Delivery Coach joins when assigned (no later than 7 business days before projected delivery). Business days are Monday to Friday.
-- Deal facts from LightSpeed are pinned at the top. Basecamp writes requests and answers to HubSpot as notes (not every message), on the HubSpot Deal until the Delivery object exists.- Deal watches run on every Utah deal with no space, code only: Service Advisor contact with the Future Roamer within the contact window after deposit, and the Sales Coach's update to the Roamer after the trailer arrives.
+- Deal facts from LightSpeed are pinned at the top. Basecamp writes requests and answers to HubSpot as notes (not every message), on the HubSpot Deal until the Delivery object exists.
+- Deal watches run on every Utah deal with no space, code only: Service Advisor contact with the Future Roamer within the contact window after deposit, and the Sales Coach's update to the Roamer after the trailer arrives.
 - Completion is detected, never reported. Basecamp looks for the work in HubSpot (calls, transcripts, SMS, and email all log there) or in what people say in the space. No "reply done". When everything is on track Basecamp stays quiet; when something is missing it posts in the deal space, where the team sees it, worded as a teammate's heads-up with a draft, never a callout. Deals with no space get the nudge as a direct message. In the pilot these go to Blake, labeled with who they would have gone to.
 - Reminders: one reminder before a commitment a person made ("call Bob at 2"), inside business hours, and no further follow-ups. Keeping commitments, or speaking up before they are due, is the ROA communication standard.
 - When the Service Advisor cannot keep a commitment to a Future Roamer, Basecamp hands it to the Sales Coach, who owns the relationship. This is a handoff, not escalation. If the Sales Coach cannot either, Basecamp gives the Service Advisor a draft to reschedule.
@@ -84,6 +90,14 @@ Last updated: 2026-10-28
 | Colorado | Justin Price | Justin Price |
 | South Carolina | Vaughn Owens | Christina Ryan |
 | Arizona | Mike Nicholson | Mike Nicholson |
+
+**App Home**
+- Open deals are Sales Pipeline stage "Deals" (`85341732`); Finalized and Lost Deal are closed. Deal names read "51436 - Roamer Name - Trailer", so Home needs no per-deal lookups for names.
+- Last contact comes from the Roamer's contact `notes_last_contacted`, not the deal's (the deal's copy lagged three weeks on one Utah deal). It moves on calls, emails, and Aloware texts, including Basecamp's API sends (verified against Blake's contact).
+- Who made the last contact: Basecamp searches calls, texts, and emails logged within a second of that moment (five moments per search, three types in parallel), checks each belongs to that Roamer, and names the Team Member by first name, "the Roamer", or "Basecamp". 15 of 15 identified on real Utah deals.
+- Sales Coach is the deal owner and is labeled as such, never shown as the last contact.
+- Amber "No contact in N days" when a deal delivering within 6 weeks (or past due) has had no contact in more than 7 days. Further out, no flag: a quiet week is normal.
+- A second Brief tap on the same deal within two minutes starts no second brief.
 
 **Data and dates**
 - `projected_delivery_date` drives everything before delivery; `ls_delivery_date` marks the trailer leaving the lot and closes the record at Finalized.
@@ -136,7 +150,8 @@ Last updated: 2026-10-28
 
 ## Later ideas
 
-- Texting a Roamer on Sales Coach confirmation, via a HubSpot workflow using Aloware's integration. Not in this build.
+- A gradient banner image at the top of Home or a brief (served by Basecamp like the avatar). Decorative; cards cannot draw gradients otherwise.
+- Home shows who made the last contact but not whether the team owes a reply. Deals where the Roamer texted last may deserve their own flag.
 
 ## Retired, do not use
 

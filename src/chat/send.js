@@ -6,7 +6,9 @@
 
 const { GoogleAuth } = require('google-auth-library');
 
-function createChatSender({ auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/chat.bot'] }) } = {}) {
+const defaultAuth = () => new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/chat.bot'] });
+
+function createChatSender({ auth = defaultAuth() } = {}) {
   // `message` is plain text, or a Chat message object such as { fallbackText, cardsV2 }.
   return async function sendMessage(spaceName, message) {
     if (!/^spaces\/[\w-]+$/.test(spaceName || '')) throw new Error('sendMessage: invalid space name');
@@ -16,4 +18,18 @@ function createChatSender({ auth = new GoogleAuth({ scopes: ['https://www.google
   };
 }
 
-module.exports = { createChatSender };
+// The direct message space between Basecamp and one user ("users/123"), for replies to
+// events that do not say which space they came from, such as a button on App Home.
+function createDirectMessageFinder({ auth = defaultAuth() } = {}) {
+  return async function findDirectMessage(userName) {
+    if (!/^users\/[\w-]+$/.test(userName || '')) throw new Error('findDirectMessage: invalid user name');
+    const client = await auth.getClient();
+    const res = await client.request({
+      url: `https://chat.googleapis.com/v1/spaces:findDirectMessage?name=${encodeURIComponent(userName)}`,
+      method: 'GET',
+    });
+    return res.data.name;
+  };
+}
+
+module.exports = { createChatSender, createDirectMessageFinder };

@@ -98,3 +98,15 @@ test('the brief job posts the brief as a card', async () => {
   assert.strictEqual(sent.length, 1);
   assert.strictEqual(sent[0].cardsV2[0].cardId, 'brief-90001');
 });
+
+test('the brief job posts its announcement before doing any work', async () => {
+  const order = [];
+  const run = createBriefJob({
+    loadContext: async () => (order.push('load'), { found: false }),
+    anthropic: null,
+    sendMessage: async (space, text) => order.push(text),
+    log: () => {},
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '1', store: 'UT', announce: 'One moment.' });
+  assert.deepStrictEqual(order, ['One moment.', 'load', SORRY.notFound('1', 'UT')]);
+});

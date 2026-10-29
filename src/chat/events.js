@@ -35,9 +35,15 @@ function parseClassic(body) {
 
 function parseAddOn(body) {
   const chat = body.chat;
+  const common = body.commonEventObject || {};
   let type = 'UNKNOWN';
   let payload = {};
-  if (chat.messagePayload) {
+  if (chat.type === 'APP_HOME') {
+    type = 'APP_HOME';
+  } else if (chat.type === 'SUBMIT_FORM' || (common.invokedFunction && !chat.messagePayload)) {
+    type = 'CARD_CLICKED';
+    payload = chat.buttonClickedPayload || chat.submitFormPayload || {};
+  } else if (chat.messagePayload) {
     type = 'MESSAGE';
     payload = chat.messagePayload;
   } else if (chat.addedToSpacePayload) {
@@ -49,6 +55,9 @@ function parseAddOn(body) {
   } else if (chat.buttonClickedPayload) {
     type = 'CARD_CLICKED';
     payload = chat.buttonClickedPayload;
+  } else if (chat.user && chat.eventTime) {
+    // App Home: the opening event carries only the user and the time, no payload.
+    type = 'APP_HOME';
   }
   return {
     format: 'addon',
@@ -57,7 +66,18 @@ function parseAddOn(body) {
     spaceType: payload.space ? payload.space.spaceType || null : null,
     ...userOf(chat.user),
     ...fromMessage(payload.message),
+    userName: chat.user ? chat.user.name || null : null,
+    parameters: common.parameters || {},
   };
+}
+
+// The shape of an event with every value removed, for logs: shows which fields Chat sent
+// without recording what they said.
+function shapeOf(value, depth = 0) {
+  if (value === null || typeof value !== 'object') return typeof value;
+  if (depth > 3) return '…';
+  if (Array.isArray(value)) return value.length ? [shapeOf(value[0], depth + 1)] : [];
+  return Object.fromEntries(Object.keys(value).map((k) => [k, shapeOf(value[k], depth + 1)]));
 }
 
 function parseEvent(body) {
@@ -72,4 +92,15 @@ function replyFor(event, text) {
   return { text };
 }
 
-module.exports = { parseEvent, replyFor };
+// App Home responses are bare RenderActions; Chat rejects a "renderActions" wrapper on
+// add-on apps. Opening Home pushes the card. A button tap answers with a notification
+// only, so Chat shows a pop-up and leaves the card where it was instead of redrawing it.
+function homeFor(card) {
+  return { action: { navigations: [{ pushCard: card }] } };
+}
+
+function notificationFor(text) {
+  return { action: { notification: { text } } };
+}
+
+module.exports = { parseEvent, replyFor, homeFor, notificationFor, shapeOf };
