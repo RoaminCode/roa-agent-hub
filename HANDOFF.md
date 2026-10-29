@@ -19,13 +19,12 @@ Last updated: 2026-10-28
 
 ## Next steps
 
-1. **Blake decides:** whether a Team Member with a personal Aloware line (Fabio has one) sends from it or from the role line. Recommended: the line the Roamer already hears from, found in that contact's HubSpot history, falling back to the role line.
-2. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
-3. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
-4. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
-5. Build Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]", the Wow and Utility summary from HubSpot communications, and the Service Advisor contact check with a draft. The first test is whether the summaries are WOW or generic. HubSpot access is ready, so this can start now.
-6. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
-7. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
+1. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
+2. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+3. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
+4. Build Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]", the Wow and Utility summary from HubSpot communications, and the Service Advisor contact check with a draft. The first test is whether the summaries are WOW or generic. HubSpot access is ready, so this can start now.
+5. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
+6. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
 
 ## Setting up on another computer
 
@@ -108,6 +107,7 @@ Last updated: 2026-10-28
 - Aloware contact owners can differ from HubSpot owners (Blake's own contact did); worth checking separately.
 - The token opens the whole Aloware account (API, MCP, Form Connect). The hub exposes exactly one Aloware call, the approved send, and a test fails if any other appears. Secret `aloware-api-token`, readable only by `basecamp-router`.
 - Utah send lines: Sales Coach from UT - Sales (line 67519, (385) 378-8538); Service Advisor from UT - Service (line 67523, (385) 454-9144). Other Utah lines: ROA UTAH MAIN LINE (67440), UTAH PARTS (67516), FABIO LINE (67439). ROA Tech Support is 63273. Other Experience Centers are mapped later.
+- Which line a send uses: the line the Roamer already hears from that Team Member, found in the contact's HubSpot SMS history (this covers personal lines like FABIO LINE); with no history, the role line above. The approval shows the line.
 - Not granted: anything for workflows, marketing, files, settings, or users. After the token exists, run each call once; a 403 names the missing scope.
 - SMS is Aloware. All communications (any department, any sending or receiving number) are on the contact, not necessarily on the deal or LS Deal object, so Basecamp reads communications from the contact. The to and from numbers on each message show which inbox sent it.
 - Calls carry `hs_call_has_transcript` and `hs_call_transcription_id`; transcript text comes from a separate API. `hs_call_summary` and `hs_ai_summary` are on the call itself.
