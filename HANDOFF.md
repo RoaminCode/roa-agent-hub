@@ -30,7 +30,7 @@ Last updated: 2026-10-29
 ## Next steps
 
 1. **Get API credits funded** (about $50 with auto-reload covers the Utah pilot at 11 to 26 cents a brief), then resume briefs (see Where things stand). The case for funding: Home plus a few briefs that showed the team something new.
-2. **Integration project, on the other computer:** run the handoff. Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
+2. **Integration project, on the other computer:** run the handoff in `docs/handoff-to-hs-ls-integration.md` (2026-10-30; replaces the lost 2026-10-28 one, and asks that project's Claude to verify and correct each finding first). Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
 3. **Try the contact picker live** on the first Utah deal with two contacts, then check that one event in the logs and the add-on error log.
 4. **Set up a Cloud Monitoring alert** on the WARNING log entry "deal has no Roamer contact" so Blake is notified. The log entry exists; the alert does not.
 5. **Small fixes, not started:** a third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender, so Home leaves the name off; and an Anthropic billing error should reach the log and the requester in plain words (the out-of-credits failure on 2026-10-29 logged only a request ID).
