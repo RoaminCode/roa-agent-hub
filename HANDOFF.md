@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-10-29
+Last updated: 2026-10-30
 
 ## Where things stand
 
@@ -29,7 +29,7 @@ Last updated: 2026-10-29
 
 ## Next steps
 
-1. **Get API credits funded** (about $50 with auto-reload covers the Utah pilot at 11 to 26 cents a brief), then resume briefs (see Where things stand). The case for funding: Home plus a few briefs that showed the team something new.
+1. **Build `/brief` for Claude Code** (recommended next build here): runs a Roamer brief in Blake's own session on his subscription, reusing the hub's read-only HubSpot code and the brief prompt, no API credits. Then Basecamp's small database (Firestore) for its clock. API funding (about $50 with auto-reload covers the Utah pilot) is not expected for a while; resume briefs then (see Where things stand).
 2. **Integration project, on the other computer:** run the handoff in `docs/handoff-to-hs-ls-integration.md` (2026-10-30; replaces the lost 2026-10-28 one, and asks that project's Claude to verify and correct each finding first). Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
 3. **Try the contact picker live** on the first Utah deal with two contacts, then check that one event in the logs and the add-on error log.
 4. **Set up a Cloud Monitoring alert** on the WARNING log entry "deal has no Roamer contact" so Blake is notified. The log entry exists; the alert does not.
@@ -84,6 +84,7 @@ Last updated: 2026-10-29
 
 **Models and cost**
 - Sonnet 5.5 for the RJB agent's everyday work; Opus 5.5 for the Roamer profile and Delivery Coach brief; Haiku for narrow mechanical jobs. Compare Haiku vs Sonnet on real questions during shadow weeks.
+- Basecamp's AI runs only on the Anthropic API (prepaid credits), never on a Claude subscription seat. A seat is one person using Claude's own apps; a service calling Claude on its own is API use, and storing a person's login in Basecamp is a terms, security, and usage-cap problem. Managed Agents bills through the API too. While the API is unfunded (Blake will not fund it for a while): build the code-only pieces (deal spaces, watches, Basecamp's clock, template nudges and sends), and run AI work by hand in a person's own Claude Code session (a `/brief` command; proving agent answers against LightSpeed). Templates prove the plumbing and habits, not the agent; the funding case is the live code-only pieces plus hand-run briefs that showed the team something new.
 - Estimate about $2.00 per deal, about $160/month at 80 deals; budget double until measured.
 - The Roamer brief runs at medium effort (decided 2026-10-29). High and medium were compared on three Utah deals of 16, 47, and 241 items, checked against the HubSpot record: neither invented anything, each run picked somewhat different details, medium cost 16% less and arrived 9 to 16 seconds sooner. Most of a brief's cost is the model's writing (thinking included, billed at five times the reading rate), so shrinking the input saves less than lowering effort. Shortening words in the record (for example "the" to "1") saves nothing, since common words are already one token each, and garbles the Roamer's quotes. Cost levers still open: drop automated and marketing messages and email footers in code before the model sees them; batch pricing (half off) for briefs built ahead of time; incremental briefs once the hub has a database.
 
