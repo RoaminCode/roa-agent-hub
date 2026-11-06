@@ -6,6 +6,9 @@
 //   ALLOWED_USERS   comma-separated emails allowed to use Basecamp (shadow mode: Blake only)
 //   PROJECT_NUMBER  Google Cloud project number, to accept Workspace add-on signed requests
 //   BRIEFS_PAUSED   "true" turns Roamer briefs off (Home stays on); remove it to turn them back on
+//   BRIEF_USERS     comma-separated emails who may start a Roamer brief, the only thing that
+//                   spends AI credits. Unset or empty means nobody. Each must also be in
+//                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
 //   HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY
 //                   from Secret Manager; without both, briefs are turned off
 //   PORT            set by Cloud Run
@@ -52,13 +55,18 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// "a@x.com, b@x.com" to a list; unset or blank is an empty list.
+function list(value) {
+  return (value || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 function log(severity, message, fields = {}) {
   console.log(JSON.stringify({ severity, message, ...fields }));
 }
 
 // Briefs and App Home. Both need HubSpot; briefs also need Anthropic. Without the keys,
 // each says it is not switched on rather than failing.
-function features(audience, briefsPaused) {
+function features(audience) {
   const { HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY } = process.env;
   const sendMessage = createChatSender();
   const findDirectMessage = createDirectMessageFinder();
@@ -102,11 +110,11 @@ function features(audience, briefsPaused) {
     dealsCache = { at: Date.now(), deals };
     return deals;
   }
-  async function buildHome({ sent } = {}) {
+  async function buildHome({ sent, briefsOff = null } = {}) {
     if (!listOpenDeals) return { sections: [{ widgets: [{ textParagraph: { text: "Home isn't switched on yet." } }] }] };
     try {
       // Shadow mode: everyone allowed sees every open Utah deal.
-      return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent, briefsPaused });
+      return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent, briefsOff });
     } catch (err) {
       log('ERROR', 'home failed', { error: errorFields(err) });
       return { sections: [{ widgets: [{ textParagraph: { text: "I couldn't load deals from HubSpot just now. Close and reopen Home to try again." } }] }] };
@@ -126,16 +134,21 @@ function start() {
   const briefsPaused = process.env.BRIEFS_PAUSED === 'true';
   if (briefsPaused) console.log(JSON.stringify({ severity: 'INFO', message: 'briefs are paused (BRIEFS_PAUSED)' }));
 
+  // Fails closed: an unset BRIEF_USERS is an empty list, so nobody spends credits.
+  const briefUsers = list(process.env.BRIEF_USERS);
+  console.log(JSON.stringify({ severity: 'INFO', message: 'brief users', count: briefUsers.length }));
+
   const handle = createRouter({
-    ...features(audience, briefsPaused),
+    ...features(audience),
     briefsPaused,
+    briefUsers,
     verify: createVerifier({
       audience,
       projectNumber: process.env.PROJECT_NUMBER,
       onReject: (details) =>
         console.log(JSON.stringify({ severity: 'WARNING', message: 'chat verification failed', ...details })),
     }),
-    allowedUsers: (process.env.ALLOWED_USERS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    allowedUsers: list(process.env.ALLOWED_USERS),
   });
 
   const server = http.createServer(async (req, res) => {
@@ -164,4 +177,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { start };
+module.exports = { start, list };

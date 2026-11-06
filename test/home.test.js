@@ -443,10 +443,26 @@ test('a deal with more than one contact says so on its tile', () => {
 });
 
 test('while briefs are paused, Home has no Brief buttons and says why', () => {
-  const card = home([deal('90001', '2026-11-03', '2026-10-28')], { briefsPaused: true });
+  const card = home([deal('90001', '2026-11-03', '2026-10-28')], { briefsOff: 'paused' });
   const [t] = tiles(card);
   assert.strictEqual(t.button, undefined);
   assert.match(JSON.stringify(card.sections.at(-1)), /briefs are paused/);
+});
+
+test('for someone not in BRIEF_USERS, Home has no Brief buttons and says briefs are off for them', () => {
+  const card = home([deal('90001', '2026-11-03', '2026-10-28')], { briefsOff: 'notBriefUser' });
+  const [t] = tiles(card);
+  assert.strictEqual(t.button, undefined);
+  assert.match(JSON.stringify(card.sections.at(-1)), /off for you for now/);
+});
+
+test('Home is told whether this user may start briefs', async () => {
+  const SHANE = 'shane@example.com';
+  const seen = [];
+  const router = createRouter({ verify: accept, allowedUsers: [BLAKE, SHANE], briefUsers: [SHANE], buildHome: async ({ userEmail, briefsOff }) => (seen.push([userEmail, briefsOff]), {}) });
+  await router({ headers, body: homeEvent(BLAKE) });
+  await router({ headers, body: homeEvent(SHANE) });
+  assert.deepStrictEqual(seen, [[BLAKE, 'notBriefUser'], [SHANE, null]]);
 });
 
 test('a sent deal shows a disabled In Messages button instead of Brief', () => {

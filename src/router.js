@@ -15,6 +15,7 @@ const MESSAGES = {
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
   paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out. Home still shows every deal, delivery, and last contact.",
+  notBriefUser: "Roamer briefs are off for you for now, to save Basecamp's AI credits for a test. Home still shows every deal, delivery, and last contact.",
   directOnly: (n) => `Roamer briefs stay private for now: ask me for deal ${n} in a direct message with me.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
@@ -34,10 +35,24 @@ function log(severity, message, fields = {}) {
 
 // buildHome({ userEmail, sent }) returns the App Home card; `sent` is the set of deal
 // numbers whose brief this user started recently. See chat/homeCard.js.
-// `briefsPaused` turns briefs off without a deploy (BRIEFS_PAUSED in server.js): a typed
-// "brief" gets a short answer and starts nothing, and Home shows no Brief buttons.
-function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+// buildHome also gets `briefsOff`: null, or why this user's briefs are off ('paused' or
+// 'notBriefUser'), so Home leaves off the Brief buttons and says why.
+// `briefsPaused` turns briefs off for everyone without a deploy (BRIEFS_PAUSED in server.js).
+// `briefUsers` lists who may start a brief, the only thing that spends AI credits. Anyone
+// else allowed keeps Home but gets a short answer instead of a brief. Left out, every
+// allowed user may brief (tests only); server.js always passes it, so an empty BRIEF_USERS
+// means nobody.
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
+  const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
+  function briefsOffFor(userEmail) {
+    if (briefsPaused) return 'paused';
+    if (mayBrief && !mayBrief.has(userEmail)) return 'notBriefUser';
+    return null;
+  }
+  function logRefused(off, userEmail) {
+    if (off === 'notBriefUser') log('INFO', 'brief not started: user is not in BRIEF_USERS', { user: userEmail });
+  }
 
   // A brief takes about a minute and Home gives no progress bar, so a second tap on the
   // same deal is common. Within this window it starts no second brief. A typed "brief" is
@@ -98,7 +113,9 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     const isAllowed = Boolean(event.userEmail && allowed.has(event.userEmail));
 
     if (event.type === 'APP_HOME') {
-      const card = isAllowed ? await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail) }) : renderNotAllowedHome();
+      const card = isAllowed
+        ? await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail), briefsOff: briefsOffFor(event.userEmail) })
+        : renderNotAllowedHome();
       return { status: 200, body: homeFor(card) };
     }
 
@@ -107,10 +124,12 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     }
 
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'brief') {
-      // A button drawn before the pause (an old Home or contact picker) starts nothing.
-      if (briefsPaused) {
-        if (event.parameters.from === 'picker') return { status: 200, body: updateMessageFor(event, MESSAGES.paused) };
-        return { status: 200, body: homeUpdateFor(await buildHome({ userEmail: event.userEmail, sent: new Set() })) };
+      // A button drawn before briefs went off (an old Home or contact picker) starts nothing.
+      const off = briefsOffFor(event.userEmail);
+      if (off) {
+        logRefused(off, event.userEmail);
+        if (event.parameters.from === 'picker') return { status: 200, body: updateMessageFor(event, MESSAGES[off]) };
+        return { status: 200, body: homeUpdateFor(await buildHome({ userEmail: event.userEmail, sent: new Set(), briefsOff: off })) };
       }
       const dealNumber = String(event.parameters.dealNumber || '');
       if (!/^\d{3,8}$/.test(dealNumber)) return { status: 200, body: {} };
@@ -142,7 +161,7 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
       }
       // On a phone or full screen Messages is out of sight, so Home itself changes: the
       // tapped deal's button now reads "In Messages" and cannot be tapped again.
-      const card = await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail) });
+      const card = await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail), briefsOff: null });
       return { status: 200, body: homeUpdateFor(card) };
     }
 
@@ -153,7 +172,11 @@ function createRouter({ verify, allowedUsers, startBrief = () => {}, buildHome =
     if (event.type === 'MESSAGE') {
       const cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
-      if (briefsPaused) return { status: 200, body: replyFor(event, MESSAGES.paused) };
+      const off = briefsOffFor(event.userEmail);
+      if (off) {
+        logRefused(off, event.userEmail);
+        return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
       // A brief holds a Roamer's personal details, so it is posted only where the reader
       // should see them: a direct message with Basecamp. When deal spaces exist, a deal's

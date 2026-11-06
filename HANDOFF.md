@@ -1,6 +1,20 @@
 # Handoff
 
-Last updated: 2026-10-30
+Last updated: 2026-11-06
+
+## Read first: the $10 is for Shane's test only (2026-11-06)
+
+Blake has been given $10 of Anthropic API credits so Shane can test the Roamer brief. A brief costs about 11 to 26 cents, so that is roughly 40 to 90 briefs, enough for Shane's test only if nothing else spends it. Every rule below exists to keep it that way.
+
+1. **No development or testing spends credits.** All agent work happens in `/brief` in Claude Code on Blake's subscription. `/brief` has Claude Code write the brief itself; it reuses the HubSpot reading code and the prompt and must never call `writeBrief` or anything else that uses the Anthropic SDK.
+2. **Never put `ANTHROPIC_API_KEY` on a laptop** (no `.env`, no shell variable). If it is set in the shell, Claude Code itself bills that key instead of the subscription. The key lives only in Secret Manager. `npm test` uses a fake client and never spends.
+3. **No live smoke test before Shane.** Shane's first brief is the live check; watch the logs while he runs it.
+4. **`BRIEF_USERS` decides who can spend credits** (built 2026-11-06, not deployed yet). Only those emails can start a brief by typing, Home, or the contact picker; everyone else allowed keeps Home without Brief buttons. Unset or empty means nobody, so deploying it changes nothing today. Blake is deliberately left out.
+5. **Briefs stay paused until Shane is ready**, and are paused again when his test ends.
+
+**Build plan:** build the agent out for Blake as if it were the API agent, defined once (instructions, output schema, tools) so `/brief`, the live Basecamp brief, and later the Managed Agent config all read the same definition. Migrating to a Managed Agent then swaps one piece. Shane tests on Basecamp as it is today (proven and live), not on a Managed Agent; Managed Agents bills the same credits and adds risk to the test that decides funding.
+
+**To start Shane's test, in order:** confirm the $10 shows in the Anthropic Console balance; fix the out-of-credits message (next step 2) so Shane sees plain words when it runs out; deploy; add Shane's email to `ALLOWED_USERS` and `BRIEF_USERS` (`gcloud run services update basecamp --update-env-vars ...`; ALLOWED_USERS holds commas, so use gcloud's `^;^` delimiter form); make the Basecamp Chat app visible to Shane (Blake's call; it is Blake-only today); remove `BRIEFS_PAUSED`. Afterward set `BRIEFS_PAUSED=true` again.
 
 ## Where things stand
 
@@ -14,7 +28,8 @@ Last updated: 2026-10-30
   - `GET /health` for health checks, `GET /avatar.png` serves the Basecamp avatar.
   - Env vars: `CHAT_AUDIENCE` (endpoint URL), `ALLOWED_USERS`, `PROJECT_NUMBER` (732941376364), `BRIEFS_PAUSED` (`true` while briefs are paused); secrets `HUBSPOT_ACCESS_TOKEN` and `ANTHROPIC_API_KEY` from Secret Manager.
 - The Chat app "Basecamp" is configured (visible only to Blake, App Home on, headset sasquatch avatar).
-- 121 tests pass (`npm test`).
+- 128 tests pass (`npm test`).
+- `BRIEF_USERS` guard is committed but **not deployed**; the live revision does not have it.
 - **App Home is live ("Utah deals" in shadow mode).** Opening Basecamp's Home tab lists every open Utah deal (stage "Deals"), one rounded tile each, grouped ON DECK (delivery under 3 days or past due, orange #E2692E), THIS WEEK, NEXT TWO WEEKS, LATER, NO DELIVERY DATE. Each tile: deal number and trailer, Roamer in bold, Sales Coach top right; delivery on its own row; last contact date and who made it on its own row with a Brief button. Tapping Brief redraws Home with that deal's button as a disabled "In Messages" with a check icon (so the tap shows on a phone or full screen, where Messages is a separate tab), posts "I'll need just a moment to read up on [Roamer] (deal N)" in Basecamp messages, then the brief card. About 4 seconds to open; a tap answers at once from a deal list cached for 90 seconds. Code only, no AI until Brief. Verified on phone and full screen 2026-10-29. Last contact is dated in Mountain time (HubSpot stores UTC; an evening contact used to show as the next day). Deals with more than one contact show "2 contacts" on the tile. Checked against live HubSpot 2026-10-29: 16 of 16 Utah deals shown, every date and every "who made it" correct.
 - 2026-10-28 read-only review of `hs-ls-integration`: no endpoint the hub can safely call exists. The deal lookups (`diagnose-deal`, `deal-report`) live inside `adminTools`, which needs a dashboard operator sign-in and also performs writes. All 10 services allow `allUsers` and check callers in code. Deploy bundles contain real Roamer data. No repair order lookup is deployed. A handoff (`handoff-from-agent-hub.md`, in a Gmail draft to Blake) asks the integration project to clean the bundles, report on how each function is protected, and build a read-only `rjbDealLookup` callable only by `basecamp-router`.
 - HubSpot private app "Basecamp" is live and verified: contacts, deals, owners, custom objects, calls (including their summaries), texts, emails, and notes all read. Token in Secret Manager as `hubspot-access-token`.
@@ -29,17 +44,18 @@ Last updated: 2026-10-30
 
 ## Next steps
 
-1. **Build `/brief` for Claude Code** (recommended next build here): runs a Roamer brief in Blake's own session on his subscription, reusing the hub's read-only HubSpot code and the brief prompt, no API credits. Then Basecamp's small database (Firestore) for its clock. API funding (about $50 with auto-reload covers the Utah pilot) is not expected for a while; resume briefs then (see Where things stand).
-2. **Integration project, on the other computer:** run the handoff in `docs/handoff-to-hs-ls-integration.md` (2026-10-30; replaces the lost 2026-10-28 one, and asks that project's Claude to verify and correct each finding first). Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
-3. **Try the contact picker live** on the first Utah deal with two contacts, then check that one event in the logs and the add-on error log.
-4. **Set up a Cloud Monitoring alert** on the WARNING log entry "deal has no Roamer contact" so Blake is notified. The log entry exists; the alert does not.
-5. **Small fixes, not started:** a third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender, so Home leaves the name off; and an Anthropic billing error should reach the log and the requester in plain words (the out-of-credits failure on 2026-10-29 logged only a request ID).
-6. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
-7. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
-8. **Next build:** the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post, and Home can get an Open space button) and the Service Advisor contact check with a draft.
-9. When Team Members get access: Home switches from every Utah deal to "My deals" (deals the viewer owns, or is Service Advisor on).
-10. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
-11. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
+1. **Pull the brief agent into one shared definition, then build `/brief` for Claude Code** (next build): move the instructions and output schema out of `src/agents/roamerBrief.js` so the live brief, `/brief`, and a future Managed Agent all use them. `/brief` runs in Blake's own session on his subscription with no API credits (see "Read first"). Then Basecamp's small database (Firestore) for its clock.
+2. **Before Shane's test:** an Anthropic billing error should reach the log and the requester in plain words (the out-of-credits failure on 2026-10-29 logged only a request ID). Then follow "To start Shane's test" above.
+3. **Integration project, on the other computer:** run the handoff in `docs/handoff-to-hs-ls-integration.md` (2026-10-30; replaces the lost 2026-10-28 one, and asks that project's Claude to verify and correct each finding first). Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
+4. **Try the contact picker live** on the first Utah deal with two contacts, then check that one event in the logs and the add-on error log.
+5. **Set up a Cloud Monitoring alert** on the WARNING log entry "deal has no Roamer contact" so Blake is notified. The log entry exists; the alert does not.
+6. **Small fix, not started:** a third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender, so Home leaves the name off.
+7. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+8. **Workspace admin:** the one-time approval that lets Basecamp create Chat spaces, and make Basecamp visible to the Utah team. Confirm the exact steps first.
+9. **Next build:** the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post, and Home can get an Open space button) and the Service Advisor contact check with a draft.
+10. When Team Members get access: Home switches from every Utah deal to "My deals" (deals the viewer owns, or is Service Advisor on).
+11. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
+12. Only after that: the HubSpot Delivery object change list (stages, lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved.
 
 ## Setting up on another computer
 
@@ -85,6 +101,7 @@ Last updated: 2026-10-30
 **Models and cost**
 - Sonnet 5.5 for the RJB agent's everyday work; Opus 5.5 for the Roamer profile and Delivery Coach brief; Haiku for narrow mechanical jobs. Compare Haiku vs Sonnet on real questions during shadow weeks.
 - Basecamp's AI runs only on the Anthropic API (prepaid credits), never on a Claude subscription seat. A seat is one person using Claude's own apps; a service calling Claude on its own is API use, and storing a person's login in Basecamp is a terms, security, and usage-cap problem. Managed Agents bills through the API too. While the API is unfunded (Blake will not fund it for a while): build the code-only pieces (deal spaces, watches, Basecamp's clock, template nudges and sends), and run AI work by hand in a person's own Claude Code session (a `/brief` command; proving agent answers against LightSpeed). Templates prove the plumbing and habits, not the agent; the funding case is the live code-only pieces plus hand-run briefs that showed the team something new.
+- Who may spend credits (`BRIEF_USERS`) is separate from who may use Basecamp (`ALLOWED_USERS`), and fails closed: unset means nobody. Decided 2026-11-06 so the $10 for Shane's test cannot be spent by a stray tap.
 - Estimate about $2.00 per deal, about $160/month at 80 deals; budget double until measured.
 - The Roamer brief runs at medium effort (decided 2026-10-29). High and medium were compared on three Utah deals of 16, 47, and 241 items, checked against the HubSpot record: neither invented anything, each run picked somewhat different details, medium cost 16% less and arrived 9 to 16 seconds sooner. Most of a brief's cost is the model's writing (thinking included, billed at five times the reading rate), so shrinking the input saves less than lowering effort. Shortening words in the record (for example "the" to "1") saves nothing, since common words are already one token each, and garbles the Roamer's quotes. Cost levers still open: drop automated and marketing messages and email footers in code before the model sees them; batch pricing (half off) for briefs built ahead of time; incremental briefs once the hub has a database.
 

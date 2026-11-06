@@ -151,8 +151,16 @@ function dealWidgets(deal, today, endpoint, sent, briefsPaused) {
 
   return { days, widgets: [top, delivery, contact] };
 }
-// With `briefsPaused`, tiles have no Brief button and the footer says why.
-function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(), briefsPaused = false }) {
+// Why briefs are off, as the Home footer says it.
+const BRIEFS_OFF = {
+  paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out.",
+  notBriefUser: "Roamer briefs are off for you for now, to save Basecamp's AI credits for a test.",
+};
+
+// With `briefsOff` ('paused' or 'notBriefUser'), tiles have no Brief button and the footer
+// says why.
+function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(), briefsOff = null }) {
+  const briefsPaused = Boolean(briefsOff);
   const today = todayIn(TIME_ZONE, now);
   const rows = deals.map((d) => dealWidgets(d, today, endpoint, sent, briefsPaused));
 
@@ -178,7 +186,7 @@ function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(
             shadow ? 'Shadow mode: showing every open Utah deal. ' : ''
           }${
             briefsPaused
-              ? "Roamer briefs are paused for now while Basecamp's AI funding is sorted out."
+              ? BRIEFS_OFF[briefsOff] || BRIEFS_OFF.paused
               : 'Tap Brief and the Roamer brief arrives in the Messages tab in about a minute.'
           }</font>`,
         },

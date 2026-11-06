@@ -161,6 +161,55 @@ test('while briefs are paused, an old Brief or picker button starts nothing', as
   assert.strictEqual(started.length, 0);
 });
 
+// BRIEF_USERS: only the people listed may spend AI credits on a brief.
+const SHANE = 'shane@example.com';
+const homeTap = (email) => ({
+  commonEventObject: { invokedFunction: 'https://example.com/', parameters: { action: 'brief', dealNumber: '90001' } },
+  chat: { user: { name: 'users/123', email }, eventTime: 't', buttonClickedPayload: {} },
+});
+
+test('someone allowed but not in BRIEF_USERS cannot start a brief by typing, Home, or the picker', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [BLAKE, SHANE], briefUsers: [SHANE], startBrief: (job) => started.push(job), buildHome: async () => ({ sections: [] }) });
+  const typed = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  assert.deepStrictEqual(typed.body, { text: MESSAGES.notBriefUser });
+  await r({ headers, body: homeTap(BLAKE) });
+  const picker = await r({ headers, body: pickerClick({ contactId: '78' }) });
+  assert.strictEqual(picker.body.hostAppDataAction.chatDataAction.updateMessageAction.message.text, MESSAGES.notBriefUser);
+  assert.strictEqual(started.length, 0);
+});
+
+test('someone in BRIEF_USERS can start a brief, matched regardless of email case', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [BLAKE, SHANE], briefUsers: ['Shane@Example.com'], startBrief: (job) => started.push(job.userEmail), buildHome: async () => ({}) });
+  await r({ headers, body: classicMessage(SHANE, 'brief 51431') });
+  await r({ headers, body: homeTap(SHANE) });
+  assert.deepStrictEqual(started, [SHANE, SHANE]);
+});
+
+test('an empty BRIEF_USERS lets nobody start a brief', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [BLAKE], briefUsers: [], startBrief: (job) => started.push(job) });
+  const typed = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  assert.deepStrictEqual(typed.body, { text: MESSAGES.notBriefUser });
+  assert.strictEqual(started.length, 0);
+});
+
+test('BRIEF_USERS unset or blank reads as nobody', () => {
+  const { list } = require('../src/server');
+  assert.deepStrictEqual(list(undefined), []);
+  assert.deepStrictEqual(list(' '), []);
+  assert.deepStrictEqual(list('a@x.com, b@x.com'), ['a@x.com', 'b@x.com']);
+});
+
+test('a pause still wins over BRIEF_USERS', async () => {
+  const started = [];
+  const r = createRouter({ verify: accept, allowedUsers: [SHANE], briefUsers: [SHANE], briefsPaused: true, startBrief: (job) => started.push(job) });
+  const typed = await r({ headers, body: classicMessage(SHANE, 'brief 51431') });
+  assert.deepStrictEqual(typed.body, { text: MESSAGES.paused });
+  assert.strictEqual(started.length, 0);
+});
+
 test('parses the brief command, with Utah as the default store', () => {
   const { parseCommand } = require('../src/router');
   assert.deepStrictEqual(parseCommand('brief 51431'), { command: 'brief', dealNumber: '51431', store: 'UT' });
