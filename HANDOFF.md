@@ -70,23 +70,23 @@ Worked section by section with Blake (list set 2026-11-07).
 9. **"Anything new?" answers (Blake, 2026-11-07):** answer "anything new since Monday?" from the record, using the "what's new" an incremental brief produces; in shadow mode Blake sees the answer first.
 
 **C. Waiting on others or on Blake**
-9. **Workspace admin install** (a super admin; Blake has Cloud access only): admin.google.com > Apps > Google Workspace Marketplace apps > Apps list > Install app > Basecamp (internal) > Admin install. Approves `chat.app.spaces.create` and `chat.app.memberships`; the Cloud side is done. Also make Basecamp visible to the Utah team.
-10. **"No Delivery Coach" tag** in HubSpot (Blake creates it): amber, stage Delivery Prep or In the Showroom! and Assigned Delivery Coach empty. Update its filter when that field becomes a user field.
-11. **The rest of the Delivery object change list** (lean fields per the RJB Agent Spec, relabel `assigned_service_writer` to Service Advisor, retire the duplicate status fields, attention tags), for Blake's approval. Small fix: the "In the Showroom! " stage label has a trailing space; the Trailer label is lowercase.
-12. **RJB Agent Spec update:** it still says the Delivery record is created when a Deal enters Deals; it is now created when the deal space opens.
+10. **Workspace admin install** (a super admin; Blake has Cloud access only): admin.google.com > Apps > Google Workspace Marketplace apps > Apps list > Install app > Basecamp (internal) > Admin install. Approves `chat.app.spaces.create` and `chat.app.memberships`; the Cloud side is done. Also make Basecamp visible to the Utah team.
+11. **"No Delivery Coach" tag** in HubSpot (Blake creates it): amber, stage Delivery Prep or In the Showroom! and Assigned Delivery Coach empty. Update its filter when that field becomes a user field.
+12. **The rest of the Delivery object change list** (lean fields per the RJB Agent Spec, relabel `assigned_service_writer` to Service Advisor, retire the duplicate status fields, attention tags), for Blake's approval. Small fix: the "In the Showroom! " stage label has a trailing space; the Trailer label is lowercase.
+13. **RJB Agent Spec update:** it still says the Delivery record is created when a Deal enters Deals; it is now created when the deal space opens.
 
 **D. After the build list**
-13. **Add Shane:** `ALLOWED_USERS` and `BRIEF_USERS` (flags file), make the Chat app visible to him, pause briefs when not in use.
+14. **Add Shane:** `ALLOWED_USERS` and `BRIEF_USERS` (flags file), make the Chat app visible to him, pause briefs when not in use.
 
 **E. Older items**
-14. More `/brief` comparisons on deals Basecamp briefed 2026-10-29, about five.
-15. Try the contact picker live on the first Utah deal with two contacts.
-16. A Cloud Monitoring alert on the WARNING "deal has no Roamer contact".
-17. Small fix: the third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender on Home.
-18. Blake decides: Utah GM name; the Service Advisor's contact window (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
-19. **Integration project, on the other computer:** run `docs/handoff-to-hs-ls-integration.md`; bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
-20. When Team Members get access: Home switches from every Utah deal to "My deals".
-21. The Service Advisor contact check with a draft (rest of Slice 1).
+15. More `/brief` comparisons on deals Basecamp briefed 2026-10-29, about five.
+16. Try the contact picker live on the first Utah deal with two contacts.
+17. A Cloud Monitoring alert on the WARNING "deal has no Roamer contact".
+18. Small fix: the third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender on Home.
+19. Blake decides: Utah GM name; the Service Advisor's contact window (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+20. **Integration project, on the other computer:** run `docs/handoff-to-hs-ls-integration.md`; bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
+21. When Team Members get access: Home switches from every Utah deal to "My deals".
+22. The Service Advisor contact check with a draft (rest of Slice 1).
 
 ## Setting up on another computer
 
