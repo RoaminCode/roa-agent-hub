@@ -20,6 +20,7 @@ Journey: where this Roamer is on the road to pickup and what is ahead, other tha
 
 Rules:
 - Use only what the record says. Never infer, guess, or embellish. If it is unclear who said something, say so.
+- When the record contradicts itself (a date, price, name, or who said what), say so in that item and give each version. Never pick one.
 - One short sentence per item. Prefer the Roamer's own words; a short quote is good.
 - Give the date and channel each item came from. When the same thing comes up more than once, use the most recent mention.
 - Wow and Journey: at most 12 items each, most useful first (for Journey, the order given above). Mods: list every one in the record you received, approved first, then pending, interested, declined. Leave a list short or empty rather than pad it.
@@ -182,6 +183,23 @@ function noDashes(text) {
   return String(text).replace(/\s*[\u2013\u2014]\s*/g, ', ');
 }
 
+// Utah only for now, the same zone Home uses.
+const TIME_ZONE = 'America/Denver';
+
+// "Nov 6, 8:14 PM", where the Experience Center is.
+function writtenAt(now) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: TIME_ZONE, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(now);
+}
+
+// When the brief was written and how far the record it read goes. Not on the Chat card,
+// which Blake keeps free of this kind of detail (Chat shows when a message was posted); it
+// is for briefs kept outside Chat. The newest item's date is read the same way the record's
+// item dates are, so it matches the dates on the brief's own lines.
+function stampLine(context, now = new Date()) {
+  const newest = (context.items || []).map((i) => String(i.at || '').slice(0, 10)).filter(Boolean).sort().pop();
+  return `Written ${writtenAt(now)} MT${newest ? `, from the record through ${shortDate(newest)}` : ''}.`;
+}
+
 // What the brief was built from, and everything it could not read in full.
 function basisLine(context) {
   const n = context.counts || {};
@@ -196,12 +214,12 @@ function basisLine(context) {
     .join(' ');
 }
 
-function renderBrief({ dealNumber, context, brief }) {
+function renderBrief({ dealNumber, context, brief, now }) {
   const c = (context.contact && context.contact.properties) || {};
   const name = [c.firstname, c.lastname].filter(Boolean).join(' ') || 'this Roamer';
   const line = (i) => `• ${noDashes(i.detail)} (${shortDate(i.date)}, ${i.channel})`;
   const list = (items) => (items.length ? items.map(line).join('\n') : '• Nothing yet in the record.');
-  const basis = basisLine(context);
+  const basis = `${stampLine(context, now)} ${basisLine(context)}`;
 
   const wow = [...brief.wow];
   const journey = [...brief.journey];
@@ -223,4 +241,4 @@ function renderBrief({ dealNumber, context, brief }) {
   return text;
 }
 
-module.exports = { writeBrief, renderBrief, formatRecord, basisLine, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };
+module.exports = { writeBrief, renderBrief, formatRecord, basisLine, stampLine, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };

@@ -5,7 +5,7 @@
 // buttons into HubSpot. Card text supports a small HTML subset, so all record text is
 // escaped first.
 
-const { noDashes, shortDate, basisLine } = require('../agents/roamerBrief');
+const { noDashes, shortDate } = require('../agents/roamerBrief');
 
 // HubSpot portal for rvsofamerica.com, used to build record links.
 const HUBSPOT_PORTAL_ID = '39605104';
@@ -164,8 +164,6 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
     .filter(Boolean)
     .join(' · ');
 
-  const basis = basisLine(context);
-
   const record = `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record`;
   const buttons = [link('Open deal in HubSpot', `${record}/0-3/${context.deal.id}`)];
   if (context.contact) buttons.push(link('Open Roamer in HubSpot', `${record}/0-1/${context.contact.id}`));
@@ -185,12 +183,8 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
             itemSection('Wow', COLORS.wow, brief.wow),
             modsSection(brief.mods || []),
             itemSection('Journey', COLORS.journey, brief.journey),
-            {
-              widgets: [
-                { textParagraph: { text: `<font color="${COLORS.muted}">${escape(basis)}</font>` } },
-                { buttonList: { buttons } },
-              ],
-            },
+            // No source counts or timestamps here: Blake keeps the card to what the team acts on.
+            { widgets: [{ buttonList: { buttons } }] },
           ],
         },
       },

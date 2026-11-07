@@ -2,7 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { renderBrief, formatRecord, noDashes, writeBrief } = require('../src/agents/roamerBrief');
+const { renderBrief, formatRecord, noDashes, writeBrief, stampLine, SYSTEM } = require('../src/agents/roamerBrief');
+const { renderBriefCard } = require('../src/chat/briefCard');
 const { createBriefJob, SORRY } = require('../src/briefJob');
 
 const context = {
@@ -216,4 +217,27 @@ test('the brief job posts its announcement before doing any work', async () => {
   });
   await run({ spaceName: 'spaces/AAA', dealNumber: '1', store: 'UT', announce: 'One moment.' });
   assert.deepStrictEqual(order, ['One moment.', 'load', SORRY.notFound('1', 'UT')]);
+});
+test('the stamp says when the brief was written and how far the record goes', () => {
+  // 03:14 UTC on Nov 7 is 8:14 PM on Nov 6 in Utah (Mountain Standard Time).
+  const now = new Date('2026-11-07T03:14:00Z');
+  const items = [
+    { at: '2026-10-03T10:00:00Z', channel: 'text' },
+    { at: '2026-11-03T16:00:00Z', channel: 'call' },
+    { at: '2026-10-20T09:00:00Z', channel: 'text' },
+  ];
+  assert.strictEqual(stampLine({ ...context, items }, now), 'Written Nov 6, 8:14 PM MT, from the record through Nov 3.');
+  assert.strictEqual(stampLine({ ...context, items: [] }, now), 'Written Nov 6, 8:14 PM MT.');
+});
+
+test('/brief shows the stamp and sources; the Chat card shows neither', () => {
+  const now = new Date('2026-11-07T03:14:00Z');
+  const text = renderBrief({ dealNumber: '90001', context, brief: { ...fullBrief, wow: [], journey: [] }, now });
+  assert.match(text, /_Written Nov 6, 8:14 PM MT, from the record through Oct 3\. From 0 calls, 1 texts/);
+  const card = JSON.stringify(renderBriefCard({ dealNumber: '90001', context, brief: fullBrief }));
+  assert.doesNotMatch(card, /Written|through|From \d+ calls|transcripts/);
+});
+
+test('the instructions tell the brief to report contradictions, not pick one', () => {
+  assert.match(SYSTEM, /When the record contradicts itself \(a date, price, name, or who said what\), say so in that item and give each version\. Never pick one\./);
 });

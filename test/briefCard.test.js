@@ -55,12 +55,12 @@ test('escapes record text so it cannot inject card markup, and drops dashes', ()
 test('shows an empty list plainly and links to the deal and Roamer in HubSpot', () => {
   const all = sections(card({ headline: 'h', wow: [], journey: [] }));
   assert.match(all[1].widgets[0].textParagraph.text, /Nothing yet in the record/);
-  const buttons = all[4].widgets[1].buttonList.buttons.map((b) => [b.text, b.onClick.openLink.url]);
+  const buttons = all[4].widgets[0].buttonList.buttons.map((b) => [b.text, b.onClick.openLink.url]);
   assert.deepStrictEqual(buttons, [
     ['Open deal in HubSpot', 'https://app.hubspot.com/contacts/39605104/record/0-3/111'],
     ['Open Roamer in HubSpot', 'https://app.hubspot.com/contacts/39605104/record/0-1/222'],
   ]);
-  assert.match(all[4].widgets[0].textParagraph.text, /From 2 calls, 3 texts, 0 emails, and 1 notes/);
+  assert.strictEqual(all[4].widgets.length, 1, 'the last section holds only the buttons, no source line');
 });
 
 test('shows tags as chips and key facts in two columns', () => {
@@ -86,7 +86,7 @@ test('shows tags as chips and key facts in two columns', () => {
 test('leaves out the tag and fact rows when there are none, and fills the buttons', () => {
   const all = sections(card({ headline: 'h', wow: [], journey: [] }));
   assert.strictEqual(all[0].widgets.length, 1);
-  const button = all[4].widgets[1].buttonList.buttons[0];
+  const button = all[4].widgets[0].buttonList.buttons[0];
   assert.strictEqual(button.type, 'FILLED');
   assert.ok(button.color.blue > button.color.red);
 });
