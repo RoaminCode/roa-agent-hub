@@ -16,6 +16,8 @@
 //   accessRequests/{auto}   dealId, spaceName, user, at
 //   spaceNotes/{noteId}     dealId, spaceName, user, at, chars
 //   people/{email}          userName (Chat id), seenAt
+//   wowIdeas/{auto}         idea (general, no Roamer details), category, tier, uses,
+//                           source ("starter" or "chosen"), createdBy, active, lastUsedAt
 //   questions/{auto}        dealId, spaceName, originThread, reviewerThread, noteId, topic,
 //                           askedBy, role, model, inputTokens, outputTokens, costUsd,
 //                           status ("shadow", "answered", "failed"), answers, answeredBy,
@@ -202,11 +204,39 @@ function createDb({ firestore, now = () => new Date() }) {
     await firestore.collection('questions').doc(id).set({ reuse }, { merge: true });
   }
 
+  // The WOW idea library, most used first. Seeded with `starter` once, the first time it has
+  // no starter ideas at all (one set aside, active false, still counts, so it never returns).
+  // Ideas are general (no Roamer details); `/wow` tailors them to each delivery.
+  async function listWowIdeas(starter = []) {
+    const col = firestore.collection('wowIdeas');
+    if (starter.length && !(await col.where('source', '==', 'starter').get()).docs.length) {
+      for (const s of starter) await col.add({ ...s, uses: 0, source: 'starter', active: true, createdAt: stamp() });
+    }
+    const snap = await col.where('active', '==', true).get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.uses || 0) - (a.uses || 0));
+  }
+
+  // A WOW idea chosen for a delivery: counted if it is in the library, else added to it in
+  // its general form. Returns its id.
+  async function useWowIdea({ ideaId, idea, category, tier, by }) {
+    const col = firestore.collection('wowIdeas');
+    if (ideaId) {
+      const ref = col.doc(String(ideaId));
+      const snap = await ref.get();
+      if (snap.exists) {
+        await ref.set({ uses: (snap.data().uses || 0) + 1, lastUsedAt: stamp() }, { merge: true });
+        return String(ideaId);
+      }
+    }
+    const ref = await col.add({ idea, category, tier, uses: 1, source: 'chosen', createdBy: by, active: true, createdAt: stamp(), lastUsedAt: stamp() });
+    return ref.id;
+  }
+
   async function markAnswered({ id, answeredBy, answers }) {
     await firestore.collection('questions').doc(id).set({ status: 'answered', answeredBy, answeredAt: stamp(), answers }, { merge: true });
   }
 
-  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict };
+  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, listWowIdeas, useWowIdea };
 }
 
 module.exports = { createDb, CLAIM_MS };

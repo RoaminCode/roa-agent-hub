@@ -34,6 +34,7 @@ const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createDb } = require('./db');
 const { createQuestionRouter } = require('./askJob');
 const { createQaNotes } = require('./hubspot/qaNotes');
+const { createWow } = require('./wowJob');
 const { createDeliveries } = require('./hubspot/deliveries');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
@@ -102,6 +103,9 @@ function features(audience) {
   let relayAnswer = async () => null;
   let clarifyQuestion = async () => "Questions aren't switched on yet.";
   let reuseVerdict = async () => "Questions aren't switched on yet.";
+  let startWow = () => {};
+  let chooseWow = async () => "WOW plans aren't switched on yet.";
+  let listWowIdeas = async () => "WOW plans aren't switched on yet.";
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -140,6 +144,11 @@ function features(audience) {
     } else {
       log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
     }
+    const wowPlans = createWow({ anthropic, db, readBriefNote: loadContext.readBriefNote, findDealSpace, createNote: hubspot.createNote, log, endpoint: audience });
+    // The ideas are posted in the thread they were asked in, when ready.
+    startWow = later('wow', async (job) => sendMessage(job.spaceName, await wowPlans.wow(job), { threadName: job.threadName }));
+    chooseWow = wowPlans.choose;
+    listWowIdeas = wowPlans.listIdeas;
     startBrief = (job) => {
       spaceFor(job)
         .then((spaceName) => runBrief({ ...job, spaceName }))
@@ -203,7 +212,7 @@ function features(audience) {
     });
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startWow, chooseWow, listWowIdeas, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {

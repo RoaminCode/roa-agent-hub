@@ -19,6 +19,7 @@ const MESSAGES = {
   opening: (n) => `Opening a space for deal ${n}. I'll post the link here when it's ready.`,
   spaceDirectOnly: (n) => `Ask me to open the space for deal ${n} in a direct message with me.`,
   adopting: (n) => `Setting this space up for deal ${n}. The brief will be here shortly.`,
+  wowWorking: 'Coming up with WOW ideas from the brief. They will be here in a moment.',
   useInSpace: (n) => `Say "use this space for ${n}" in the deal's space, after adding me to it.`,
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
@@ -32,12 +33,10 @@ const STORES = new Set(['UT']);
 
 // App commands, by the id each has in the Chat app configuration (Chat API > Configuration
 // > Commands). 1 to 3 are slash commands; 4 is the "Save to HubSpot" message action, chosen
-// from any message's menu, which saves that whole message. /wow is registered ahead of
-// its build so Team Members see it; until built it says so.
+// from any message's menu, which saves that whole message. A command registered ahead of
+// its build would say so here (none now).
 const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage' };
-const NOT_BUILT = {
-  wow: "/wow isn't built yet. It will suggest a personal WOW for this Roamer's delivery, from the brief.",
-};
+const NOT_BUILT = {};
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
 // "use this space for 51431"; "note <text>" (also "note: <text>"), whose text keeps its
@@ -46,6 +45,8 @@ function parseCommand(text) {
   const t = text || '';
   const note = /^note\b:?\s*([\s\S]*)$/i.exec(t);
   if (note) return { command: 'note', text: note[1].trim() };
+  const wow = /^wow\b:?\s*([\s\S]*)$/i.exec(t);
+  if (wow) return { command: 'wow', text: wow[1].trim() };
   const ask = /^ask\b:?\s*([\s\S]*)$/i.exec(t);
   if (ask) return { command: 'ask', text: ask[1].trim() };
   let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
@@ -84,7 +85,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -209,6 +210,12 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       return { status: 200, body: updateMessageFor(event, said) };
     }
 
+    // "Use this one" on a WOW idea: saved to the Delivery record, remembered in the library. No AI.
+    if (event.type === 'CARD_CLICKED' && event.parameters.action === 'wowPick') {
+      const said = await chooseWow({ params: event.parameters, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
+      return { status: 200, body: updateMessageFor(event, said) };
+    }
+
     // Right or Wrong on what Basecamp would have answered from an earlier answer. No AI.
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'reuseVerdict') {
       const said = await reuseVerdict({ id: String(event.parameters.id || ''), verdict: String(event.parameters.verdict || ''), userEmail: event.userEmail });
@@ -273,7 +280,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       // "/note <text>" arrives with only the text; it is the same as "note <text>". "Save to
       // HubSpot" on a message saves the whole message, credited to whoever wrote it.
       let cmd;
-      if (slash === 'note' || slash === 'ask') cmd = { command: slash, text: event.text };
+      if (slash === 'note' || slash === 'ask' || slash === 'wow') cmd = { command: slash, text: event.text };
       else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
@@ -291,10 +298,17 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
         });
         return { status: 200, body: replyFor(event, said) };
       }
+      // The WOW idea library is a list, no AI; anyone allowed may see it.
+      if (cmd.command === 'wow' && /^ideas?$/i.test(cmd.text)) return { status: 200, body: replyFor(event, await listWowIdeas()) };
       const off = briefsOffFor(event.userEmail);
       if (off) {
         logRefused(off, event.userEmail);
         return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
+      if (cmd.command === 'wow') {
+        // Not awaited: ideas take a larger AI call and are posted in this thread when ready.
+        startWow({ spaceName: event.spaceName, threadName: event.threadName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, text: cmd.text });
+        return { status: 200, body: replyFor(event, MESSAGES.wowWorking) };
       }
       if (cmd.command === 'ask') {
         // Answered in the request (one short AI call), so the reply lands in the question's thread.

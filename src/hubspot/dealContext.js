@@ -340,6 +340,7 @@ function createDealContext({ hubspot, db = null }) {
     return { deal, spaceName: spaceOf(record, note), contactId, deliveryId: (record && record.deliveryId) || null };
   };
 
+  load.readBriefNote = readBriefNote;
   return load;
 }
 
