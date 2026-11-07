@@ -15,8 +15,11 @@
 //   accessRequests/{auto}   dealId, spaceName, user, at
 //   spaceNotes/{noteId}     dealId, spaceName, user, at, chars
 //   people/{email}          userName (Chat id), seenAt
-//   questions/{auto}        dealId, spaceName, askedBy, role, model, inputTokens,
-//                           outputTokens, costUsd, status, at (never the question)
+//   questions/{auto}        dealId, spaceName, originThread, reviewerThread, noteId, topic,
+//                           askedBy, role, model, inputTokens, outputTokens, costUsd,
+//                           status ("shadow", "answered", "failed"), answers, answeredBy,
+//                           answeredAt, at (never the question or answer: those are in
+//                           the HubSpot Q&A note)
 
 const { safeError } = require('./errors');
 
@@ -135,11 +138,17 @@ function createDb({ firestore, now = () => new Date() }) {
     return snap.exists ? snap.data() : null;
   }
 
-  // A routed question, without its text: who asked, where, the role, and what the routing cost.
-  async function recordQuestion({ dealId, spaceName, askedBy, role, model, inputTokens, outputTokens, costUsd, status }) {
+  // A routed question, without its text: who asked, where (the space and thread, for the
+  // answer), where it went for an answer (the reviewer's thread), its topic and HubSpot Q&A
+  // note, the role, and what the routing cost.
+  async function recordQuestion({ dealId, spaceName, originThread, reviewerThread, noteId, topic, askedBy, role, model, inputTokens, outputTokens, costUsd, status }) {
     const ref = await firestore.collection('questions').add({
       dealId: dealId ? dealDocId(dealId) : null,
       spaceName: spaceName || null,
+      originThread: originThread || null,
+      reviewerThread: reviewerThread || null,
+      noteId: noteId ? String(noteId) : null,
+      topic: topic || null,
       askedBy,
       role: role || null,
       model: model || null,
@@ -147,12 +156,25 @@ function createDb({ firestore, now = () => new Date() }) {
       outputTokens: outputTokens ?? null,
       costUsd: costUsd ?? null,
       status,
+      answers: 0,
       at: stamp(),
     });
     return ref.id;
   }
 
-  return { getDeal, getSpace, recordBrief, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion };
+  // The question sent to the reviewer in this thread, as { id, ...fields }, or null.
+  async function findQuestionByReviewerThread(threadName) {
+    if (!threadName) return null;
+    const snap = await firestore.collection('questions').where('reviewerThread', '==', threadName).get();
+    const doc = snap.docs[0];
+    return doc ? { id: doc.id, ...doc.data() } : null;
+  }
+
+  async function markAnswered({ id, answeredBy, answers }) {
+    await firestore.collection('questions').doc(id).set({ status: 'answered', answeredBy, answeredAt: stamp(), answers }, { merge: true });
+  }
+
+  return { getDeal, getSpace, recordBrief, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered };
 }
 
 module.exports = { createDb, CLAIM_MS };

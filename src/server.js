@@ -33,6 +33,7 @@ const { createSpaceNotes } = require('./spaceNotes');
 const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createDb } = require('./db');
 const { createQuestionRouter } = require('./askJob');
+const { createQaNotes } = require('./hubspot/qaNotes');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
 
@@ -97,6 +98,7 @@ function features(audience) {
   let startSpace;
   let useSpace;
   let askQuestion = async () => "Questions aren't switched on yet.";
+  let relayAnswer = async () => null;
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -126,7 +128,9 @@ function features(audience) {
     startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
     useSpace = later('use space', spaceJob.useSpace);
     if (process.env.SHADOW_REVIEWER) {
-      askQuestion = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log });
+      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, qaNotes: createQaNotes({ hubspot }) });
+      askQuestion = questions.ask;
+      relayAnswer = questions.relayAnswer;
     } else {
       log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
     }
@@ -193,7 +197,7 @@ function features(audience) {
     });
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {

@@ -11,11 +11,18 @@ const defaultAuth = () => new GoogleAuth({ scopes: ['https://www.googleapis.com/
 
 function createChatSender({ auth = defaultAuth() } = {}) {
   // `message` is plain text, or a Chat message object such as { fallbackText, cardsV2 }.
-  return async function sendMessage(spaceName, message) {
+  // `threadName` posts it as a reply in that thread (a new thread if it is gone). Returns
+  // { name, threadName } of the message posted.
+  return async function sendMessage(spaceName, message, { threadName = null } = {}) {
     if (!/^spaces\/[\w-]+$/.test(spaceName || '')) throw safeError('sendMessage: invalid space name');
+    if (threadName && !new RegExp(`^${spaceName}/threads/[\\w-]+$`).test(threadName)) throw safeError('sendMessage: invalid thread name');
     const client = await auth.getClient();
-    const data = typeof message === 'string' ? { text: message } : message;
-    await client.request({ url: `https://chat.googleapis.com/v1/${spaceName}/messages`, method: 'POST', data });
+    const data = typeof message === 'string' ? { text: message } : { ...message };
+    if (threadName) data.thread = { name: threadName };
+    const reply = threadName ? '?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD' : '';
+    const res = await client.request({ url: `https://chat.googleapis.com/v1/${spaceName}/messages${reply}`, method: 'POST', data });
+    const posted = (res && res.data) || {};
+    return { name: posted.name || null, threadName: posted.thread ? posted.thread.name : null };
   };
 }
 

@@ -78,9 +78,11 @@ function log(severity, message, fields = {}) {
 // userDisplayName }) asks a deal's space to add someone, from Home. Both outlive the request.
 // askQuestion({ spaceName, isDirectMessage, userEmail, userDisplayName, text }) routes a
 // question and returns the reply; it spends AI credits, so it needs the brief permission.
+// relayAnswer({ threadName, userEmail, userDisplayName, text }) takes a direct message
+// reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -231,6 +233,11 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     }
 
     if (event.type === 'MESSAGE') {
+      // A reply in a direct message, in the thread of a routed question, is its answer.
+      if (event.isDirectMessage && !event.commandId) {
+        const relayed = await relayAnswer({ threadName: event.threadName, userEmail: event.userEmail, userDisplayName: event.userDisplayName, text: event.text });
+        if (relayed) return { status: 200, body: replyFor(event, relayed) };
+      }
       const slash = event.commandId ? SLASH_COMMANDS[event.commandId] : null;
       if (event.commandId && !slash) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (NOT_BUILT[slash]) return { status: 200, body: replyFor(event, NOT_BUILT[slash]) };
@@ -262,7 +269,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       }
       if (cmd.command === 'ask') {
         // Answered in the request (one short AI call), so the reply lands in the question's thread.
-        const said = await askQuestion({ spaceName: event.spaceName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, userDisplayName: event.userDisplayName, text: cmd.text });
+        const said = await askQuestion({ spaceName: event.spaceName, threadName: event.threadName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, userDisplayName: event.userDisplayName, text: cmd.text });
         return { status: 200, body: replyFor(event, said) };
       }
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
