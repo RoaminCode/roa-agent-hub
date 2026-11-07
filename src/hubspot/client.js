@@ -3,7 +3,7 @@
 // Minimal HubSpot API client. Reads: GET, plus POST only to search and batch-read
 // endpoints, which read data. Agents never edit HubSpot fields. The only writes are narrow
 // methods: create a note on a deal, update a note that a check proves is Basecamp's own,
-// create a deal's Delivery record (stage Deposit Received, nothing else filled) linked to
+// create a deal's Delivery record (stage Deposit Received, its name and trailer) linked to
 // the deal and the Roamer, and link a note to a Delivery record. There is no general write.
 
 const { safeError } = require('../errors');
@@ -101,10 +101,12 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     return String(noteId);
   }
 
-  // A deal's Delivery record: Delivery Pipeline, stage Deposit Received, no other fields,
-  // linked to the deal and its Roamer. Returns its id. Callers check first that the deal has
-  // none (hubspot/deliveries.js).
-  async function createDelivery({ dealId, contactId = null }) {
+  // A deal's Delivery record: Delivery Pipeline, stage Deposit Received, its name (the
+  // record's title, "51455 - Pat Sample") and trailer (shown under it), and no other
+  // fields, linked to the deal and its Roamer. Returns its id. Callers check first that the
+  // deal has none (hubspot/deliveries.js).
+  async function createDelivery({ dealId, contactId = null, name, trailer = null }) {
+    if (!name || typeof name !== 'string') throw safeError('createDelivery: a name is required');
     if (!/^\d+$/.test(String(dealId))) throw safeError('createDelivery: invalid deal id');
     if (contactId !== null && !/^\d+$/.test(String(contactId))) throw safeError('createDelivery: invalid contact id');
     const on = (id, typeId) => ({ to: { id: String(id) }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: typeId }] });
@@ -112,7 +114,12 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
       'POST',
       DELIVERIES,
       {
-        properties: { hs_pipeline: DELIVERY_PIPELINE, hs_pipeline_stage: DEPOSIT_RECEIVED },
+        properties: {
+          hs_pipeline: DELIVERY_PIPELINE,
+          hs_pipeline_stage: DEPOSIT_RECEIVED,
+          delivery_name: name.slice(0, 200),
+          ...(trailer ? { delivery_trailer: String(trailer).slice(0, 200) } : {}),
+        },
         associations: [on(dealId, DELIVERY_TO_DEAL), ...(contactId !== null ? [on(contactId, DELIVERY_TO_CONTACT)] : [])],
       },
       { write: true },

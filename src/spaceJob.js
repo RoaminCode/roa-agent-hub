@@ -51,7 +51,7 @@ function describe(dealNumber, context) {
 function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessage, log, avatarUrl, ensureDelivery = null }) {
   async function delivery(context, dealNumber) {
     if (!ensureDelivery) return;
-    await ensureDelivery({ dealId: context.deal.id, dealNumber, contactId: context.contact ? context.contact.id : null }).catch((err) =>
+    await ensureDelivery({ dealId: context.deal.id, dealNumber, dealname: context.deal.properties.dealname || '', contactId: context.contact ? context.contact.id : null }).catch((err) =>
       log('ERROR', 'could not find or create Delivery record', { dealNumber, error: errorFields(err) }),
     );
   }

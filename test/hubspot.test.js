@@ -316,15 +316,15 @@ test('saving a brief note records its id and what it was built from', async () =
   assert.strictEqual(rec.dealNumber, '90001');
 });
 
-test('createDelivery makes one Delivery record at Deposit Received, linked to the deal and the Roamer, nothing else filled', async () => {
+test('createDelivery makes one Delivery record at Deposit Received, named, linked to the deal and the Roamer, nothing else filled', async () => {
   const calls = [];
   const hubspot = createHubSpotClient({ token: 't', fetchImpl: async (url, opts) => (calls.push([opts.method, url, opts.body && JSON.parse(opts.body)]), ok({ id: 888 })) });
-  assert.strictEqual(await hubspot.createDelivery({ dealId: '111', contactId: '77' }), '888');
+  assert.strictEqual(await hubspot.createDelivery({ dealId: '111', contactId: '77', name: '90001 - Pat Sample', trailer: '2026 Trailer Model' }), '888');
   assert.deepStrictEqual(calls[0], [
     'POST',
     'https://api.hubapi.com/crm/v3/objects/2-59426991',
     {
-      properties: { hs_pipeline: '883780109', hs_pipeline_stage: '1327357231' },
+      properties: { hs_pipeline: '883780109', hs_pipeline_stage: '1327357231', delivery_name: '90001 - Pat Sample', delivery_trailer: '2026 Trailer Model' },
       associations: [
         { to: { id: '111' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 98 }] },
         { to: { id: '77' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 96 }] },
@@ -335,7 +335,8 @@ test('createDelivery makes one Delivery record at Deposit Received, linked to th
   assert.deepStrictEqual(calls[1], ['PUT', 'https://api.hubapi.com/crm/v4/objects/notes/5/associations/2-59426991/888', [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }]]);
   await hubspot.createDealNote({ dealId: '111', contactId: '77', deliveryId: '888', body: 'x', timestamp: 't' });
   assert.deepStrictEqual(calls[2][2].associations[2], { to: { id: '888' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }] });
-  await assert.rejects(hubspot.createDelivery({ dealId: '1/../x' }), /invalid deal id/);
+  await assert.rejects(hubspot.createDelivery({ dealId: '1/../x', name: 'n' }), /invalid deal id/);
+  await assert.rejects(hubspot.createDelivery({ dealId: '111' }), /a name is required/);
   await assert.rejects(hubspot.linkNoteToDelivery({ noteId: '5', deliveryId: '8/x' }), /invalid id/);
   // The guard still refuses any other write, including to other objects' records.
   await assert.rejects(hubspot.post('/crm/v3/objects/deals', {}), /refuses/);
@@ -360,8 +361,8 @@ test('ensureDelivery uses the deal\'s Delivery record, or creates and links one,
   };
 
   const fresh = await setup([]);
-  assert.deepStrictEqual(await fresh.ensure({ dealId: '111', dealNumber: '90001', contactId: '77' }), { id: '888', created: true });
-  assert.deepStrictEqual(fresh.calls.slice(1), [['create', { dealId: '111', contactId: '77' }], ['link', { noteId: '5', deliveryId: '888' }]]);
+  assert.deepStrictEqual(await fresh.ensure({ dealId: '111', dealNumber: '90001', dealname: '90001 - Pat Sample - 2026 Trailer Model', contactId: '77' }), { id: '888', created: true });
+  assert.deepStrictEqual(fresh.calls.slice(1), [['create', { dealId: '111', contactId: '77', name: '90001 - Pat Sample', trailer: '2026 Trailer Model' }], ['link', { noteId: '5', deliveryId: '888' }]]);
   assert.strictEqual(fresh.data.deals['111'].deliveryId, '888');
   // Recorded: the second time asks HubSpot nothing.
   assert.deepStrictEqual(await fresh.ensure({ dealId: '111', dealNumber: '90001', contactId: '77' }), { id: '888', created: false });

@@ -355,7 +355,7 @@ test('opening or using a space finds or creates the Delivery record after the br
     return logs;
   };
   const ok = await run(false);
-  assert.deepStrictEqual(ensured[0], { dealId: '111', dealNumber: '90001', contactId: '222' });
+  assert.deepStrictEqual(ensured[0], { dealId: '111', dealNumber: '90001', dealname: '', contactId: '222' });
   assert.strictEqual(ok.at(-1)[1], 'deal space adopted');
   const failed = await run(true);
   assert.ok(failed.some((l) => l[1] === 'could not find or create Delivery record'));
