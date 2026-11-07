@@ -20,7 +20,9 @@ const SAY = {
   directOnly: 'In a direct message, name the deal first, for example: note 51455 Roamer asked for the delivery to move to Saturday.',
   noDeal: (n) => `I couldn't find deal ${n} in HubSpot, so I didn't save the note.`,
   notDealSpace: "This space isn't linked to a deal, so I didn't save the note. Link it first with \"use this space for <deal#>\".",
-  saved: (n) => `Saved to HubSpot on deal ${n}.`,
+  // Where the note went: the deal's Delivery record (and the Roamer), or only the Roamer's
+  // record when the deal has no Delivery record yet. Never the deal itself.
+  saved: (n, onDelivery = true) => (onDelivery ? `Saved to the ${n} Delivery record in HubSpot.` : `Saved to the Roamer's record in HubSpot for deal ${n}.`),
   failed: (n) => `I couldn't save that note to deal ${n}. Nothing was saved; Blake can see what happened in the logs.`,
   failedHere: "I couldn't save that note. Nothing was saved; Blake can see what happened in the logs.",
 };
@@ -55,7 +57,7 @@ function createSpaceNotes({ db, createNote, findDealSpace, log, now = () => new 
     // The note is in HubSpot by now; failing to record it here must not say otherwise.
     await db.recordSpaceNote({ noteId: id, dealId, spaceName, user: userEmail, chars: note.length }).catch((e) => log('ERROR', 'could not record space note', { dealNumber, noteId: id, error: errorFields(e) }));
     log('INFO', 'space note saved', { dealNumber, space: spaceName, noteId: id, user: userEmail, chars: note.length });
-    return SAY.saved(dealNumber);
+    return SAY.saved(dealNumber, Boolean(deliveryId));
   }
 
   // A note in a direct message: "51455 <text>", saved to that deal whether or not it has a space.

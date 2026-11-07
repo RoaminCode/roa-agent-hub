@@ -39,7 +39,9 @@ async function harness({ contactId = null, failWrite = null, db = null } = {}) {
 
 test('a note in the deal space is saved to that deal, as written, signed and timed, and recorded', async () => {
   const { calls, logs, run, data } = await harness();
-  assert.strictEqual(await run(), SAY.saved('90001'));
+  // No Delivery record yet in this harness: the reply says the Roamer's record.
+  assert.strictEqual(await run(), SAY.saved('90001', false));
+  assert.strictEqual(SAY.saved('90001'), 'Saved to the 90001 Delivery record in HubSpot.');
   const { dealId, contactId, body, timestamp } = calls[0][1];
   // Never on the deal: on the Roamer (and the Delivery record once the deal has one).
   assert.strictEqual(dealId, undefined);
