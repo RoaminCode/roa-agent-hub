@@ -139,7 +139,7 @@ function features(audience) {
 
   // Notes from deal spaces need HubSpot only, no AI.
   const saveSpaceNote = hubspot
-    ? createSpaceNotes({ db, createDealNote: hubspot.createDealNote, log })
+    ? createSpaceNotes({ db, createDealNote: hubspot.createDealNote, findDealSpace, log })
     : async () => "Notes aren't switched on yet.";
   const requestAccess = later(
     'access request',

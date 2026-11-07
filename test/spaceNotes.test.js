@@ -97,14 +97,16 @@ test('the router saves notes for anyone allowed, even off BRIEF_USERS or with br
     const res = await r({ headers, body: inSpace('casey@example.com', 'note Pat wants Saturday') });
     assert.deepStrictEqual(res.body, { text: 'ok' });
   }
-  assert.deepStrictEqual(saved[0], { spaceName: 'spaces/DEAL', spaceDisplayName: '90001 · Pat Sample', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Pat wants Saturday' });
+  assert.deepStrictEqual(saved[0], { spaceName: 'spaces/DEAL', spaceDisplayName: '90001 · Pat Sample', isDirectMessage: false, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Pat wants Saturday' });
 
   const r = createRouter({ verify: accept, allowedUsers: ['casey@example.com'], saveSpaceNote });
   const stranger = await r({ headers, body: inSpace('nobody@example.com', 'note hi') });
   assert.deepStrictEqual(stranger.body, { text: MESSAGES.notAllowed });
   const dm = await r({ headers, body: inSpace('casey@example.com', 'note hi', { name: 'spaces/DM', spaceType: 'DIRECT_MESSAGE' }) });
-  assert.deepStrictEqual(dm.body, { text: SAY.directOnly });
-  assert.strictEqual(saved.length, 2);
+  // A direct message goes to the note writer too, which reads the deal number from the text.
+  assert.deepStrictEqual(dm.body, { text: 'ok' });
+  assert.strictEqual(saved.at(-1).isDirectMessage, true);
+  assert.strictEqual(saved.length, 3);
 });
 
 test('events carry the space and sender display names', () => {
@@ -177,4 +179,32 @@ test('"Save to HubSpot" on a message saves the whole message, crediting its writ
     '<p><strong>Note from the deal space</strong></p><p>x</p><p>Written by Sam Service, saved by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT.</p>',
   );
   assert.ok(renderSpaceNote({ text: 'x', userEmail: 'a@example.com', now: NOW, writtenBy: null }).includes('Written by a Team Member, saved by a@example.com'));
+});
+
+test('a note in a direct message names its deal and is saved there', async () => {
+  const firestore = createFakeFirestore();
+  const created = [];
+  const save = createSpaceNotes({
+    db: createDb({ firestore, now: () => NOW }),
+    createDealNote: async (n) => (created.push(n), '777'),
+    findDealSpace: async ({ dealNumber }) => (dealNumber === '90001' ? { deal: { id: '111' }, spaceName: null, contactId: '77' } : null),
+    log: () => {},
+    now: () => NOW,
+  });
+  const dm = (text) => save({ spaceName: 'spaces/DM', isDirectMessage: true, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text });
+  assert.strictEqual(await dm('90001 Pat wants Saturday'), SAY.saved('90001'));
+  assert.deepStrictEqual({ dealId: created[0].dealId, contactId: created[0].contactId }, { dealId: '111', contactId: '77' });
+  assert.ok(created[0].body.startsWith('<p><strong>Note from Basecamp</strong></p><p>Pat wants Saturday</p>'));
+  assert.strictEqual(firestore.data.spaceNotes['777'].spaceName, 'spaces/DM');
+
+  assert.strictEqual(await dm('#90001: colon works too'), SAY.saved('90001'));
+  assert.strictEqual(await dm('Pat wants Saturday'), SAY.directOnly);
+  assert.strictEqual(await dm('90001'), SAY.empty);
+  assert.strictEqual(await dm('90002 no such deal'), SAY.noDeal('90002'));
+  assert.strictEqual(created.length, 2);
+});
+
+test('saving your own message says "Added by", not written and saved by the same person', () => {
+  const html = renderSpaceNote({ text: 'x', userDisplayName: 'Casey Coach', userEmail: 'casey@example.com', now: NOW, writtenBy: 'Casey Coach' });
+  assert.ok(html.includes('<p>Added by Casey Coach (casey@example.com) in Google Chat'));
 });

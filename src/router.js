@@ -12,7 +12,6 @@
 const { errorFields } = require('./errors');
 const { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
 const { renderNotAllowedHome } = require('./chat/homeCard');
-const { SAY: NOTE_SAY } = require('./spaceNotes');
 
 const MESSAGES = {
   added: "Basecamp is here. I'm in shadow mode. Try \"brief 51431\" for a Roamer brief on a Utah deal.",
@@ -243,11 +242,12 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (cmd.command === 'note') {
-        if (event.isDirectMessage) return { status: 200, body: replyFor(event, NOTE_SAY.directOnly) };
+        // In a direct message the note names its deal ("note 51455 <text>"); see spaceNotes.js.
         // Answered in the request (a few HubSpot reads and one write), so the reply lands in the note's thread.
         const said = await saveSpaceNote({
           spaceName: event.spaceName,
           spaceDisplayName: event.spaceDisplayName,
+          isDirectMessage: event.isDirectMessage,
           userEmail: event.userEmail,
           userDisplayName: event.userDisplayName,
           text: cmd.text,
