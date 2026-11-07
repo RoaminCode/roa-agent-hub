@@ -78,11 +78,13 @@ function log(severity, message, fields = {}) {
 // userDisplayName }) asks a deal's space to add someone, from Home. Both outlive the request.
 // askQuestion({ spaceName, isDirectMessage, userEmail, userDisplayName, text }) routes a
 // question and returns the reply; it spends AI credits, so it needs the brief permission.
+// clarifyQuestion({ spaceName, threadName, isDirectMessage, userEmail, userDisplayName,
+// question, detail, attempt }) takes Send on a clarify card and returns what replaces it.
 // relayAnswer({ threadName, userEmail, userDisplayName, text }) takes a direct message
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -184,6 +186,27 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       }
       const card = await buildHome({ userEmail: event.userEmail, userName: event.userName, sent: sentDeals(event.userEmail), briefsOff: off });
       return { status: 200, body: homeUpdateFor(card) };
+    }
+
+    // Send on a clarify card: the question so far plus the typed detail, routed again (one
+    // short AI call, so it needs the brief permission). The card is replaced by the result.
+    if (event.type === 'CARD_CLICKED' && event.parameters.action === 'clarify') {
+      const off = briefsOffFor(event.userEmail);
+      if (off) {
+        logRefused(off, event.userEmail);
+        return { status: 200, body: updateMessageFor(event, MESSAGES[off]) };
+      }
+      const said = await clarifyQuestion({
+        spaceName: event.spaceName,
+        threadName: event.threadName,
+        isDirectMessage: event.isDirectMessage,
+        userEmail: event.userEmail,
+        userDisplayName: event.userDisplayName,
+        question: String(event.parameters.q || ''),
+        detail: event.formInputs.detail,
+        attempt: event.parameters.attempt,
+      });
+      return { status: 200, body: updateMessageFor(event, said) };
     }
 
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'brief') {

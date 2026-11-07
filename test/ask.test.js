@@ -3,7 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { routeQuestion, costOf, ROLES, UNSURE, MODEL } = require('../src/agents/askRouter');
-const { createQuestionRouter, reviewMessage, SAY } = require('../src/askJob');
+const { createQuestionRouter, reviewMessage, clarifyCard, withDetail, SAY, MAX_CLARIFY } = require('../src/askJob');
+const { parseEvent } = require('../src/chat/events');
 const { createQaNotes, renderQaNote, isQaNoteText } = require('../src/hubspot/qaNotes');
 const { createChatSender } = require('../src/chat/send');
 const { createRouter, parseCommand, MESSAGES } = require('../src/router');
@@ -159,8 +160,9 @@ test('a question outside a deal space routes without a HubSpot note; HubSpot fai
 });
 
 test('unsure, failed, and unreachable routings say so and send nothing wrong', async () => {
+  // Unsure after the clarify cards are used up: it goes to Blake as "Not sure".
   const unsure = await harness({ routed: { ...ROUTED, role: UNSURE } });
-  assert.strictEqual(await unsure.ask(), SAY.routed(UNSURE));
+  assert.strictEqual(await unsure.ask({ attempt: MAX_CLARIFY }), SAY.routed(UNSURE));
 
   const failed = await harness({ routed: { ok: false, reason: 'bad_output', usage: { input_tokens: 5, output_tokens: 5 } } });
   assert.strictEqual(await failed.ask(), SAY.failed);
@@ -234,4 +236,63 @@ test('the router: "ask" needs the brief permission and passes its thread; DM thr
   assert.deepStrictEqual((await r({ headers: { authorization: 'x' }, body: msg('b@example.com', dm, 'hello', 'spaces/DM/threads/Z') })).body, { text: MESSAGES.help });
   // Messages in a deal space never go to the relay.
   assert.ok(relays.every((a) => a.threadName.startsWith('spaces/DM/')));
+});
+
+test('an unsure question gets a clarify card in its thread, not a message to Blake, and no HubSpot note', async () => {
+  const routed = { ...ROUTED, role: UNSURE, clarify: 'Is there something specific you want to know, or a date to check for changes since?' };
+  const h = await harness({ routed });
+  const card = await h.ask({ text: 'anything new?' });
+  assert.deepStrictEqual(card, clarifyCard({ clarify: routed.clarify, question: 'anything new?', attempt: 1, endpoint: '' }));
+  const widgets = card.cardsV2[0].card.sections[0].widgets;
+  assert.strictEqual(widgets[1].textInput.name, 'detail');
+  assert.deepStrictEqual(widgets[2].buttonList.buttons[0].onClick.action.parameters, [
+    { key: 'action', value: 'clarify' },
+    { key: 'q', value: 'anything new?' },
+    { key: 'attempt', value: '1' },
+  ]);
+  assert.deepStrictEqual(h.sent, []);
+  assert.deepStrictEqual(h.qa, []);
+  assert.strictEqual(Object.values(h.data.questions)[0].status, 'clarify');
+});
+
+test('Send on the card routes the question with the detail; unsure twice goes to Blake', async () => {
+  const seen = [];
+  const firestore = require('./fakeFirestore').createFakeFirestore();
+  const db = createDb({ firestore, now: () => NOW });
+  await db.rememberPerson({ email: 'blake@example.com', userName: 'users/9' });
+  const answers = [{ ...ROUTED, role: UNSURE, clarify: 'Which part?' }, { ...ROUTED, role: UNSURE, clarify: 'Which part?' }, { ...ROUTED, role: UNSURE, clarify: 'Still?' }];
+  const sent = [];
+  const q = createQuestionRouter({
+    anthropic: {},
+    db,
+    sendMessage: async (space, text) => (sent.push([space, text]), { threadName: `${space}/threads/x` }),
+    findDirectMessage: async () => 'spaces/DM-9',
+    reviewerEmail: 'blake@example.com',
+    log: () => {},
+    route: async ({ question }) => (seen.push(question), answers.shift()),
+  });
+  const base = { spaceName: 'spaces/DM-5', threadName: 'spaces/DM-5/threads/T', isDirectMessage: true, userEmail: 'c@example.com', userDisplayName: 'Casey' };
+  const first = await q.ask({ ...base, text: 'anything new?' });
+  assert.ok(first.cardsV2);
+  const second = await q.clarify({ ...base, question: 'anything new?', detail: 'since Monday', attempt: '1' });
+  assert.ok(second.cardsV2);
+  assert.strictEqual(second.cardsV2[0].card.sections[0].widgets[2].buttonList.buttons[0].onClick.action.parameters[1].value, withDetail('anything new?', 'since Monday'));
+  const third = await q.clarify({ ...base, question: withDetail('anything new?', 'since Monday'), detail: 'the trailer', attempt: '2' });
+  assert.strictEqual(third, SAY.routed(UNSURE));
+  assert.strictEqual(seen[2], 'anything new?\nDetail added: since Monday\nDetail added: the trailer');
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(await q.clarify({ ...base, question: 'q', detail: '  ', attempt: '1' }), SAY.noDetail);
+});
+
+test('the router takes Send on a clarify card and replaces the card with the result', async () => {
+  const calls = [];
+  const r = createRouter({ verify: async () => true, allowedUsers: ['b@example.com'], briefUsers: ['b@example.com'], clarifyQuestion: async (c) => (calls.push(c), 'routed') });
+  const click = {
+    commonEventObject: { hostApp: 'CHAT', invokedFunction: 'https://example.com/', parameters: { action: 'clarify', q: 'anything new?', attempt: '1' }, formInputs: { detail: { stringInputs: { value: ['since Monday'] } } } },
+    chat: { user: { email: 'b@example.com', name: 'users/5' }, eventTime: 't', buttonClickedPayload: { space: { name: 'spaces/DEAL', spaceType: 'SPACE' }, message: { name: 'spaces/DEAL/messages/M', thread: { name: 'spaces/DEAL/threads/T' } } } },
+  };
+  assert.deepStrictEqual(parseEvent(click).formInputs, { detail: 'since Monday' });
+  const res = await r({ headers: { authorization: 'x' }, body: click });
+  assert.deepStrictEqual(res.body, { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text: 'routed' } } } } });
+  assert.deepStrictEqual(calls[0], { spaceName: 'spaces/DEAL', threadName: 'spaces/DEAL/threads/T', isDirectMessage: false, userEmail: 'b@example.com', userDisplayName: null, question: 'anything new?', detail: 'since Monday', attempt: '1' });
 });

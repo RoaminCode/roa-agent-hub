@@ -100,6 +100,7 @@ function features(audience) {
   let useSpace;
   let askQuestion = async () => "Questions aren't switched on yet.";
   let relayAnswer = async () => null;
+  let clarifyQuestion = async () => "Questions aren't switched on yet.";
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -130,9 +131,10 @@ function features(audience) {
     startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
     useSpace = later('use space', spaceJob.useSpace);
     if (process.env.SHADOW_REVIEWER) {
-      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, qaNotes: createQaNotes({ hubspot }) });
+      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot }) });
       askQuestion = questions.ask;
       relayAnswer = questions.relayAnswer;
+      clarifyQuestion = questions.clarify;
     } else {
       log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
     }
@@ -199,7 +201,7 @@ function features(audience) {
     });
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {

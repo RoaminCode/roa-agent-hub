@@ -15,6 +15,11 @@
 
 const { errorFields, isOutOfCredits } = require('./errors');
 const { routeQuestion, UNSURE } = require('./agents/askRouter');
+const { noDashes } = require('./agents/roamerBrief');
+
+// How many times Basecamp asks the asker to clarify before sending the question to Blake
+// as "Not sure", so nothing gets stuck.
+const MAX_CLARIFY = 2;
 
 // A question, not a document.
 const MAX_CHARS = 2000;
@@ -32,8 +37,59 @@ const SAY = {
   // To the reviewer, after an answer.
   relayed: (dealNumber, saved) =>
     `Posted your answer where it was asked${dealNumber ? ` in the deal ${dealNumber} space` : ''}${saved ? ' and added it to the Q&A note in HubSpot' : ''}.`,
+  noDetail: 'Type a bit more in the box, then tap Send.',
   relayFailed: "I couldn't post that answer where the question was asked. Blake can see what happened in the logs.",
 };
+
+// When Basecamp can't tell who owns a question, it answers in the thread with a card: its
+// question back, a text box, and Send. Send carries the question so far, so the detail is
+// tied to it without a second @mention, and nothing is stored. Anyone in the space can
+// answer it; the card is replaced by the result, so it can't be answered twice.
+function clarifyCard({ clarify, question, attempt, endpoint }) {
+  const ask = noDashes(clarify || 'Can you say a bit more about what you want to know?');
+  const safe = ask.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return {
+    fallbackText: ask,
+    cardsV2: [
+      {
+        cardId: 'clarify',
+        card: {
+          sections: [
+            {
+              widgets: [
+                { textParagraph: { text: safe } },
+                { textInput: { name: 'detail', label: 'Add detail', type: 'SINGLE_LINE' } },
+                {
+                  buttonList: {
+                    buttons: [
+                      {
+                        text: 'Send',
+                        type: 'FILLED_TONAL',
+                        onClick: {
+                          action: {
+                            function: endpoint,
+                            parameters: [
+                              { key: 'action', value: 'clarify' },
+                              { key: 'q', value: question },
+                              { key: 'attempt', value: String(attempt) },
+                            ],
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+// The question so far plus the detail added on a clarify card, as Basecamp routes it next.
+const withDetail = (question, detail) => `${question}\nDetail added: ${detail}`;
 
 // What Blake sees in his direct message with Basecamp.
 function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, question }) {
@@ -54,10 +110,12 @@ const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
 
 // `qaNotes` keeps questions and answers in HubSpot (hubspot/qaNotes.js); left out, they are
 // only relayed, not kept.
-function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, qaNotes = null, route = routeQuestion, now = () => new Date() }) {
-  // Returns the reply to post where the question was asked. `threadName` is the thread it
-  // was asked in, where the answer will be posted.
-  async function ask({ spaceName, threadName = null, isDirectMessage, userEmail, userDisplayName, text }) {
+// `endpoint` is Basecamp's own URL, which a clarify card's Send button calls.
+function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, route = routeQuestion, now = () => new Date() }) {
+  // Returns the reply to post where the question was asked: text, or a clarify card.
+  // `threadName` is the thread it was asked in, where the answer will be posted.
+  // `attempt` counts the clarify cards already answered for this question.
+  async function ask({ spaceName, threadName = null, isDirectMessage, userEmail, userDisplayName, text, attempt = 0 }) {
     const question = String(text || '').trim();
     if (!question) return SAY.empty;
     if (question.length > MAX_CHARS) return SAY.tooLong;
@@ -90,6 +148,15 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         log('WARNING', 'question not routed', { dealNumber, reason: routed.reason, ...cost });
         await db.recordQuestion({ dealId, spaceName, askedBy: userEmail, status: 'failed', ...cost });
         return SAY.failed;
+      }
+
+      // Unsure: ask the asker, not Blake, until it has asked MAX_CLARIFY times.
+      if (routed.role === UNSURE && attempt < MAX_CLARIFY) {
+        await db
+          .recordQuestion({ dealId, spaceName, askedBy: userEmail, role: UNSURE, status: 'clarify', ...cost })
+          .catch((e) => log('ERROR', 'could not record question', { dealNumber, error: errorFields(e) }));
+        log('INFO', 'question needs clarifying', { dealNumber, attempt, user: userEmail, chars: question.length, ...cost, ms: Date.now() - started });
+        return clarifyCard({ clarify: routed.clarify, question, attempt: attempt + 1, endpoint });
       }
 
       step = 'reach reviewer';
@@ -165,7 +232,15 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     return SAY.relayed(dealNumber, saved);
   }
 
-  return { ask, relayAnswer };
+  // Send on a clarify card: the question so far plus the detail typed in, routed again.
+  async function clarify({ spaceName, threadName, isDirectMessage, userEmail, userDisplayName, question, detail, attempt }) {
+    const added = String(detail || '').trim();
+    if (!added) return SAY.noDetail;
+    const n = Number(attempt);
+    return ask({ spaceName, threadName, isDirectMessage, userEmail, userDisplayName, text: withDetail(String(question || ''), added), attempt: Number.isInteger(n) && n > 0 ? n : MAX_CLARIFY });
+  }
+
+  return { ask, relayAnswer, clarify };
 }
 
-module.exports = { createQuestionRouter, reviewMessage, SAY, MAX_CHARS };
+module.exports = { createQuestionRouter, reviewMessage, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY };

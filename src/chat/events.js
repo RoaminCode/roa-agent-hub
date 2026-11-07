@@ -34,6 +34,16 @@ function commandIdOf(id) {
   return id === undefined || id === null || id === '' ? null : String(id);
 }
 
+// { name: "typed text" } from a card's form inputs ({ name: { stringInputs: { value: [...] } } }).
+function formInputsOf(inputs) {
+  const out = {};
+  for (const [name, input] of Object.entries(inputs || {})) {
+    const values = input && input.stringInputs && input.stringInputs.value;
+    if (Array.isArray(values) && typeof values[0] === 'string') out[name] = values[0];
+  }
+  return out;
+}
+
 function userOf(user) {
   return {
     userEmail: user && user.email ? user.email.toLowerCase() : null,
@@ -55,6 +65,7 @@ function parseClassic(body) {
     commandId: commandIdOf(body.message && body.message.slashCommand && body.message.slashCommand.commandId),
     // Card buttons are add-on events; a classic click carries no parameters Basecamp reads.
     parameters: {},
+    formInputs: {},
   };
 }
 
@@ -99,6 +110,8 @@ function parseAddOn(body) {
     ...fromMessage(payload.message),
     commandId: commandIdOf(payload.appCommandMetadata && payload.appCommandMetadata.appCommandId),
     parameters: common.parameters || {},
+    // What was typed into a card's text boxes, by input name (first value of each).
+    formInputs: formInputsOf(common.formInputs),
   };
 }
 
@@ -116,19 +129,22 @@ function parseEvent(body) {
   return body.chat ? parseAddOn(body) : parseClassic(body);
 }
 
-function replyFor(event, text) {
+// `reply` is text, or a Chat message object such as { cardsV2 } for a card.
+const messageOf = (reply) => (typeof reply === 'string' ? { text: reply } : reply);
+
+function replyFor(event, reply) {
   if (event.format === 'addon') {
-    return { hostAppDataAction: { chatDataAction: { createMessageAction: { message: { text } } } } };
+    return { hostAppDataAction: { chatDataAction: { createMessageAction: { message: messageOf(reply) } } } };
   }
-  return { text };
+  return messageOf(reply);
 }
 
 // Replaces the message whose button was tapped, such as the contact picker, with plain text.
-function updateMessageFor(event, text) {
+function updateMessageFor(event, reply) {
   if (event.format === 'addon') {
-    return { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text } } } } };
+    return { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: messageOf(reply) } } } };
   }
-  return { actionResponse: { type: 'UPDATE_MESSAGE' }, text };
+  return { actionResponse: { type: 'UPDATE_MESSAGE' }, ...messageOf(reply) };
 }
 
 // App Home responses are bare RenderActions; Chat rejects a "renderActions" wrapper on
