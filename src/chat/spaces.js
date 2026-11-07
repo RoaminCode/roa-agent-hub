@@ -61,7 +61,37 @@ function createSpaces({ auth = defaultAuth(), readAuth = botAuth() } = {}) {
     }
   }
 
-  return { createSpace, addMember, findSpace };
+  // Every named space Basecamp is in, as { name, displayName, uri }. Deal spaces are among
+  // them; callers check each against the deal's brief note before trusting it.
+  async function listSpaces() {
+    const client = await readAuth.getClient();
+    const out = [];
+    let pageToken;
+    do {
+      const query = `pageSize=1000&filter=${encodeURIComponent('spaceType = "SPACE"')}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+      const res = await client.request({ url: `${API}/spaces?${query}`, method: 'GET' });
+      for (const sp of res.data.spaces || []) out.push({ name: sp.name, displayName: sp.displayName || '', uri: sp.spaceUri || null });
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+    return out;
+  }
+
+  // Whether one person ("users/123") is in a space Basecamp is in.
+  async function isMember(spaceName, userName) {
+    if (!/^spaces\/[\w-]+$/.test(spaceName || '') || !/^users\/[\w-]+$/.test(userName || '')) return false;
+    const client = await readAuth.getClient();
+    try {
+      // A membership is named "spaces/X/members/123", after the person's user id.
+      await client.request({ url: `${API}/${spaceName}/members/${userName.slice('users/'.length)}`, method: 'GET' });
+      return true;
+    } catch (err) {
+      const status = err.status || (err.response && err.response.status);
+      if (status === 404) return false;
+      throw err;
+    }
+  }
+
+  return { createSpace, addMember, findSpace, listSpaces, isMember };
 }
 
 module.exports = { createSpaces, NAME_MAX, DESCRIPTION_MAX };

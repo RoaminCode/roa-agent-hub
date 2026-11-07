@@ -240,3 +240,19 @@ test('never starts a brief for a user who is not allowed', async () => {
   await r({ headers, body: classicMessage('someone@example.com', 'brief 90124') });
   assert.strictEqual(started.length, 0);
 });
+
+test('"use this space for <deal#>" starts in a space for someone who may brief, never in a DM', async () => {
+  const { createRouter: make, parseCommand: parse, MESSAGES: SAID } = require('../src/router');
+  assert.deepStrictEqual(parse('use this space for 90001'), { command: 'use', dealNumber: '90001', store: 'UT' });
+  assert.deepStrictEqual(parse('Use this deal space for deal #90001 ut'), { command: 'use', dealNumber: '90001', store: 'UT' });
+  const used = [];
+  const r = make({ verify: async () => true, allowedUsers: ['b@example.com', 'c@example.com'], briefUsers: ['b@example.com'], useSpace: (j) => used.push(j) });
+  const msg = (email, space) => ({ type: 'MESSAGE', space, user: { email, name: 'users/1' }, message: { text: '@Basecamp use this space for 90001', argumentText: ' use this space for 90001' } });
+  const room = { name: 'spaces/R', spaceType: 'SPACE', displayName: '90001 · Pat' };
+  const h = { authorization: 'Bearer x' };
+  assert.deepStrictEqual((await r({ headers: h, body: msg('b@example.com', room) })).body, { text: SAID.adopting('90001') });
+  assert.deepStrictEqual(used, [{ spaceName: 'spaces/R', spaceDisplayName: '90001 · Pat', dealNumber: '90001', store: 'UT', userEmail: 'b@example.com' }]);
+  assert.deepStrictEqual((await r({ headers: h, body: msg('b@example.com', { name: 'spaces/D', spaceType: 'DIRECT_MESSAGE' }) })).body, { text: SAID.useInSpace('90001') });
+  assert.deepStrictEqual((await r({ headers: h, body: msg('c@example.com', room) })).body, { text: SAID.notBriefUser });
+  assert.strictEqual(used.length, 1);
+});

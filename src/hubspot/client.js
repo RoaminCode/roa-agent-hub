@@ -11,8 +11,9 @@ const BASE = 'https://api.hubapi.com';
 const READ_POST = /\/(search|batch\/read)$/;
 const NOTES = '/crm/v3/objects/notes';
 const NOTE_PATH = /^\/crm\/v3\/objects\/notes\/\d+$/;
-// HubSpot's association type for a note on a deal.
+// HubSpot's association types for a note on a deal and on a contact.
 const NOTE_TO_DEAL = 214;
+const NOTE_TO_CONTACT = 202;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -50,15 +51,18 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     return res.json();
   }
 
-  // A new note on one deal. Returns the note's id.
-  async function createDealNote({ dealId, body, timestamp }) {
+  // A new note on one deal, and also on the deal's Roamer when `contactId` is given (so the
+  // Roamer's record, which briefs read, includes it). Returns the note's id.
+  async function createDealNote({ dealId, contactId = null, body, timestamp }) {
     if (!/^\d+$/.test(String(dealId))) throw safeError('createDealNote: invalid deal id');
+    if (contactId !== null && !/^\d+$/.test(String(contactId))) throw safeError('createDealNote: invalid contact id');
+    const on = (id, typeId) => ({ to: { id: String(id) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: typeId }] });
     const note = await request(
       'POST',
       NOTES,
       {
         properties: { hs_timestamp: timestamp, hs_note_body: body },
-        associations: [{ to: { id: String(dealId) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: NOTE_TO_DEAL }] }],
+        associations: [on(dealId, NOTE_TO_DEAL), ...(contactId !== null ? [on(contactId, NOTE_TO_CONTACT)] : [])],
       },
       { write: true },
     );

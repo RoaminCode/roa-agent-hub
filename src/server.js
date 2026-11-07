@@ -25,8 +25,9 @@ const { createHubSpotClient } = require('./hubspot/client');
 const { createDealContext } = require('./hubspot/dealContext');
 const { createOpenDeals } = require('./hubspot/openDeals');
 const { createBriefJob, createBriefSource, createNoteKeeper } = require('./briefJob');
-const { createSpaceJob } = require('./spaceJob');
+const { createSpaceJob, createAccessRequests, createDealSpaceIndex } = require('./spaceJob');
 const { createSpaces } = require('./chat/spaces');
+const { createSpaceNotes } = require('./spaceNotes');
 const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createRouter } = require('./router');
 
@@ -78,8 +79,16 @@ function features(audience) {
   // A brief started from App Home has no space on the event; send it to the user's DM.
   const spaceFor = async ({ spaceName, userName }) => spaceName || findDirectMessage(userName);
 
+  const spaces = createSpaces();
+  const findDealSpace = hubspot ? createDealContext({ hubspot }).findDealSpace : null;
+  // Not awaited, like briefs: these outlive the request and report back when done.
+  const later = (what, run) => (job) => {
+    run(job).catch((err) => log('ERROR', `${what} crashed`, { dealNumber: job.dealNumber, error: errorFields(err) }));
+  };
+
   let startBrief;
   let startSpace;
+  let useSpace;
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -87,6 +96,7 @@ function features(audience) {
         .then((space) => sendMessage(space, "Briefs aren't switched on yet."))
         .catch(() => {});
     startSpace = startBrief;
+    useSpace = later('use space', (job) => sendMessage(job.spaceName, "Briefs aren't switched on yet."));
   } else {
     const loadContext = createDealContext({ hubspot });
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -94,25 +104,34 @@ function features(audience) {
     // Bump v when the avatar image changes.
     const avatarUrl = `${new URL(audience).origin}/avatar.png?v=2`;
     const runBrief = createBriefJob({ loadContext, saveBriefNote, anthropic, sendMessage, log, avatarUrl, endpoint: audience });
-    const openSpace = createSpaceJob({
+    const spaceJob = createSpaceJob({
       loadContext,
       getBrief: createBriefSource({ anthropic, log }),
       keepNote: createNoteKeeper({ saveBriefNote, log }),
-      spaces: createSpaces(),
+      spaces,
       sendMessage,
       log,
       avatarUrl,
     });
-    // Not awaited: opening a space outlives the request and reports back when done.
-    startSpace = (job) => {
-      openSpace(job).catch((err) => log('ERROR', 'open space crashed', { dealNumber: job.dealNumber, error: errorFields(err) }));
-    };
+    // A space asked for from Home reports back in the user's direct message.
+    startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
+    useSpace = later('use space', spaceJob.useSpace);
     startBrief = (job) => {
       spaceFor(job)
         .then((spaceName) => runBrief({ ...job, spaceName }))
         .catch((err) => log('ERROR', 'could not find where to send the brief', { dealNumber: job.dealNumber, error: errorFields(err) }));
     };
   }
+
+  // Notes from deal spaces need HubSpot only, no AI.
+  const saveSpaceNote = hubspot
+    ? createSpaceNotes({ findDealSpace, createDealNote: hubspot.createDealNote, log })
+    : async () => "Notes aren't switched on yet.";
+  const requestAccess = later(
+    'access request',
+    hubspot ? createAccessRequests({ findDealSpace, spaces, sendMessage, findDirectMessage, log }) : async () => {},
+  );
+  const spacesFor = hubspot ? createDealSpaceIndex({ spaces, findDealSpace }) : null;
 
   const listOpenDeals = hubspot ? createOpenDeals({ hubspot }) : null;
   // Loading deals takes about 4 seconds; a Brief tap redraws Home and should answer at
@@ -125,18 +144,29 @@ function features(audience) {
     dealsCache = { at: Date.now(), deals };
     return deals;
   }
-  async function buildHome({ sent, briefsOff = null } = {}) {
+  // Deal spaces are extra: if they cannot be read, Home still shows the deals, without space buttons.
+  async function dealSpacesFor(userName) {
+    if (!spacesFor || !userName) return null;
+    try {
+      return await spacesFor(userName);
+    } catch (err) {
+      log('WARNING', 'deal spaces unavailable for home', { error: errorFields(err) });
+      return null;
+    }
+  }
+  async function buildHome({ userName, sent, briefsOff = null } = {}) {
     if (!listOpenDeals) return { sections: [{ widgets: [{ textParagraph: { text: "Home isn't switched on yet." } }] }] };
     try {
+      const [deals, spaces] = await Promise.all([openDeals(), dealSpacesFor(userName)]);
       // Shadow mode: everyone allowed sees every open Utah deal.
-      return renderHome({ deals: await openDeals(), endpoint: audience, shadow: true, sent, briefsOff });
+      return renderHome({ deals, endpoint: audience, shadow: true, sent, briefsOff, spaces });
     } catch (err) {
       log('ERROR', 'home failed', { error: errorFields(err) });
       return { sections: [{ widgets: [{ textParagraph: { text: "I couldn't load deals from HubSpot just now. Close and reopen Home to try again." } }] }] };
     }
   }
 
-  return { startBrief, startSpace, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, saveSpaceNote, buildHome };
 }
 
 function start() {

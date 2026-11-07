@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { createSpaceJob, SAY } = require('../src/spaceJob');
+const { createSpaceJob, createAccessRequests, createDealSpaceIndex, namedFor, SAY, ACCESS } = require('../src/spaceJob');
 const { createSpaces } = require('../src/chat/spaces');
 const { createRouter, parseCommand, MESSAGES } = require('../src/router');
 const { renderBriefNote, parseBriefNote } = require('../src/agents/briefNote');
@@ -24,7 +24,7 @@ const context = (over = {}) => ({
 function harness({ ctx = context(), found = null, createError = null, brief: got = { brief, reused: true } } = {}) {
   const calls = [];
   const logs = [];
-  const job = createSpaceJob({
+  const { openSpace: job, useSpace } = createSpaceJob({
     loadContext: async (q) => (calls.push(['load', q]), ctx),
     getBrief: async () => (calls.push(['brief']), got),
     keepNote: async (args) => calls.push(['note', args.spaceName]),
@@ -42,8 +42,86 @@ function harness({ ctx = context(), found = null, createError = null, brief: got
     avatarUrl: 'https://example.com/a.png',
   });
   const run = () => job({ spaceName: 'spaces/DM', userName: 'users/1', dealNumber: '90001', store: 'UT' });
-  return { calls, logs, run };
+  const use = (spaceDisplayName = '90001 · Pat Sample') => useSpace({ spaceName: 'spaces/MINE', spaceDisplayName, dealNumber: '90001', store: 'UT' });
+  return { calls, logs, run, use };
 }
+
+test('"use this space": the brief and pin reminder are posted there and the space saved on the note', async () => {
+  const { calls, logs, use } = harness();
+  await use();
+  assert.deepStrictEqual(calls, [
+    ['load', { store: 'UT', dealNumber: '90001', rememberPick: true }],
+    ['brief'],
+    ['send', 'spaces/MINE', 'brief-90001'],
+    ['send', 'spaces/MINE', SAY.pinIt],
+    ['note', 'spaces/MINE'],
+  ]);
+  assert.strictEqual(logs.at(-1)[1], 'deal space adopted');
+});
+
+test('"use this space" needs the deal number first in the name, and one space per deal', async () => {
+  const misnamed = harness();
+  await misnamed.use('Pat delivery');
+  assert.deepStrictEqual(misnamed.calls, [['send', 'spaces/MINE', SAY.rename('90001')]]);
+  assert.ok(namedFor('#90001 Pat', '90001') && !namedFor('900012 Pat', '90001'));
+
+  const other = harness({ ctx: context({ briefNote: { id: '9', spaceName: 'spaces/OLD' } }), found: { name: 'spaces/OLD', uri: 'https://chat.google.com/room/OLD' } });
+  await other.use();
+  assert.deepStrictEqual(other.calls.at(-1), ['send', 'spaces/MINE', SAY.exists('90001', 'https://chat.google.com/room/OLD')]);
+
+  // Asked again in the space already recorded: the brief is posted again, no "already has".
+  const same = harness({ ctx: context({ briefNote: { id: '9', spaceName: 'spaces/MINE' } }) });
+  await same.use();
+  assert.ok(!same.calls.some((c) => c[0] === 'find'));
+  assert.deepStrictEqual(same.calls.at(-1), ['note', 'spaces/MINE']);
+});
+
+function accessHarness({ found = { deal: { id: '1' }, spaceName: 'spaces/DEAL' }, exists = true, member = false } = {}) {
+  const calls = [];
+  const request = createAccessRequests({
+    findDealSpace: async () => found,
+    spaces: {
+      findSpace: async (name) => (exists ? { name, uri: 'https://chat.google.com/room/DEAL' } : null),
+      isMember: async () => member,
+    },
+    sendMessage: async (space, text) => calls.push([space, text]),
+    findDirectMessage: async () => 'spaces/DM',
+    log: () => {},
+  });
+  const run = () => request({ dealNumber: '90001', userName: 'users/2', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach' });
+  return { calls, run };
+}
+
+test('request access asks in the deal space and tells the person', async () => {
+  const { calls, run } = accessHarness();
+  await run();
+  assert.deepStrictEqual(calls, [
+    ['spaces/DEAL', ACCESS.asked('Casey Coach (casey@example.com)')],
+    ['spaces/DM', ACCESS.sent('90001')],
+  ]);
+  const inIt = accessHarness({ member: true });
+  await inIt.run();
+  assert.deepStrictEqual(inIt.calls, [['spaces/DM', ACCESS.already('90001', 'https://chat.google.com/room/DEAL')]]);
+  const gone = accessHarness({ exists: false });
+  await gone.run();
+  assert.deepStrictEqual(gone.calls, [['spaces/DM', ACCESS.noSpace('90001')]]);
+});
+
+test('Home finds deal spaces by name, trusting only those the brief note records', async () => {
+  const listed = [
+    { name: 'spaces/A', displayName: '90001 · Pat Sample', uri: 'u/A' },
+    { name: 'spaces/B', displayName: '90002 · Someone made this', uri: 'u/B' },
+    { name: 'spaces/C', displayName: 'Delivery team', uri: 'u/C' },
+  ];
+  let lists = 0;
+  const spacesFor = createDealSpaceIndex({
+    spaces: { listSpaces: async () => (lists++, listed), isMember: async (space, user) => space === 'spaces/A' && user === 'users/1' },
+    findDealSpace: async ({ dealNumber }) => ({ deal: { id: dealNumber }, spaceName: dealNumber === '90001' ? 'spaces/A' : 'spaces/OTHER' }),
+  });
+  assert.deepStrictEqual([...(await spacesFor('users/1'))], [['90001', { uri: 'u/A', member: true }]]);
+  assert.deepStrictEqual([...(await spacesFor('users/2'))], [['90001', { uri: 'u/A', member: false }]]);
+  assert.strictEqual(lists, 1);
+});
 
 test('opens a space: asker as member, brief first, a pin reminder, the space saved on the note, link back', async () => {
   const { calls, logs, run } = harness();
@@ -165,4 +243,34 @@ test('the Chat spaces client creates a named space, adds a person, and treats a 
   assert.deepStrictEqual(requests[1], ['POST', 'https://chat.googleapis.com/v1/spaces/NEW/members', { member: { name: 'users/1', type: 'HUMAN' } }]);
   await assert.rejects(spaces.addMember('spaces/NEW', 'users/1/../2'), /invalid user name/);
   assert.strictEqual(await spaces.findSpace('spaces/OLD'), null);
+});
+
+test('the Chat spaces client lists named spaces across pages and checks membership', async () => {
+  const urls = [];
+  const pages = [
+    { spaces: [{ name: 'spaces/A', displayName: '90001 · Pat', spaceUri: 'u/A' }], nextPageToken: 'p2' },
+    { spaces: [{ name: 'spaces/B' }] },
+  ];
+  const readAuth = {
+    getClient: async () => ({
+      request: async (r) => {
+        urls.push(r.url);
+        if (r.url.includes('/members/')) {
+          if (r.url.endsWith('/members/2')) throw Object.assign(new Error('no'), { response: { status: 404 } });
+          return { data: {} };
+        }
+        return { data: pages.shift() };
+      },
+    }),
+  };
+  const spaces = createSpaces({ auth: readAuth, readAuth });
+  assert.deepStrictEqual(await spaces.listSpaces(), [
+    { name: 'spaces/A', displayName: '90001 · Pat', uri: 'u/A' },
+    { name: 'spaces/B', displayName: '', uri: null },
+  ]);
+  assert.ok(urls[0].includes('filter=spaceType%20%3D%20%22SPACE%22') && urls[1].includes('pageToken=p2'));
+  assert.strictEqual(await spaces.isMember('spaces/A', 'users/1'), true);
+  assert.strictEqual(await spaces.isMember('spaces/A', 'users/2'), false);
+  assert.ok(urls.includes('https://chat.googleapis.com/v1/spaces/A/members/1'));
+  assert.strictEqual(await spaces.isMember('spaces/A', 'users/1/../x'), false);
 });

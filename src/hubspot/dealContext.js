@@ -224,7 +224,7 @@ function createDealContext({ hubspot }) {
   // already picked for the brief is not asked for again.
   // Without it, a deal with several contacts returns `choices` instead of a context, so
   // Basecamp can ask which one is the Roamer rather than guess.
-  return async function load({ store = 'UT', dealNumber, contactId, rememberPick = false }) {
+  async function load({ store = 'UT', dealNumber, contactId, rememberPick = false }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal) return { found: false };
     if (deal.duplicate) return { found: false, duplicate: true };
@@ -283,7 +283,20 @@ function createDealContext({ hubspot }) {
       missing,
       counts,
     };
+  }
+
+  // Just the deal, the Chat space recorded on its brief note, and the Roamer the brief was
+  // written for, without reading the Roamer's record: a note from a deal space only needs
+  // to know the space is the deal's, and whose record the note also belongs on.
+  load.findDealSpace = async function findDealSpace({ store = 'UT', dealNumber }) {
+    const deal = await findDeal(store, dealNumber);
+    if (!deal || deal.duplicate) return null;
+    const note = await findBriefNote(deal.id);
+    const contactId = note && note.signature && note.signature.contactId ? note.signature.contactId : null;
+    return { deal, spaceName: note ? note.spaceName : null, contactId };
   };
+
+  return load;
 }
 
 module.exports = { createDealContext, cleanText, parseAlowareText, stripQuotedReply, fitBudget, STORE_CMF, COMPANY_SENDER };

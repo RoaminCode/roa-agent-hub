@@ -2,8 +2,8 @@
 
 // Basecamp's App Home: "Utah deals" in shadow mode, "My deals" once Team Members have
 // access. Open deals grouped by how soon they deliver, each with
-// the Roamer, trailer, delivery, last contact, Sales Coach, and a Brief button. Built from
-// one HubSpot search on every open; no AI until someone taps Brief.
+// the Roamer, trailer, delivery, last contact, Sales Coach, a Brief button, and the deal
+// space button. Built from one HubSpot search on every open; no AI until someone taps Brief.
 
 const { noDashes, shortDate } = require('../agents/roamerBrief');
 const { COLORS } = require('./briefCard');
@@ -99,9 +99,26 @@ function briefButton(deal, endpoint, sent) {
   };
 }
 
+// The deal space button on a tile. `space` is null when the deal has no space yet, else
+// { uri, member }. In a space: a link. Not in it: ask the space to add you. No space: create
+// it, for people whose briefs are on (creating one can write a brief). After a tap the
+// button reads where the answer went and cannot be tapped again.
+function spaceButton(deal, endpoint, space, sent, briefsPaused) {
+  const n = String(deal.dealNumber);
+  const tap = (action) => ({ action: { function: endpoint, parameters: [{ key: 'action', value: action }, { key: 'dealNumber', value: n }] } });
+  const done = (text) => ({ text, type: 'OUTLINED', disabled: true, icon: { materialIcon: { name: 'check' } }, onClick: { action: { function: endpoint } } });
+  if (space && space.member) {
+    if (!space.uri) return null;
+    return { text: 'Space', type: 'OUTLINED', icon: { materialIcon: { name: 'forum' } }, onClick: { openLink: { url: space.uri } } };
+  }
+  if (space) return sent.has(`join:${n}`) ? done('Asked') : { text: 'Request access', type: 'OUTLINED', onClick: tap('join') };
+  if (briefsPaused) return null;
+  return sent.has(`space:${n}`) ? done('In Messages') : { text: 'Create space', type: 'OUTLINED', onClick: tap('space') };
+}
+
 // One deal's tile: the Roamer with the Sales Coach at top right, then delivery on its own
-// row, then last contact on its own row with the Brief button.
-function dealWidgets(deal, today, endpoint, sent, briefsPaused) {
+// row with the deal space button, then last contact on its own row with the Brief button.
+function dealWidgets(deal, today, endpoint, sent, briefsPaused, spaces) {
   const days = deal.projectedDelivery ? daysBetween(today, deal.projectedDelivery) : null;
   const contacted = deal.lastContacted ? localDate(deal.lastContacted, TIME_ZONE) : null;
   const quietFor = contacted ? daysBetween(contacted, today) : null;
@@ -135,6 +152,11 @@ function dealWidgets(deal, today, endpoint, sent, briefsPaused) {
       : `Delivery ${shortDate(deal.projectedDelivery)} (${whenLabel(days)})`;
   }
   const delivery = { decoratedText: { startIcon: { materialIcon: { name: 'event' } }, text: deliveryText, wrapText: true } };
+  // Without `spaces` (deal spaces could not be read), tiles show no space button.
+  if (deal.dealNumber && spaces) {
+    const button = spaceButton(deal, endpoint, spaces.get(String(deal.dealNumber)) || null, sent, briefsPaused);
+    if (button) delivery.decoratedText.button = button;
+  }
 
   const by = deal.lastContactBy ? `, ${escape(deal.lastContactBy)} (${deal.lastContactChannel})` : '';
   const flagged = days !== null && days <= FLAG_WITHIN_DAYS;
@@ -158,11 +180,11 @@ const BRIEFS_OFF = {
 };
 
 // With `briefsOff` ('paused' or 'notBriefUser'), tiles have no Brief button and the footer
-// says why.
-function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(), briefsOff = null }) {
+// says why. `spaces` is Map(dealNumber -> { uri, member }) for deals with a deal space.
+function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(), briefsOff = null, spaces = null }) {
   const briefsPaused = Boolean(briefsOff);
   const today = todayIn(TIME_ZONE, now);
-  const rows = deals.map((d) => dealWidgets(d, today, endpoint, sent, briefsPaused));
+  const rows = deals.map((d) => dealWidgets(d, today, endpoint, sent, briefsPaused, spaces));
 
   const sections = [];
 

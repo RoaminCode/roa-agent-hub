@@ -250,3 +250,27 @@ test('opening a space remembers the Roamer picked for the brief; a brief still a
   const none = await createDealContext({ hubspot: fakeHubSpot({ contacts: [77, 78] }) })({ store: 'UT', dealNumber: '90001', rememberPick: true });
   assert.strictEqual(none.choices.length, 2);
 });
+
+test('finding a deal space reads only the deal and its brief note', async () => {
+  const { renderBriefNote } = require('../src/agents/briefNote');
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, spaceName: 'spaces/DEAL' });
+  const hubspot = fakeHubSpot({ dealNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
+  const { findDealSpace } = createDealContext({ hubspot });
+  const found = await findDealSpace({ store: 'UT', dealNumber: '90001' });
+  assert.strictEqual(found.spaceName, 'spaces/DEAL');
+  assert.ok(found.deal.id);
+  assert.strictEqual((await createDealContext({ hubspot: fakeHubSpot() }).findDealSpace({ dealNumber: '90001' })).spaceName, null);
+  assert.strictEqual(await createDealContext({ hubspot: fakeHubSpot({ deals: 2 }) }).findDealSpace({ dealNumber: '90001' }), null);
+});
+
+test('createDealNote also puts the note on the Roamer when given a contact', async () => {
+  const calls = [];
+  const hubspot = createHubSpotClient({ token: 't', fetchImpl: async (url, opts) => (calls.push(JSON.parse(opts.body)), ok({ id: 556 })) });
+  await hubspot.createDealNote({ dealId: '111', contactId: '77', body: '<p>x</p>', timestamp: 't' });
+  assert.deepStrictEqual(calls[0].associations, [
+    { to: { id: '111' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
+    { to: { id: '77' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] },
+  ]);
+  await assert.rejects(hubspot.createDealNote({ dealId: '111', contactId: '77/x', body: 'x', timestamp: 't' }), /invalid contact id/);
+});

@@ -28,6 +28,7 @@ function userOf(user) {
   return {
     userEmail: user && user.email ? user.email.toLowerCase() : null,
     userName: user ? user.name || null : null,
+    userDisplayName: user && user.displayName ? String(user.displayName) : null,
   };
 }
 
@@ -37,6 +38,7 @@ function parseClassic(body) {
     type: body.type || 'UNKNOWN',
     spaceName: body.space ? body.space.name : null,
     spaceType: body.space ? body.space.spaceType || body.space.type || null : null,
+    spaceDisplayName: body.space ? body.space.displayName || null : null,
     isDirectMessage: isDirect(body.space),
     ...userOf(body.user),
     ...fromMessage(body.message),
@@ -76,6 +78,7 @@ function parseAddOn(body) {
     type,
     spaceName: payload.space ? payload.space.name : null,
     spaceType: payload.space ? payload.space.spaceType || null : null,
+    spaceDisplayName: payload.space ? payload.space.displayName || null : null,
     isDirectMessage: isDirect(payload.space),
     ...userOf(chat.user),
     ...fromMessage(payload.message),

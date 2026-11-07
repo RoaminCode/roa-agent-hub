@@ -471,3 +471,52 @@ test('a sent deal shows a disabled In Messages button instead of Brief', () => {
   assert.deepStrictEqual(sentTile.button.icon, { materialIcon: { name: 'check' } });
   assert.deepStrictEqual([other.button.text, other.button.disabled], ['Brief', undefined]);
 });
+const spaceTap = (email, action, dealNumber) => {
+  const e = clickEvent(email, dealNumber);
+  e.commonEventObject.parameters = { action, dealNumber };
+  return e;
+};
+
+test('Home tiles show the deal space: a link, Request access, or Create space', () => {
+  const deal = (n) => ({ id: n, dealNumber: n, roamer: 'Pat Sample', trailer: 'ROAMER', projectedDelivery: '2026-11-20', contacts: 1 });
+  const spaces = new Map([
+    ['90001', { uri: 'https://chat.google.com/room/A', member: true }],
+    ['90002', { uri: 'https://chat.google.com/room/B', member: false }],
+  ]);
+  const card = renderHome({ deals: [deal('90001'), deal('90002'), deal('90003')], endpoint: 'https://example.com/', shadow: true, now: new Date('2026-11-07T17:00:00Z'), spaces });
+  const button = (n) => card.sections.find((s) => JSON.stringify(s).includes(`"topLabel":"${n}`)).widgets[1].decoratedText.button;
+  assert.deepStrictEqual(button('90001').onClick, { openLink: { url: 'https://chat.google.com/room/A' } });
+  assert.strictEqual(button('90002').text, 'Request access');
+  assert.strictEqual(button('90003').text, 'Create space');
+
+  const off = renderHome({ deals: [deal('90003')], endpoint: 'x', shadow: true, briefsOff: 'paused', spaces: new Map() });
+  assert.strictEqual(off.sections[0].widgets[1].decoratedText.button, undefined);
+  const unread = renderHome({ deals: [deal('90003')], endpoint: 'x', shadow: true });
+  assert.strictEqual(unread.sections[0].widgets[1].decoratedText.button, undefined);
+  const asked = renderHome({ deals: [deal('90002')], endpoint: 'x', shadow: true, spaces, sent: new Set(['join:90002']) });
+  assert.strictEqual(asked.sections[0].widgets[1].decoratedText.button.text, 'Asked');
+});
+
+test('Create space and Request access taps start their jobs once and redraw Home', async () => {
+  const opened = [];
+  const asked = [];
+  const builds = [];
+  const router = createRouter({
+    verify: accept,
+    allowedUsers: [BLAKE, 'casey@example.com'],
+    briefUsers: [BLAKE],
+    startSpace: (job) => opened.push(job),
+    requestAccess: (job) => asked.push(job),
+    buildHome: async ({ sent, userName }) => (builds.push([[...sent], userName]), {}),
+  });
+  await router({ headers, body: spaceTap(BLAKE, 'space', '90003') });
+  await router({ headers, body: spaceTap(BLAKE, 'space', '90003') });
+  assert.deepStrictEqual(opened, [{ spaceName: 'spaces/DM1', userName: 'users/123', dealNumber: '90003', store: 'UT', userEmail: BLAKE }]);
+  assert.deepStrictEqual(builds[0], [['space:90003'], 'users/123']);
+
+  // Request access spends nothing, so it works off BRIEF_USERS; Create space does not.
+  await router({ headers, body: spaceTap('casey@example.com', 'join', '90002') });
+  await router({ headers, body: spaceTap('casey@example.com', 'space', '90003') });
+  assert.deepStrictEqual(asked, [{ dealNumber: '90002', userName: 'users/123', userEmail: 'casey@example.com', userDisplayName: null }]);
+  assert.strictEqual(opened.length, 1);
+});

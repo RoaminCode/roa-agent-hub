@@ -2,19 +2,25 @@
 
 // Basecamp's router. It verifies the request came from Google Chat, checks the sender is
 // allowed, and routes the event. Commands: "brief <deal#> [store]", which answers right
-// away and posts the Roamer brief when it is ready, and "open a space for <deal#>", which
-// opens the deal's Chat space with the brief as its first post. App Home shows open deals,
-// each with a Brief button.
+// away and posts the Roamer brief when it is ready; "open a space for <deal#>", which
+// opens the deal's Chat space with the brief as its first post; "use this space for
+// <deal#>", said in a space a person made, which makes it the deal's space; and "note
+// <text>" in a deal space, which saves the text as a HubSpot note on the deal. App Home
+// shows open deals, each with a Brief button and its deal space: a link, a button to
+// create it, or a button to ask the space to add you.
 
 const { errorFields } = require('./errors');
 const { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
 const { renderNotAllowedHome } = require('./chat/homeCard');
+const { SAY: NOTE_SAY } = require('./spaceNotes');
 
 const MESSAGES = {
   added: "Basecamp is here. I'm in shadow mode. Try \"brief 51431\" for a Roamer brief on a Utah deal.",
-  help: 'Try "brief 51431" for a Roamer brief on a Utah deal, or "open a space for 51431" for its deal space.',
+  help: 'Try "brief 51431" for a Roamer brief on a Utah deal, or "open a space for 51431" for its deal space. In a deal space, "note <text>" saves a note to the deal in HubSpot.',
   opening: (n) => `Opening a space for deal ${n}. I'll post the link here when it's ready.`,
   spaceDirectOnly: (n) => `Ask me to open the space for deal ${n} in a direct message with me.`,
+  adopting: (n) => `Setting this space up for deal ${n}. The brief will be here shortly.`,
+  useInSpace: (n) => `Say "use this space for ${n}" in the deal's space, after adding me to it.`,
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
   paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out. Home still shows every deal, delivery, and last contact.",
@@ -26,13 +32,18 @@ const MESSAGES = {
 const STORES = new Set(['UT']);
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
-// Deal numbers are digits only.
+// "use this space for 51431"; "note <text>" (also "note: <text>"), whose text keeps its
+// line breaks. Deal numbers are digits only.
 function parseCommand(text) {
   const t = text || '';
+  const note = /^note\b:?\s*([\s\S]*)$/i.exec(t);
+  if (note) return { command: 'note', text: note[1].trim() };
   let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
   if (m) return { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
   m = /^open\s+(?:a\s+)?(?:deal\s+)?space\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
   if (m) return { command: 'space', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
+  m = /^use\s+this\s+(?:deal\s+)?space\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
+  if (m) return { command: 'use', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
   return null;
 }
 
@@ -50,7 +61,12 @@ function log(severity, message, fields = {}) {
 // else allowed keeps Home but gets a short answer instead of a brief. Left out, every
 // allowed user may brief (tests only); server.js always passes it, so an empty BRIEF_USERS
 // means nobody.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+// saveSpaceNote({ spaceName, spaceDisplayName, userEmail, userDisplayName, text }) saves a
+// note from a deal space and returns the reply; see spaceNotes.js. It spends no AI credits,
+// so it needs only ALLOWED_USERS, and works while briefs are paused.
+// useSpace starts "use this space"; requestAccess({ dealNumber, userName, userEmail,
+// userDisplayName }) asks a deal's space to add someone, from Home. Both outlive the request.
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -122,7 +138,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
 
     if (event.type === 'APP_HOME') {
       const card = isAllowed
-        ? await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail), briefsOff: briefsOffFor(event.userEmail) })
+        ? await buildHome({ userEmail: event.userEmail, userName: event.userName, sent: sentDeals(event.userEmail), briefsOff: briefsOffFor(event.userEmail) })
         : renderNotAllowedHome();
       return { status: 200, body: homeFor(card) };
     }
@@ -131,13 +147,35 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       return { status: 200, body: replyFor(event, MESSAGES.notAllowed) };
     }
 
+    // Home's deal space buttons. "Create space" can write a brief, so it needs the brief
+    // permission; "Request access" spends nothing. Each redraws Home with the tapped
+    // button turned into a disabled one saying where the answer went.
+    if (event.type === 'CARD_CLICKED' && (event.parameters.action === 'space' || event.parameters.action === 'join')) {
+      const dealNumber = String(event.parameters.dealNumber || '');
+      if (!/^\d{3,8}$/.test(dealNumber)) return { status: 200, body: {} };
+      const off = briefsOffFor(event.userEmail);
+      if (event.parameters.action === 'space') {
+        if (off) {
+          logRefused(off, event.userEmail);
+          return { status: 200, body: homeUpdateFor(await buildHome({ userEmail: event.userEmail, userName: event.userName, sent: sentDeals(event.userEmail), briefsOff: off })) };
+        }
+        if (!isRepeat(event.userEmail, `space:${dealNumber}`)) {
+          startSpace({ spaceName: event.isDirectMessage ? event.spaceName : null, userName: event.userName, dealNumber, store: 'UT', userEmail: event.userEmail });
+        }
+      } else if (!isRepeat(event.userEmail, `join:${dealNumber}`)) {
+        requestAccess({ dealNumber, userName: event.userName, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
+      }
+      const card = await buildHome({ userEmail: event.userEmail, userName: event.userName, sent: sentDeals(event.userEmail), briefsOff: off });
+      return { status: 200, body: homeUpdateFor(card) };
+    }
+
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'brief') {
       // A button drawn before briefs went off (an old Home or contact picker) starts nothing.
       const off = briefsOffFor(event.userEmail);
       if (off) {
         logRefused(off, event.userEmail);
         if (event.parameters.from === 'picker') return { status: 200, body: updateMessageFor(event, MESSAGES[off]) };
-        return { status: 200, body: homeUpdateFor(await buildHome({ userEmail: event.userEmail, sent: new Set(), briefsOff: off })) };
+        return { status: 200, body: homeUpdateFor(await buildHome({ userEmail: event.userEmail, userName: event.userName, sent: new Set(), briefsOff: off })) };
       }
       const dealNumber = String(event.parameters.dealNumber || '');
       if (!/^\d{3,8}$/.test(dealNumber)) return { status: 200, body: {} };
@@ -169,7 +207,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       }
       // On a phone or full screen Messages is out of sight, so Home itself changes: the
       // tapped deal's button now reads "In Messages" and cannot be tapped again.
-      const card = await buildHome({ userEmail: event.userEmail, sent: sentDeals(event.userEmail), briefsOff: null });
+      const card = await buildHome({ userEmail: event.userEmail, userName: event.userName, sent: sentDeals(event.userEmail), briefsOff: null });
       return { status: 200, body: homeUpdateFor(card) };
     }
 
@@ -180,12 +218,31 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     if (event.type === 'MESSAGE') {
       const cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
+      if (cmd.command === 'note') {
+        if (event.isDirectMessage) return { status: 200, body: replyFor(event, NOTE_SAY.directOnly) };
+        // Answered in the request (a few HubSpot reads and one write), so the reply lands in the note's thread.
+        const said = await saveSpaceNote({
+          spaceName: event.spaceName,
+          spaceDisplayName: event.spaceDisplayName,
+          userEmail: event.userEmail,
+          userDisplayName: event.userDisplayName,
+          text: cmd.text,
+        });
+        return { status: 200, body: replyFor(event, said) };
+      }
       const off = briefsOffFor(event.userEmail);
       if (off) {
         logRefused(off, event.userEmail);
         return { status: 200, body: replyFor(event, MESSAGES[off]) };
       }
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
+      if (cmd.command === 'use') {
+        // Said in the space itself, which the brief is posted to; it can write a brief, so
+        // it needs the brief permission (checked above).
+        if (event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.useInSpace(cmd.dealNumber)) };
+        useSpace({ spaceName: event.spaceName, spaceDisplayName: event.spaceDisplayName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
+        return { status: 200, body: replyFor(event, MESSAGES.adopting(cmd.dealNumber)) };
+      }
       if (cmd.command === 'space') {
         // Asked for in a direct message, where the reply (with the Roamer's name) is private.
         // Opening a space can write a brief, so it needs the same brief permission.
