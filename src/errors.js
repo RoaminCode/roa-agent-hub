@@ -45,4 +45,13 @@ function errorFields(err) {
   return out;
 }
 
-module.exports = { safeError, errorFields };
+// Anthropic says the account is out of prepaid credits: a billing error (402), or the older
+// 400 "credit balance is too low". The message is read here only to classify; it is not logged.
+function isOutOfCredits(err) {
+  if (!err || typeof err !== 'object') return false;
+  const providerType = err.error && err.error.error && err.error.error.type;
+  if (err.status === 402 || providerType === 'billing_error') return true;
+  return err.status === 400 && /credit balance/i.test(String(err.message || ''));
+}
+
+module.exports = { safeError, errorFields, isOutOfCredits };

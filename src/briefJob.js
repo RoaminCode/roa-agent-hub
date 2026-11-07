@@ -3,7 +3,7 @@
 // Runs one Roamer brief in the background and posts the result to the space it was
 // asked from. Logs timing and token usage, never Roamer details.
 
-const { errorFields } = require('./errors');
+const { errorFields, isOutOfCredits } = require('./errors');
 const { writeBrief } = require('./agents/roamerBrief');
 const { renderBriefCard, renderContactChoice } = require('./chat/briefCard');
 
@@ -15,6 +15,7 @@ const SORRY = {
   noContact: (n) => `Deal ${n} has no Roamer contact attached in HubSpot, so there's nothing to read. That needs fixing in HubSpot; it has been flagged.`,
   notOnDeal: (n) => `That contact is no longer on deal ${n} in HubSpot. Ask for the brief again to pick from the current contacts.`,
   failed: (n) => `I couldn't finish the brief for deal ${n}. Blake can see what happened in the logs.`,
+  noCredits: "Basecamp's AI credits have run out, so I can't write briefs right now. Blake will need to add more. Home still shows every deal.",
 };
 
 // `endpoint` is Basecamp's own URL, which the contact picker's buttons call.
@@ -53,8 +54,10 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, e
       if (!result.ok) return await sendMessage(spaceName, SORRY.failed(dealNumber));
       await sendMessage(spaceName, renderBriefCard({ dealNumber, context, brief: result.brief, avatarUrl }));
     } catch (err) {
-      log('ERROR', 'brief failed', { dealNumber, error: errorFields(err), ms: Date.now() - started });
-      await sendMessage(spaceName, SORRY.failed(dealNumber)).catch((e) =>
+      // Out of credits gets its own log line, so it can be found and alerted on by name.
+      const noCredits = isOutOfCredits(err);
+      log('ERROR', noCredits ? 'brief failed: out of AI credits' : 'brief failed', { dealNumber, error: errorFields(err), ms: Date.now() - started });
+      await sendMessage(spaceName, noCredits ? SORRY.noCredits : SORRY.failed(dealNumber)).catch((e) =>
         log('ERROR', 'could not post brief failure', { dealNumber, error: errorFields(e) }),
       );
     }

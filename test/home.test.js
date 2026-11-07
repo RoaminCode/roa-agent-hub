@@ -36,9 +36,9 @@ test('reads an App Home event, which has no payload', () => {
 });
 
 test('reads a button click with its parameters', () => {
-  const e = parseEvent(clickEvent(BLAKE, '51455'));
+  const e = parseEvent(clickEvent(BLAKE, '90123'));
   assert.strictEqual(e.type, 'CARD_CLICKED');
-  assert.deepStrictEqual(e.parameters, { action: 'brief', dealNumber: '51455' });
+  assert.deepStrictEqual(e.parameters, { action: 'brief', dealNumber: '90123' });
   assert.strictEqual(e.spaceName, 'spaces/DM1');
 });
 
@@ -76,18 +76,18 @@ test('tapping Brief starts the brief and answers with Home, that deal marked sen
     startBrief: (job) => started.push(job),
     buildHome: async ({ sent }) => (builds.push([...sent]), { sections: [] }),
   });
-  const result = await router({ headers, body: clickEvent(BLAKE, '51455', 'Pat Sample') });
+  const result = await router({ headers, body: clickEvent(BLAKE, '90123', 'Pat Sample') });
   assert.deepStrictEqual(started, [
     {
       spaceName: 'spaces/DM1',
       userName: 'users/123',
-      dealNumber: '51455',
+      dealNumber: '90123',
       store: 'UT',
       userEmail: BLAKE,
-      announce: "I'll need just a moment to read up on Pat Sample (deal 51455).",
+      announce: "I'll need just a moment to read up on Pat Sample (deal 90123).",
     },
   ]);
-  assert.deepStrictEqual(builds, [['51455']]);
+  assert.deepStrictEqual(builds, [['90123']]);
   assert.deepStrictEqual(result.body, { action: { navigations: [{ updateCard: { sections: [] } }] } });
 });
 
@@ -95,17 +95,17 @@ test('reopening Home soon after a tap still shows that deal as sent', async () =
   let clock = 1000000;
   const builds = [];
   const router = createRouter({ verify: accept, allowedUsers: [BLAKE], buildHome: async ({ sent }) => (builds.push([...sent]), {}), now: () => clock });
-  await router({ headers, body: clickEvent(BLAKE, '51455') });
+  await router({ headers, body: clickEvent(BLAKE, '90123') });
   clock += 60 * 1000;
   await router({ headers, body: homeEvent(BLAKE) });
   clock += 2 * 60 * 1000;
   await router({ headers, body: homeEvent(BLAKE) });
-  assert.deepStrictEqual(builds, [['51455'], ['51455'], []]);
+  assert.deepStrictEqual(builds, [['90123'], ['90123'], []]);
 });
 test('ignores a Brief tap with a malformed deal number', async () => {
   const started = [];
   const router = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job) });
-  await router({ headers, body: clickEvent(BLAKE, '51455; drop') });
+  await router({ headers, body: clickEvent(BLAKE, '90123; drop') });
   assert.strictEqual(started.length, 0);
 });
 
@@ -428,13 +428,13 @@ test('a second Brief tap on the same deal within two minutes does not start anot
   let clock = 1000000;
   const started = [];
   const router = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job.dealNumber), now: () => clock });
-  await router({ headers, body: clickEvent(BLAKE, '51455') });
+  await router({ headers, body: clickEvent(BLAKE, '90123') });
   clock += 30 * 1000;
-  await router({ headers, body: clickEvent(BLAKE, '51455') });
-  await router({ headers, body: clickEvent(BLAKE, '51431') });
+  await router({ headers, body: clickEvent(BLAKE, '90123') });
+  await router({ headers, body: clickEvent(BLAKE, '90124') });
   clock += 3 * 60 * 1000;
-  await router({ headers, body: clickEvent(BLAKE, '51455') });
-  assert.deepStrictEqual(started, ['51455', '51431', '51455']);
+  await router({ headers, body: clickEvent(BLAKE, '90123') });
+  assert.deepStrictEqual(started, ['90123', '90124', '90123']);
 });
 test('a deal with more than one contact says so on its tile', () => {
   const [two, one] = tiles(home([{ ...deal('90001', '2026-11-03', '2026-10-28'), contacts: 2 }, { ...deal('90002', '2026-11-04', '2026-10-28'), contacts: 1 }]));

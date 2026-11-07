@@ -90,6 +90,19 @@ function escapeRecord(text) {
 }
 const escapeAttribute = (text) => escapeRecord(text).replace(/"/g, '&quot;');
 
+// Utah only for now, the same zone Home uses.
+const TIME_ZONE = 'America/Denver';
+
+// An item's date where the Experience Center is, as YYYY-MM-DD. HubSpot stores UTC, so an
+// evening text in Utah would otherwise read as the next day. A plain date is kept as is.
+function recordDate(at) {
+  const value = String(at || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const when = new Date(value);
+  if (Number.isNaN(when.getTime())) return value.slice(0, 10);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(when);
+}
+
 function formatRecord({ deal, salesCoach, contact, items, omitted, clipped, missing }) {
   const d = deal.properties;
   const c = (contact && contact.properties) || {};
@@ -107,7 +120,7 @@ function formatRecord({ deal, salesCoach, contact, items, omitted, clipped, miss
     .join('\n');
 
   const body = items
-    .map((i) => `<item date="${String(i.at).slice(0, 10)}" channel="${i.channel}" who="${escapeAttribute(i.who || 'unknown')}">\n${escapeRecord(i.text)}\n</item>`)
+    .map((i) => `<item date="${recordDate(i.at)}" channel="${i.channel}" who="${escapeAttribute(i.who || 'unknown')}">\n${escapeRecord(i.text)}\n</item>`)
     .join('\n');
 
   return `${header}\n\n<record>\n${body}\n</record>`;
@@ -183,9 +196,6 @@ function noDashes(text) {
   return String(text).replace(/\s*[\u2013\u2014]\s*/g, ', ');
 }
 
-// Utah only for now, the same zone Home uses.
-const TIME_ZONE = 'America/Denver';
-
 // "Nov 6, 8:14 PM", where the Experience Center is.
 function writtenAt(now) {
   return new Intl.DateTimeFormat('en-US', { timeZone: TIME_ZONE, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(now);
@@ -194,9 +204,9 @@ function writtenAt(now) {
 // When the brief was written and how far the record it read goes. Not on the Chat card,
 // which Blake keeps free of this kind of detail (Chat shows when a message was posted); it
 // is for briefs kept outside Chat. The newest item's date is read the same way the record's
-// item dates are, so it matches the dates on the brief's own lines.
+// item dates are (Utah time), so it matches the dates on the brief's own lines.
 function stampLine(context, now = new Date()) {
-  const newest = (context.items || []).map((i) => String(i.at || '').slice(0, 10)).filter(Boolean).sort().pop();
+  const newest = (context.items || []).map((i) => (i.at ? recordDate(i.at) : '')).filter(Boolean).sort().pop();
   return `Written ${writtenAt(now)} MT${newest ? `, from the record through ${shortDate(newest)}` : ''}.`;
 }
 

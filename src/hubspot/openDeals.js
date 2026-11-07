@@ -23,7 +23,7 @@ const OPEN_STAGE = '85341732';
 
 const PROPS = ['dealname', 'ls_deal_number', 'projected_delivery_date', 'hubspot_owner_id'];
 
-// Deal names read "51436 - Scott Henderson - 2026 Pause PETRE19.6-AR".
+// Deal names read "90001 - Pat Sample - 2026 Trailer Model".
 function parseDealName(dealname) {
   const parts = String(dealname || '').split(/\s+-\s+/);
   if (parts.length >= 3 && /^\d+$/.test(parts[0])) return { roamer: parts[1], trailer: parts.slice(2).join(' - ') };

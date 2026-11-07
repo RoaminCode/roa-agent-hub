@@ -77,8 +77,8 @@ test('strips the @Basecamp mention from add-on messages', () => {
 test('a typed "brief" always starts a brief, even right after another for the same deal', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job.spaceName) });
-  await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
-  await r({ headers, body: { ...classicMessage(BLAKE, 'brief 51431'), space: { name: 'spaces/OTHER', spaceType: 'DIRECT_MESSAGE' } } });
+  await r({ headers, body: classicMessage(BLAKE, 'brief 90124') });
+  await r({ headers, body: { ...classicMessage(BLAKE, 'brief 90124'), space: { name: 'spaces/OTHER', spaceType: 'DIRECT_MESSAGE' } } });
   assert.deepStrictEqual(started, ['spaces/AAA', 'spaces/OTHER']);
 });
 
@@ -91,10 +91,10 @@ test('ignores a classic-format card click instead of failing', async () => {
 test('keeps briefs out of group spaces and points to a direct message', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job) });
-  const inSpace = await r({ headers, body: addOnMessage(BLAKE, 'brief 51431') });
-  assert.strictEqual(inSpace.body.hostAppDataAction.chatDataAction.createMessageAction.message.text, MESSAGES.directOnly('51431'));
-  const inRoom = await r({ headers, body: { ...classicMessage(BLAKE, 'brief 51431'), space: { name: 'spaces/R', type: 'ROOM' } } });
-  assert.deepStrictEqual(inRoom.body, { text: MESSAGES.directOnly('51431') });
+  const inSpace = await r({ headers, body: addOnMessage(BLAKE, 'brief 90124') });
+  assert.strictEqual(inSpace.body.hostAppDataAction.chatDataAction.createMessageAction.message.text, MESSAGES.directOnly('90124'));
+  const inRoom = await r({ headers, body: { ...classicMessage(BLAKE, 'brief 90124'), space: { name: 'spaces/R', type: 'ROOM' } } });
+  assert.deepStrictEqual(inRoom.body, { text: MESSAGES.directOnly('90124') });
   assert.strictEqual(started.length, 0);
 });
 
@@ -144,7 +144,7 @@ test('ignores a picker tap with a malformed contact, an unknown store, or outsid
 test('while briefs are paused, a typed brief gets a short answer and starts nothing', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job), briefsPaused: true });
-  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 90124') });
   assert.deepStrictEqual(result.body, { text: MESSAGES.paused });
   const help = await r({ headers, body: classicMessage(BLAKE, 'hi') });
   assert.deepStrictEqual(help.body, { text: MESSAGES.help });
@@ -171,7 +171,7 @@ const homeTap = (email) => ({
 test('someone allowed but not in BRIEF_USERS cannot start a brief by typing, Home, or the picker', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE, SHANE], briefUsers: [SHANE], startBrief: (job) => started.push(job), buildHome: async () => ({ sections: [] }) });
-  const typed = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  const typed = await r({ headers, body: classicMessage(BLAKE, 'brief 90124') });
   assert.deepStrictEqual(typed.body, { text: MESSAGES.notBriefUser });
   await r({ headers, body: homeTap(BLAKE) });
   const picker = await r({ headers, body: pickerClick({ contactId: '78' }) });
@@ -182,7 +182,7 @@ test('someone allowed but not in BRIEF_USERS cannot start a brief by typing, Hom
 test('someone in BRIEF_USERS can start a brief, matched regardless of email case', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE, SHANE], briefUsers: ['Shane@Example.com'], startBrief: (job) => started.push(job.userEmail), buildHome: async () => ({}) });
-  await r({ headers, body: classicMessage(SHANE, 'brief 51431') });
+  await r({ headers, body: classicMessage(SHANE, 'brief 90124') });
   await r({ headers, body: homeTap(SHANE) });
   assert.deepStrictEqual(started, [SHANE, SHANE]);
 });
@@ -190,7 +190,7 @@ test('someone in BRIEF_USERS can start a brief, matched regardless of email case
 test('an empty BRIEF_USERS lets nobody start a brief', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], briefUsers: [], startBrief: (job) => started.push(job) });
-  const typed = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
+  const typed = await r({ headers, body: classicMessage(BLAKE, 'brief 90124') });
   assert.deepStrictEqual(typed.body, { text: MESSAGES.notBriefUser });
   assert.strictEqual(started.length, 0);
 });
@@ -205,31 +205,31 @@ test('BRIEF_USERS unset or blank reads as nobody', () => {
 test('a pause still wins over BRIEF_USERS', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [SHANE], briefUsers: [SHANE], briefsPaused: true, startBrief: (job) => started.push(job) });
-  const typed = await r({ headers, body: classicMessage(SHANE, 'brief 51431') });
+  const typed = await r({ headers, body: classicMessage(SHANE, 'brief 90124') });
   assert.deepStrictEqual(typed.body, { text: MESSAGES.paused });
   assert.strictEqual(started.length, 0);
 });
 
 test('parses the brief command, with Utah as the default store', () => {
   const { parseCommand } = require('../src/router');
-  assert.deepStrictEqual(parseCommand('brief 51431'), { command: 'brief', dealNumber: '51431', store: 'UT' });
-  assert.deepStrictEqual(parseCommand('Brief #51431 ut'), { command: 'brief', dealNumber: '51431', store: 'UT' });
+  assert.deepStrictEqual(parseCommand('brief 90124'), { command: 'brief', dealNumber: '90124', store: 'UT' });
+  assert.deepStrictEqual(parseCommand('Brief #90124 ut'), { command: 'brief', dealNumber: '90124', store: 'UT' });
   assert.strictEqual(parseCommand('brief Bob'), null);
-  assert.strictEqual(parseCommand('tell me about 51431'), null);
+  assert.strictEqual(parseCommand('tell me about 90124'), null);
 });
 
 test('answers a brief request right away and starts the brief', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job) });
-  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 51431') });
-  assert.deepStrictEqual(result.body, { text: MESSAGES.working('51431') });
-  assert.deepStrictEqual(started, [{ spaceName: 'spaces/AAA', dealNumber: '51431', store: 'UT', userEmail: BLAKE }]);
+  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 90124') });
+  assert.deepStrictEqual(result.body, { text: MESSAGES.working('90124') });
+  assert.deepStrictEqual(started, [{ spaceName: 'spaces/AAA', dealNumber: '90124', store: 'UT', userEmail: BLAKE }]);
 });
 
 test('does not start a brief for a store it does not know', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job) });
-  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 51431 AZ') });
+  const result = await r({ headers, body: classicMessage(BLAKE, 'brief 90124 AZ') });
   assert.deepStrictEqual(result.body, { text: MESSAGES.unknownStore('AZ') });
   assert.strictEqual(started.length, 0);
 });
@@ -237,6 +237,6 @@ test('does not start a brief for a store it does not know', async () => {
 test('never starts a brief for a user who is not allowed', async () => {
   const started = [];
   const r = createRouter({ verify: accept, allowedUsers: [BLAKE], startBrief: (job) => started.push(job) });
-  await r({ headers, body: classicMessage('someone@example.com', 'brief 51431') });
+  await r({ headers, body: classicMessage('someone@example.com', 'brief 90124') });
   assert.strictEqual(started.length, 0);
 });

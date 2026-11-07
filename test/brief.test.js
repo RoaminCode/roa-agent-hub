@@ -241,3 +241,46 @@ test('/brief shows the stamp and sources; the Chat card shows neither', () => {
 test('the instructions tell the brief to report contradictions, not pick one', () => {
   assert.match(SYSTEM, /When the record contradicts itself \(a date, price, name, or who said what\), say so in that item and give each version\. Never pick one\./);
 });
+
+test('an out-of-credits error tells the user in plain words and is logged by name', async () => {
+  for (const err of [
+    Object.assign(new Error('402 billing'), { status: 402, error: { type: 'error', error: { type: 'billing_error' } } }),
+    Object.assign(new Error('400 Your credit balance is too low to access the Anthropic API.'), { status: 400 }),
+  ]) {
+    const sent = [];
+    const logs = [];
+    const run = createBriefJob({
+      loadContext: async () => {
+        throw err;
+      },
+      anthropic: null,
+      sendMessage: async (space, text) => sent.push(text),
+      log: (...args) => logs.push(args),
+    });
+    await run({ spaceName: 'spaces/AAA', dealNumber: '2', store: 'UT' });
+    assert.deepStrictEqual(sent, [SORRY.noCredits]);
+    assert.strictEqual(logs[0][1], 'brief failed: out of AI credits');
+    assert.doesNotMatch(JSON.stringify(logs), /credit balance/);
+  }
+});
+
+test('other request errors are not mistaken for running out of credits', async () => {
+  const sent = [];
+  const run = createBriefJob({
+    loadContext: async () => {
+      throw Object.assign(new Error('400 bad request'), { status: 400, error: { type: 'error', error: { type: 'invalid_request_error' } } });
+    },
+    anthropic: null,
+    sendMessage: async (space, text) => sent.push(text),
+    log: () => {},
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '2', store: 'UT' });
+  assert.deepStrictEqual(sent, [SORRY.failed('2')]);
+});
+
+test('record dates are Utah dates: an evening text is not moved to the next day', () => {
+  // 02:30 UTC on Oct 21 is 8:30 PM on Oct 20 in Utah (Mountain Daylight Time).
+  const items = [{ at: '2026-10-21T02:30:00Z', channel: 'text', who: 'from the Roamer', text: 'See you then' }];
+  assert.match(formatRecord({ ...context, items }), /<item date="2026-10-20" channel="text"/);
+  assert.match(stampLine({ ...context, items }, new Date('2026-11-07T03:14:00Z')), /through Oct 20\./);
+});
