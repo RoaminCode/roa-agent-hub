@@ -160,6 +160,7 @@ test('the Chat spaces client creates a named space, adds a person, and treats a 
   assert.strictEqual(requests[0][2].displayName.length, 128);
   assert.deepStrictEqual(requests[0].slice(0, 2), ['POST', 'https://chat.googleapis.com/v1/spaces']);
   assert.strictEqual(requests[0][2].spaceType, 'SPACE');
+  assert.strictEqual(requests[0][2].customer, 'customers/my_customer');
   await spaces.addMember('spaces/NEW', 'users/1');
   assert.deepStrictEqual(requests[1], ['POST', 'https://chat.googleapis.com/v1/spaces/NEW/members', { member: { name: 'users/1', type: 'HUMAN' } }]);
   await assert.rejects(spaces.addMember('spaces/NEW', 'users/1/../2'), /invalid user name/);

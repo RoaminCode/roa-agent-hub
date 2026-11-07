@@ -35,6 +35,17 @@ function errorFields(err) {
   if (status) out.status = status;
   // A short code, such as ECONNRESET or a Google API status, is a label, not data.
   if (typeof err.code === 'string' || typeof err.code === 'number') out.code = err.code;
+  // Google's error labels, never its message: the status ("INVALID_ARGUMENT"), the reason
+  // ("ACCESS_TOKEN_SCOPE_INSUFFICIENT"), and the names of fields it rejected.
+  const google = err.response && err.response.data && err.response.data.error;
+  if (google && typeof google === 'object') {
+    if (typeof google.status === 'string') out.googleStatus = google.status;
+    const details = Array.isArray(google.details) ? google.details : [];
+    const reasons = details.map((d) => d && d.reason).filter((r) => typeof r === 'string');
+    if (reasons.length) out.googleReasons = reasons;
+    const fields = details.flatMap((d) => (d && Array.isArray(d.fieldViolations) ? d.fieldViolations : [])).map((v) => v && v.field).filter((f) => typeof f === 'string');
+    if (fields.length) out.googleFields = fields;
+  }
   // Anthropic's error type, such as "overloaded_error", and its request ID for support.
   const providerType = err.error && err.error.error && err.error.error.type;
   if (typeof providerType === 'string') out.providerType = providerType;

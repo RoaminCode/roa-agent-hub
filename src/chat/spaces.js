@@ -28,6 +28,8 @@ function createSpaces({ auth = defaultAuth(), readAuth = botAuth() } = {}) {
       method: 'POST',
       data: {
         spaceType: 'SPACE',
+        // Required when an app creates a space; this alias means ROA's own Workspace.
+        customer: 'customers/my_customer',
         displayName: fit(displayName, NAME_MAX),
         spaceDetails: { description: fit(description, DESCRIPTION_MAX) },
       },

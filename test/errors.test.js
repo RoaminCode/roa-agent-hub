@@ -55,3 +55,27 @@ test('reads a Google library status from the response', () => {
 test('describes something thrown that is not an error', () => {
   assert.deepStrictEqual(errorFields('Pat Sample'), { type: 'string' });
 });
+
+test('Google API errors log their status, reason, and rejected field names, never the message', () => {
+  const err = Object.assign(new Error('Invalid space display name "Pat Sample"'), {
+    status: 400,
+    response: {
+      status: 400,
+      data: {
+        error: {
+          status: 'INVALID_ARGUMENT',
+          message: 'Invalid space display name "Pat Sample"',
+          details: [
+            { '@type': 'type.googleapis.com/google.rpc.BadRequest', fieldViolations: [{ field: 'space.customer', description: 'Pat Sample' }] },
+            { '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'CUSTOMER_REQUIRED' },
+          ],
+        },
+      },
+    },
+  });
+  const out = errorFields(err);
+  assert.strictEqual(out.googleStatus, 'INVALID_ARGUMENT');
+  assert.deepStrictEqual(out.googleReasons, ['CUSTOMER_REQUIRED']);
+  assert.deepStrictEqual(out.googleFields, ['space.customer']);
+  assert.doesNotMatch(JSON.stringify(out), /Pat Sample/);
+});
