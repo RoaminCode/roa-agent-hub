@@ -24,19 +24,22 @@ const SAY = {
 
 const escapeHtml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// The note as HubSpot stores it: a title line, the text with its line breaks, and who added it.
-function renderSpaceNote({ text, userDisplayName, userEmail, now }) {
+// The note as HubSpot stores it: a title line, the text with its line breaks, and who added
+// it. `writtenBy` is set when someone saved another person's message ("Save to HubSpot"):
+// the note then says who wrote it and who saved it.
+function renderSpaceNote({ text, userDisplayName, userEmail, now, writtenBy }) {
   const who = userDisplayName ? `${userDisplayName} (${userEmail})` : userEmail;
+  const by = writtenBy === undefined ? `Added by ${who}` : `Written by ${writtenBy || 'a Team Member'}, saved by ${who}`;
   return [
     '<p><strong>Note from the deal space</strong></p>',
     `<p>${escapeHtml(text).split('\n').join('<br>')}</p>`,
-    `<p>Added by ${escapeHtml(who)} in Google Chat, ${writtenAt(now)} MT.</p>`,
+    `<p>${escapeHtml(by)} in Google Chat, ${writtenAt(now)} MT.</p>`,
   ].join('');
 }
 
 function createSpaceNotes({ db, createDealNote, log, now = () => new Date() }) {
   // Returns the reply to post in the space.
-  return async function saveSpaceNote({ spaceName, userEmail, userDisplayName, text }) {
+  return async function saveSpaceNote({ spaceName, userEmail, userDisplayName, text, writtenBy }) {
     const note = String(text || '').trim();
     if (!note) return SAY.empty;
     if (note.length > MAX_CHARS) return SAY.tooLong;
@@ -53,7 +56,7 @@ function createSpaceNotes({ db, createDealNote, log, now = () => new Date() }) {
       dealNumber = space.dealNumber;
       const at = now();
       // Also on the Roamer's contact, so the next brief reads it (and is rewritten, not reused).
-      const id = await createDealNote({ dealId: space.dealId, contactId: deal.contactId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at }), timestamp: at.toISOString() });
+      const id = await createDealNote({ dealId: space.dealId, contactId: deal.contactId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at, writtenBy }), timestamp: at.toISOString() });
       // The note is in HubSpot by now; failing to record it here must not say otherwise.
       await db.recordSpaceNote({ noteId: id, dealId: space.dealId, spaceName, user: userEmail, chars: note.length }).catch((e) => log('ERROR', 'could not record space note', { dealNumber, noteId: id, error: errorFields(e) }));
       log('INFO', 'space note saved', { dealNumber, space: spaceName, noteId: id, user: userEmail, chars: note.length });

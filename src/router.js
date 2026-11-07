@@ -31,10 +31,11 @@ const MESSAGES = {
 
 const STORES = new Set(['UT']);
 
-// Slash commands, by the id each has in the Chat app configuration (Chat API > Configuration
-// > Commands). /ask and /wow are registered ahead of the build so Team Members see them;
-// until built they say so.
-const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow' };
+// App commands, by the id each has in the Chat app configuration (Chat API > Configuration
+// > Commands). 1 to 3 are slash commands; 4 is the "Save to HubSpot" message action, chosen
+// from any message's menu, which saves that whole message. /ask and /wow are registered
+// ahead of the build so Team Members see them; until built they say so.
+const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage' };
 const NOT_BUILT = {
   ask: "/ask isn't built yet. It will send a question to the Team Member who owns the answer.",
   wow: "/wow isn't built yet. It will suggest a personal WOW for this Roamer's delivery, from the brief.",
@@ -139,7 +140,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
 
     // Home and card clicks are new to this router; log their shape (keys only) so the
     // real event format can be checked against what we expect.
-    if (event.type === 'APP_HOME' || event.type === 'CARD_CLICKED') {
+    if (event.type === 'APP_HOME' || event.type === 'CARD_CLICKED' || event.commandId) {
       log('INFO', 'chat event shape', { type: event.type, shape: shapeOf(body) });
     }
 
@@ -228,8 +229,12 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       const slash = event.commandId ? SLASH_COMMANDS[event.commandId] : null;
       if (event.commandId && !slash) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (NOT_BUILT[slash]) return { status: 200, body: replyFor(event, NOT_BUILT[slash]) };
-      // "/note <text>" arrives with only the text; it is the same as "note <text>".
-      const cmd = slash === 'note' ? { command: 'note', text: event.text } : parseCommand(event.text);
+      // "/note <text>" arrives with only the text; it is the same as "note <text>". "Save to
+      // HubSpot" on a message saves the whole message, credited to whoever wrote it.
+      let cmd;
+      if (slash === 'note') cmd = { command: 'note', text: event.text };
+      else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
+      else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (cmd.command === 'note') {
         if (event.isDirectMessage) return { status: 200, body: replyFor(event, NOTE_SAY.directOnly) };
@@ -240,6 +245,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
           userEmail: event.userEmail,
           userDisplayName: event.userDisplayName,
           text: cmd.text,
+          ...(cmd.writtenBy !== undefined ? { writtenBy: cmd.writtenBy } : {}),
         });
         return { status: 200, body: replyFor(event, said) };
       }

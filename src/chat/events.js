@@ -12,6 +12,10 @@ function fromMessage(message) {
   return {
     // argumentText drops the @Basecamp mention in spaces; text is the full message.
     text: (message.argumentText || message.text || '').trim(),
+    // For a message action ("Save to HubSpot" on someone's message): the whole message and
+    // who wrote it, which may be someone other than the person who chose the action.
+    fullText: (message.text || '').trim(),
+    senderDisplayName: message.sender && message.sender.displayName ? String(message.sender.displayName) : null,
     messageName: message.name || null,
     threadName: message.thread ? message.thread.name : null,
   };

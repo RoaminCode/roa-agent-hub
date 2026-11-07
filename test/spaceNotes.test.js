@@ -151,3 +151,28 @@ test('"/note <text>" is the same as "note <text>"; /ask and /wow say they are no
   assert.strictEqual(parseEvent({ type: 'MESSAGE', space: { name: 'spaces/X' }, user: {}, message: { text: '/note hi', argumentText: ' hi', slashCommand: { commandId: '1' } } }).commandId, '1');
   assert.strictEqual(parseEvent({ type: 'MESSAGE', space: { name: 'spaces/X' }, user: {}, message: { text: 'hi' } }).commandId, null);
 });
+
+test('"Save to HubSpot" on a message saves the whole message, crediting its writer and the saver', async () => {
+  const notes = [];
+  const r = createRouter({ verify: async () => true, allowedUsers: ['casey@example.com'], saveSpaceNote: async (n) => (notes.push(n), 'ok') });
+  const action = {
+    commonEventObject: { hostApp: 'CHAT' },
+    chat: {
+      user: { email: 'casey@example.com', name: 'users/1', displayName: 'Casey Coach' },
+      eventTime: 't',
+      appCommandPayload: {
+        appCommandMetadata: { appCommandId: 4, appCommandType: 'MESSAGE_ACTION' },
+        space: { name: 'spaces/DEAL', spaceType: 'SPACE' },
+        message: { text: 'Roamer wants delivery moved to Saturday', sender: { displayName: 'Sam Service' } },
+      },
+    },
+  };
+  await r({ headers: { authorization: 'x' }, body: action });
+  assert.strictEqual(notes[0].text, 'Roamer wants delivery moved to Saturday');
+  assert.strictEqual(notes[0].writtenBy, 'Sam Service');
+  assert.strictEqual(
+    renderSpaceNote({ text: 'x', userDisplayName: 'Casey Coach', userEmail: 'casey@example.com', now: NOW, writtenBy: 'Sam Service' }),
+    '<p><strong>Note from the deal space</strong></p><p>x</p><p>Written by Sam Service, saved by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT.</p>',
+  );
+  assert.ok(renderSpaceNote({ text: 'x', userEmail: 'a@example.com', now: NOW, writtenBy: null }).includes('Written by a Team Member, saved by a@example.com'));
+});
