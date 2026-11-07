@@ -158,4 +158,13 @@ function homeUpdateFor(card) {
   return { action: { navigations: [{ updateCard: card }] } };
 }
 
-module.exports = { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf };
+// A dialog: opened with a card, closed when its work is done.
+function dialogFor(card) {
+  return { action: { navigations: [{ pushCard: card }] } };
+}
+
+function closeDialog() {
+  return { action: { navigations: [{ endNavigation: { action: 'CLOSE_DIALOG' } }] } };
+}
+
+module.exports = { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, dialogFor, closeDialog, shapeOf };

@@ -10,7 +10,7 @@
 // create it, or a button to ask the space to add you.
 
 const { errorFields } = require('./errors');
-const { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
+const { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, dialogFor, closeDialog, shapeOf } = require('./chat/events');
 const { renderNotAllowedHome } = require('./chat/homeCard');
 
 const MESSAGES = {
@@ -35,7 +35,7 @@ const STORES = new Set(['UT']);
 // > Commands). 1 to 3 are slash commands; 4 is the "Save to HubSpot" message action, chosen
 // from any message's menu, which saves that whole message. A command registered ahead of
 // its build would say so here (none now).
-const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage' };
+const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text' };
 const NOT_BUILT = {};
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
@@ -45,6 +45,8 @@ function parseCommand(text) {
   const t = text || '';
   const note = /^note\b:?\s*([\s\S]*)$/i.exec(t);
   if (note) return { command: 'note', text: note[1].trim() };
+  const textCmd = /^text\b:?\s*([\s\S]*)$/i.exec(t);
+  if (textCmd) return { command: 'text', text: textCmd[1].trim() };
   const wow = /^wow\b:?\s*([\s\S]*)$/i.exec(t);
   if (wow) return { command: 'wow', text: wow[1].trim() };
   const ask = /^ask\b:?\s*([\s\S]*)$/i.exec(t);
@@ -85,7 +87,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -210,6 +212,26 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       return { status: 200, body: updateMessageFor(event, said) };
     }
 
+    // Texts: "Review and send" opens the approval dialog; "Approve and send" sends the exact
+    // words in it; Cancel closes it. Only people who may brief can approve a text.
+    if (event.type === 'CARD_CLICKED' && ['textReview', 'textSend', 'textCancel'].includes(event.parameters.action)) {
+      const action = event.parameters.action;
+      if (action === 'textCancel') return { status: 200, body: closeDialog() };
+      const off = briefsOffFor(event.userEmail);
+      if (off) {
+        logRefused(off, event.userEmail);
+        postNotice({ spaceName: event.spaceName, threadName: event.threadName, text: MESSAGES[off] });
+        return { status: 200, body: closeDialog() };
+      }
+      if (action === 'textReview') {
+        const dialog = await reviewText({ params: event.parameters, userEmail: event.userEmail });
+        return { status: 200, body: dialog ? dialogFor(dialog) : closeDialog() };
+      }
+      const said = await sendText({ params: event.parameters, formInputs: event.formInputs, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
+      postNotice({ spaceName: event.spaceName, threadName: event.threadName, text: said });
+      return { status: 200, body: closeDialog() };
+    }
+
     // "Use this one" on a WOW idea: saved to the Delivery record, remembered in the library. No AI.
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'wowPick') {
       const said = await chooseWow({ params: event.parameters, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
@@ -280,7 +302,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       // "/note <text>" arrives with only the text; it is the same as "note <text>". "Save to
       // HubSpot" on a message saves the whole message, credited to whoever wrote it.
       let cmd;
-      if (slash === 'note' || slash === 'ask' || slash === 'wow') cmd = { command: slash, text: event.text };
+      if (slash === 'note' || slash === 'ask' || slash === 'wow' || slash === 'text') cmd = { command: slash, text: event.text };
       else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
@@ -304,6 +326,11 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       if (off) {
         logRefused(off, event.userEmail);
         return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
+      if (cmd.command === 'text') {
+        // A draft for review (one short AI call); nothing is sent until someone approves it.
+        const said = await startText({ spaceName: event.spaceName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, text: cmd.text });
+        return { status: 200, body: replyFor(event, said) };
       }
       if (cmd.command === 'wow') {
         // Not awaited: ideas take a larger AI call and are posted in this thread when ready.

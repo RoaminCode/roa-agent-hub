@@ -9,6 +9,10 @@
 //   BRIEF_USERS     comma-separated emails who may start a Roamer brief, the only thing that
 //                   spends AI credits. Unset or empty means nobody. Each must also be in
 //                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
+//   ALOWARE_API_TOKEN from Secret Manager (aloware-api-token); with TEXT_TEST_NUMBERS, turns on
+//                   approved texts (/text)
+//   TEXT_TEST_NUMBERS "email=phone,email=phone": in shadow mode the only numbers that can be
+//                   texted, each approver's own (Blake's and Shane's)
 //   WOW_SHEET_ID    the "ROA WOW Ideas" Google Sheet /wow reads and updates (shared with
 //                   basecamp-router as an editor); unset, the database library is used
 //   SHADOW_REVIEWER the email that gets every routed question in shadow mode (Blake); unset,
@@ -37,6 +41,8 @@ const { createDb } = require('./db');
 const { createQuestionRouter } = require('./askJob');
 const { createQaNotes } = require('./hubspot/qaNotes');
 const { createWow } = require('./wowJob');
+const { createTexts } = require('./textJob');
+const { createAloware } = require('./aloware');
 const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries } = require('./hubspot/deliveries');
 const { Firestore } = require('@google-cloud/firestore');
@@ -107,6 +113,9 @@ function features(audience) {
   let clarifyQuestion = async () => "Questions aren't switched on yet.";
   let reuseVerdict = async () => "Questions aren't switched on yet.";
   let startWow = () => {};
+  let startText = async () => "Texts aren't switched on yet.";
+  let reviewText = async () => null;
+  let sendText = async () => "Texts aren't switched on yet.";
   let chooseWow = async () => "WOW plans aren't switched on yet.";
   let listWowIdeas = async () => "WOW plans aren't switched on yet.";
   if (!hubspot || !ANTHROPIC_API_KEY) {
@@ -156,6 +165,30 @@ function features(audience) {
     startWow = later('wow', async (job) => sendMessage(job.spaceName, await wowPlans.wow(job), { threadName: job.threadName }));
     chooseWow = wowPlans.choose;
     listWowIdeas = wowPlans.listIdeas;
+
+    // Approved texts. Shadow mode: only the numbers in TEXT_TEST_NUMBERS can be texted.
+    const { ALOWARE_API_TOKEN, TEXT_TEST_NUMBERS } = process.env;
+    if (ALOWARE_API_TOKEN && TEXT_TEST_NUMBERS) {
+      const testNumbers = Object.fromEntries(list(TEXT_TEST_NUMBERS).map((pair) => pair.split('=').map((x) => x.trim())).filter((p) => p.length === 2));
+      const texts = createTexts({
+        anthropic,
+        db,
+        hubspot,
+        createNote: hubspot.createNote,
+        findDealSpace,
+        aloware: createAloware({ token: ALOWARE_API_TOKEN, allowedNumbers: Object.values(testNumbers) }),
+        testNumbers,
+        line: { id: '67519', label: 'UT - Sales, (385) 378-8538' },
+        sendMessage,
+        log,
+        endpoint: audience,
+      });
+      startText = texts.start;
+      reviewText = texts.review;
+      sendText = texts.send;
+    } else {
+      log('WARNING', 'texts are off: ALOWARE_API_TOKEN or TEXT_TEST_NUMBERS is not set');
+    }
     startBrief = (job) => {
       spaceFor(job)
         .then((spaceName) => runBrief({ ...job, spaceName }))
@@ -219,7 +252,13 @@ function features(audience) {
     });
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startWow, chooseWow, listWowIdeas, seenPerson, saveSpaceNote, buildHome };
+  // A line posted in a thread after a dialog closes (a dialog's reply can't carry one).
+  function postNotice({ spaceName, threadName, text }) {
+    if (!spaceName || !text) return;
+    sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
+  }
+
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {
