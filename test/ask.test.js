@@ -93,7 +93,7 @@ test('a question goes to Blake labeled with its role and topic, is kept in HubSp
       null,
     ],
   ]);
-  assert.deepStrictEqual(qa, [['question', { dealId: '111', contactId: '77', deliveryId: null, topic: 'awning arm', question: 'Has the awning arm come in?', askedBy: 'Casey Coach', at: NOW }]]);
+  assert.deepStrictEqual(qa, [['question', { contactId: '77', deliveryId: null, topic: 'awning arm', question: 'Has the awning arm come in?', askedBy: 'Casey Coach', at: NOW }]]);
   const [q] = Object.values(data.questions);
   assert.deepStrictEqual(q, {
     dealId: '111',
@@ -183,13 +183,13 @@ test('Q&A notes: a topic note with the question, answers added only to a note th
   );
   const calls = [];
   const hubspot = {
-    createDealNote: async (n) => (calls.push(['create', n]), '555'),
+    createNote: async (n) => (calls.push(['create', n]), '555'),
     get: async () => ({ properties: { hs_note_body: renderQaNote({ topic: 'awning arm', question: 'q', askedBy: 'C', at: NOW }) } }),
     updateNote: async (u) => (calls.push(['update', u]), u.noteId),
   };
   const notes = createQaNotes({ hubspot });
-  await notes.addQuestion({ dealId: '111', contactId: '77', topic: 'awning arm', question: 'q', askedBy: 'C', at: NOW });
-  assert.strictEqual(calls[0][1].contactId, '77');
+  await notes.addQuestion({ contactId: '77', deliveryId: '888', topic: 'awning arm', question: 'q', askedBy: 'C', at: NOW });
+  assert.deepStrictEqual([calls[0][1].contactId, calls[0][1].deliveryId, calls[0][1].dealId], ['77', '888', undefined]);
   await notes.addAnswer({ noteId: '555', answer: 'Tuesday', answeredBy: 'Blake Locke', at: NOW });
   const update = calls[1][1];
   assert.ok(update.body.endsWith('<p><strong>A</strong> (Nov 7, 12:00 PM MT, Blake Locke): Tuesday</p>'));

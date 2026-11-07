@@ -19,24 +19,25 @@ test('the HubSpot client only POSTs to search and batch read', async () => {
 
 test('the HubSpot client offers no writes but the note and Delivery record methods', () => {
   const hubspot = createHubSpotClient({ token: 't', fetchImpl: async () => ok({}) });
-  assert.deepStrictEqual(Object.keys(hubspot).sort(), ['createDealNote', 'createDelivery', 'get', 'linkNoteToDelivery', 'post', 'updateNote']);
+  assert.deepStrictEqual(Object.keys(hubspot).sort(), ['createDelivery', 'createNote', 'get', 'linkNoteToDelivery', 'post', 'updateNote']);
 });
 
-test('createDealNote creates one note on one deal, and nothing else', async () => {
+test('createNote creates one note on the Roamer, and never on the deal', async () => {
   const calls = [];
   const hubspot = createHubSpotClient({ token: 't', fetchImpl: async (url, opts) => (calls.push([opts.method, url, JSON.parse(opts.body)]), ok({ id: 555 })) });
-  assert.strictEqual(await hubspot.createDealNote({ dealId: '111', body: '<p>x</p>', timestamp: '2026-11-07T03:14:00.000Z' }), '555');
+  assert.strictEqual(await hubspot.createNote({ contactId: '77', body: '<p>x</p>', timestamp: '2026-11-07T03:14:00.000Z' }), '555');
   assert.deepStrictEqual(calls, [
     [
       'POST',
       'https://api.hubapi.com/crm/v3/objects/notes',
       {
         properties: { hs_timestamp: '2026-11-07T03:14:00.000Z', hs_note_body: '<p>x</p>' },
-        associations: [{ to: { id: '111' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] }],
+        associations: [{ to: { id: '77' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }],
       },
     ],
   ]);
-  await assert.rejects(hubspot.createDealNote({ dealId: '111/../contacts/5', body: 'x', timestamp: 't' }), /invalid deal id/);
+  await assert.rejects(hubspot.createNote({ contactId: '77/../deals/5', body: 'x', timestamp: 't' }), /invalid contact id/);
+  await assert.rejects(hubspot.createNote({ body: 'x', timestamp: 't' }), /a contact or a Delivery record is required/);
 });
 
 test("updateNote reads the note first and refuses one that is not Basecamp's own", async () => {
@@ -264,15 +265,17 @@ test('finding a deal space reads only the deal and its brief note', async () => 
   assert.strictEqual(await createDealContext({ hubspot: fakeHubSpot({ deals: 2 }) }).findDealSpace({ dealNumber: '90001' }), null);
 });
 
-test('createDealNote also puts the note on the Roamer when given a contact', async () => {
+test('createNote puts the note on the Roamer and the Delivery record, never the deal', async () => {
   const calls = [];
   const hubspot = createHubSpotClient({ token: 't', fetchImpl: async (url, opts) => (calls.push(JSON.parse(opts.body)), ok({ id: 556 })) });
-  await hubspot.createDealNote({ dealId: '111', contactId: '77', body: '<p>x</p>', timestamp: 't' });
+  await hubspot.createNote({ contactId: '77', deliveryId: '888', body: '<p>x</p>', timestamp: 't' });
   assert.deepStrictEqual(calls[0].associations, [
-    { to: { id: '111' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] },
     { to: { id: '77' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] },
+    { to: { id: '888' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }] },
   ]);
-  await assert.rejects(hubspot.createDealNote({ dealId: '111', contactId: '77/x', body: 'x', timestamp: 't' }), /invalid contact id/);
+  await hubspot.createNote({ deliveryId: '888', body: 'x', timestamp: 't' });
+  assert.strictEqual(calls[1].associations.length, 1);
+  await assert.rejects(hubspot.createNote({ contactId: '77', deliveryId: '8/x', body: 'x', timestamp: 't' }), /invalid delivery id/);
 });
 
 test("with Basecamp's record, the brief note is read by id and the space and signature come from the record", async () => {
@@ -306,7 +309,7 @@ test('saving a brief note records its id and what it was built from', async () =
   const { createDb } = require('../src/db');
   const { createFakeFirestore } = require('./fakeFirestore');
   const firestore = createFakeFirestore();
-  const save = createBriefNoteSaver({ hubspot: { createDealNote: async () => '321' }, db: createDb({ firestore }) });
+  const save = createBriefNoteSaver({ hubspot: { createNote: async () => '321' }, db: createDb({ firestore }) });
   const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
   await save({ context: { store: 'UT', deal: { id: '111', properties: { ls_deal_number: '90001' } }, contact: { id: '77' }, items: [{ at: '2026-11-01T00:00:00Z' }], briefNote: null }, brief });
   const rec = firestore.data.deals['111'];
@@ -333,8 +336,8 @@ test('createDelivery makes one Delivery record at Deposit Received, named, linke
   ]);
   await hubspot.linkNoteToDelivery({ noteId: '5', deliveryId: '888' });
   assert.deepStrictEqual(calls[1], ['PUT', 'https://api.hubapi.com/crm/v4/objects/notes/5/associations/2-59426991/888', [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }]]);
-  await hubspot.createDealNote({ dealId: '111', contactId: '77', deliveryId: '888', body: 'x', timestamp: 't' });
-  assert.deepStrictEqual(calls[2][2].associations[2], { to: { id: '888' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }] });
+  await hubspot.createNote({ contactId: '77', deliveryId: '888', body: 'x', timestamp: 't' });
+  assert.deepStrictEqual(calls[2][2].associations[1], { to: { id: '888' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }] });
   await assert.rejects(hubspot.createDelivery({ dealId: '1/../x', name: 'n' }), /invalid deal id/);
   await assert.rejects(hubspot.createDelivery({ dealId: '111' }), /a name is required/);
   await assert.rejects(hubspot.linkNoteToDelivery({ noteId: '5', deliveryId: '8/x' }), /invalid id/);

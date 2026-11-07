@@ -82,17 +82,17 @@ test('a saved brief matches only the same Roamer, item count, and newest item', 
   assert.ok(!sameSignature(null, sig));
 });
 
-test('the saver creates the deal\'s brief note, or updates the one it has', async () => {
+test('the saver creates the brief note on the Roamer, or updates the one it has', async () => {
   const calls = [];
   const hubspot = {
-    createDealNote: async (args) => (calls.push(['create', args.dealId, args.timestamp]), '900'),
+    createNote: async (args) => (calls.push(['create', args.contactId, args.timestamp]), '900'),
     updateNote: async (args) => (calls.push(['update', args.noteId, args.isOurs(`<p><strong>${MARKER}</strong></p>`), args.isOurs('<p>Team note</p>')]), args.noteId),
   };
   const save = createBriefNoteSaver({ hubspot, now: () => now });
   assert.deepStrictEqual(await save({ context: { ...context, briefNote: null }, brief }), { id: '900', updated: false });
   assert.deepStrictEqual(await save({ context: { ...context, briefNote: { id: '901' } }, brief }), { id: '901', updated: true });
   assert.deepStrictEqual(calls, [
-    ['create', '111', '2026-11-07T03:14:00.000Z'],
+    ['create', '222', '2026-11-07T03:14:00.000Z'],
     ['update', '901', true, false],
   ]);
 });

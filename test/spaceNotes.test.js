@@ -25,7 +25,7 @@ async function harness({ contactId = null, failWrite = null, db = null } = {}) {
   const linked = db ? { db, data: null } : await linkedDb({ contactId });
   const save = createSpaceNotes({
     db: linked.db,
-    createDealNote: async (n) => {
+    createNote: async (n) => {
       calls.push(['create', n]);
       if (failWrite) throw failWrite;
       return '555';
@@ -40,8 +40,10 @@ async function harness({ contactId = null, failWrite = null, db = null } = {}) {
 test('a note in the deal space is saved to that deal, as written, signed and timed, and recorded', async () => {
   const { calls, logs, run, data } = await harness();
   assert.strictEqual(await run(), SAY.saved('90001'));
-  const { dealId, body, timestamp } = calls[0][1];
-  assert.strictEqual(dealId, '111');
+  const { dealId, contactId, body, timestamp } = calls[0][1];
+  // Never on the deal: on the Roamer (and the Delivery record once the deal has one).
+  assert.strictEqual(dealId, undefined);
+  assert.strictEqual(contactId, null);
   assert.strictEqual(timestamp, NOW.toISOString());
   assert.strictEqual(
     body,
@@ -186,14 +188,14 @@ test('a note in a direct message names its deal and is saved there', async () =>
   const created = [];
   const save = createSpaceNotes({
     db: createDb({ firestore, now: () => NOW }),
-    createDealNote: async (n) => (created.push(n), '777'),
-    findDealSpace: async ({ dealNumber }) => (dealNumber === '90001' ? { deal: { id: '111' }, spaceName: null, contactId: '77' } : null),
+    createNote: async (n) => (created.push(n), '777'),
+    findDealSpace: async ({ dealNumber }) => (dealNumber === '90001' ? { deal: { id: '111' }, spaceName: null, contactId: '77', deliveryId: '888' } : null),
     log: () => {},
     now: () => NOW,
   });
   const dm = (text) => save({ spaceName: 'spaces/DM', isDirectMessage: true, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text });
   assert.strictEqual(await dm('90001 Pat wants Saturday'), SAY.saved('90001'));
-  assert.deepStrictEqual({ dealId: created[0].dealId, contactId: created[0].contactId }, { dealId: '111', contactId: '77' });
+  assert.deepStrictEqual({ dealId: created[0].dealId, contactId: created[0].contactId, deliveryId: created[0].deliveryId }, { dealId: undefined, contactId: '77', deliveryId: '888' });
   assert.ok(created[0].body.startsWith('<p><strong>Note from Basecamp</strong></p><p>Pat wants Saturday</p>'));
   assert.strictEqual(firestore.data.spaceNotes['777'].spaceName, 'spaces/DM');
 

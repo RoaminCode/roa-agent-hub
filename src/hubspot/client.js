@@ -2,7 +2,7 @@
 
 // Minimal HubSpot API client. Reads: GET, plus POST only to search and batch-read
 // endpoints, which read data. Agents never edit HubSpot fields. The only writes are narrow
-// methods: create a note on a deal, update a note that a check proves is Basecamp's own,
+// methods: create a note on a Roamer and a Delivery record (never on a deal), update a note that a check proves is Basecamp's own,
 // create a deal's Delivery record (stage Deposit Received, its name and trailer) linked to
 // the deal and the Roamer, and link a note to a Delivery record. There is no general write.
 
@@ -12,8 +12,7 @@ const BASE = 'https://api.hubapi.com';
 const READ_POST = /\/(search|batch\/read)$/;
 const NOTES = '/crm/v3/objects/notes';
 const NOTE_PATH = /^\/crm\/v3\/objects\/notes\/\d+$/;
-// HubSpot's association types for a note on a deal and on a contact.
-const NOTE_TO_DEAL = 214;
+// HubSpot's association type for a note on a contact.
 const NOTE_TO_CONTACT = 202;
 
 // The Delivery custom object, its pipeline's first stage, and its association types
@@ -66,22 +65,22 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     return res.json();
   }
 
-  // A new note on one deal, and also on the deal's Roamer when `contactId` is given (so the
-  // Roamer's record, which briefs read, includes it) and on its Delivery record when
-  // `deliveryId` is given. Returns the note's id.
-  async function createDealNote({ dealId, contactId = null, deliveryId = null, body, timestamp }) {
-    if (!/^\d+$/.test(String(dealId))) throw safeError('createDealNote: invalid deal id');
-    if (contactId !== null && !/^\d+$/.test(String(contactId))) throw safeError('createDealNote: invalid contact id');
-    if (deliveryId !== null && !/^\d+$/.test(String(deliveryId))) throw safeError('createDealNote: invalid delivery id');
-    const on = (id, typeId, category = 'HUBSPOT_DEFINED') => ({ to: { id: String(id) }, types: [{ associationCategory: category, associationTypeId: typeId }] });
+  // A new note on the Roamer (`contactId`, whose record briefs read) and on the deal's
+  // Delivery record (`deliveryId`), whichever are given; at least one is. Never on the deal
+  // itself (Blake's call, 2026-11-07): the Delivery record is the delivery's home. Returns
+  // the note's id.
+  async function createNote({ contactId = null, deliveryId = null, body, timestamp }) {
+    if (contactId === null && deliveryId === null) throw safeError('createNote: a contact or a Delivery record is required');
+    if (contactId !== null && !/^\d+$/.test(String(contactId))) throw safeError('createNote: invalid contact id');
+    if (deliveryId !== null && !/^\d+$/.test(String(deliveryId))) throw safeError('createNote: invalid delivery id');
+    const on = (id, typeId, category) => ({ to: { id: String(id) }, types: [{ associationCategory: category, associationTypeId: typeId }] });
     const note = await request(
       'POST',
       NOTES,
       {
         properties: { hs_timestamp: timestamp, hs_note_body: body },
         associations: [
-          on(dealId, NOTE_TO_DEAL),
-          ...(contactId !== null ? [on(contactId, NOTE_TO_CONTACT)] : []),
+          ...(contactId !== null ? [on(contactId, NOTE_TO_CONTACT, 'HUBSPOT_DEFINED')] : []),
           ...(deliveryId !== null ? [on(deliveryId, NOTE_TO_DELIVERY, 'USER_DEFINED')] : []),
         ],
       },
@@ -136,7 +135,7 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
   return {
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, body),
-    createDealNote,
+    createNote,
     updateNote,
     createDelivery,
     linkNoteToDelivery,

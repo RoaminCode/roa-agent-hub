@@ -103,7 +103,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       let noteId = null;
       if (dealId && qaNotes) {
         noteId = await qaNotes
-          .addQuestion({ dealId, contactId, deliveryId, topic: routed.topic, question, askedBy: nameOf(userDisplayName, userEmail), at: now() })
+          .addQuestion({ contactId, deliveryId, topic: routed.topic, question, askedBy: nameOf(userDisplayName, userEmail), at: now() })
           .catch((e) => (log('ERROR', 'could not save question to HubSpot', { dealNumber, error: errorFields(e) }), null));
       }
 

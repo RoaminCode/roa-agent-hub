@@ -202,12 +202,14 @@ function createDealContext({ hubspot, db = null }) {
   // With Basecamp's record of the deal (`record`, from the database), the note is read
   // directly by its id, and what the brief was built from comes from the record, which
   // no one edits by hand. Without one, or if that note is gone, the deal's notes are searched.
-  async function findBriefNote(dealId, record = null) {
+  // Brief notes are on the Roamer (and the Delivery record), not the deal, since 2026-11-07;
+  // the deal's notes are searched too for brief notes written before then.
+  async function findBriefNote(dealId, record = null, contactId = null) {
     if (record && record.briefNoteId) {
       const direct = await readBriefNote(record.briefNoteId);
       if (direct) return { ...direct, signature: record.briefSignature || direct.signature };
     }
-    const ids = await associatedIds('deals', dealId, 'notes');
+    const ids = [...new Set([...(await associatedIds('deals', dealId, 'notes')), ...(contactId ? await associatedIds('contacts', contactId, 'notes') : [])])];
     if (!ids.length) return null;
     const { records } = await batchRead('notes', ids, ['hs_note_body', 'hs_timestamp']);
     const ours = records
@@ -300,7 +302,7 @@ function createDealContext({ hubspot, db = null }) {
     }
     const { items, omitted } = fitBudget(all);
     const record = await recordOf(deal.id);
-    const briefNote = await findBriefNote(deal.id, record);
+    const briefNote = await findBriefNote(deal.id, record, contact.id);
 
     return {
       found: true,
@@ -313,6 +315,8 @@ function createDealContext({ hubspot, db = null }) {
       briefNote,
       // The deal's Chat space, or null.
       spaceName: spaceOf(record, briefNote),
+      // The deal's Delivery record, once it has one; Basecamp's notes go there.
+      deliveryId: (record && record.deliveryId) || null,
       // Items kept but shortened to fit, and records HubSpot did not return.
       clipped: items.filter((i) => i.clipped).length,
       missing,
@@ -326,9 +330,9 @@ function createDealContext({ hubspot, db = null }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal || deal.duplicate) return null;
     const record = await recordOf(deal.id);
-    const note = await findBriefNote(deal.id, record);
+    const note = await findBriefNote(deal.id, record, record && record.contactId);
     const contactId = (record && record.contactId) || (note && note.signature && note.signature.contactId) || null;
-    return { deal, spaceName: spaceOf(record, note), contactId };
+    return { deal, spaceName: spaceOf(record, note), contactId, deliveryId: (record && record.deliveryId) || null };
   };
 
   return load;

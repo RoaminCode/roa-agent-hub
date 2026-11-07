@@ -20,7 +20,8 @@ function createBriefNoteSaver({ hubspot, db = null, now = () => new Date() }) {
       const id = await hubspot.updateNote({ noteId: context.briefNote.id, body, timestamp, isOurs: (html) => isBriefNoteText(cleanText(html)) });
       saved = { id, updated: true };
     } else {
-      saved = { id: await hubspot.createDealNote({ dealId: context.deal.id, body, timestamp }), updated: false };
+      // On the Roamer, and on the deal's Delivery record once it has one (never the deal).
+      saved = { id: await hubspot.createNote({ contactId: context.contact ? context.contact.id : null, deliveryId: context.deliveryId || null, body, timestamp }), updated: false };
     }
     if (db) {
       await db.recordBrief({

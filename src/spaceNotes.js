@@ -44,12 +44,14 @@ function renderSpaceNote({ text, userDisplayName, userEmail, now, writtenBy, fro
 
 // `findDealSpace({ dealNumber })` finds a deal by number in HubSpot, for notes sent in a
 // direct message, which name their deal: "note 51455 <text>".
-function createSpaceNotes({ db, createDealNote, findDealSpace, log, now = () => new Date() }) {
+function createSpaceNotes({ db, createNote, findDealSpace, log, now = () => new Date() }) {
   // Saves the note on the deal and its Roamer and records it. Returns the reply.
   async function write({ dealId, contactId, deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, writtenBy, fromSpace }) {
     const at = now();
     // Also on the Roamer's contact, so the next brief reads it (and is rewritten, not reused).
-    const id = await createDealNote({ dealId, contactId: contactId || null, deliveryId: deliveryId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at, writtenBy, fromSpace }), timestamp: at.toISOString() });
+    // On the Roamer and the deal's Delivery record, never the deal itself. `dealId` is kept
+    // only in Basecamp's records.
+    const id = await createNote({ contactId: contactId || null, deliveryId: deliveryId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at, writtenBy, fromSpace }), timestamp: at.toISOString() });
     // The note is in HubSpot by now; failing to record it here must not say otherwise.
     await db.recordSpaceNote({ noteId: id, dealId, spaceName, user: userEmail, chars: note.length }).catch((e) => log('ERROR', 'could not record space note', { dealNumber, noteId: id, error: errorFields(e) }));
     log('INFO', 'space note saved', { dealNumber, space: spaceName, noteId: id, user: userEmail, chars: note.length });
@@ -67,7 +69,7 @@ function createSpaceNotes({ db, createDealNote, findDealSpace, log, now = () => 
     try {
       const found = await findDealSpace({ dealNumber });
       if (!found) return SAY.noDeal(dealNumber);
-      return await write({ dealId: found.deal.id, contactId: found.contactId, dealNumber, spaceName, note, userEmail, userDisplayName, fromSpace: false });
+      return await write({ dealId: found.deal.id, contactId: found.contactId, deliveryId: found.deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, fromSpace: false });
     } catch (err) {
       log('ERROR', 'space note failed', { dealNumber, space: spaceName, error: errorFields(err) });
       return SAY.failed(dealNumber);

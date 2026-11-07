@@ -262,7 +262,7 @@ test('the brief note remembers the deal space, and a rerun keeps it', async () =
   assert.strictEqual(parseBriefNote(cleanText(renderBriefNote({ brief, context: ctx }))).spaceName, null);
 
   const bodies = [];
-  const hubspot = { updateNote: async (a) => (bodies.push(a.body), a.noteId), createDealNote: async () => 'x' };
+  const hubspot = { updateNote: async (a) => (bodies.push(a.body), a.noteId), createNote: async () => 'x' };
   const save = createBriefNoteSaver({ hubspot });
   await save({ context: { ...ctx, deal: { id: '111' }, briefNote: { id: '9', spaceName: 'spaces/AbC-12' } }, brief });
   assert.strictEqual(parseBriefNote(cleanText(bodies[0])).spaceName, 'spaces/AbC-12');

@@ -25,11 +25,11 @@ function renderQaNote({ topic, question, askedBy, at }) {
   return `<p><strong>${escapeHtml(`${MARKER} ${topic}`)}</strong></p>${entry('Q', at, askedBy, question)}`;
 }
 
-// `hubspot` is the client (get, createDealNote, updateNote).
+// `hubspot` is the client (get, createNote, updateNote).
 function createQaNotes({ hubspot }) {
-  // A new topic note on the deal, its Roamer, and its Delivery record when it has one. Returns its id.
-  async function addQuestion({ dealId, contactId, deliveryId = null, topic, question, askedBy, at }) {
-    return hubspot.createDealNote({ dealId, contactId: contactId || null, deliveryId: deliveryId || null, body: renderQaNote({ topic, question, askedBy, at }), timestamp: at.toISOString() });
+  // A new topic note on the Roamer and the deal's Delivery record (never the deal). Returns its id.
+  async function addQuestion({ contactId, deliveryId = null, topic, question, askedBy, at }) {
+    return hubspot.createNote({ contactId: contactId || null, deliveryId: deliveryId || null, body: renderQaNote({ topic, question, askedBy, at }), timestamp: at.toISOString() });
   }
 
   // Adds an answer to the end of a topic note, which must still be Basecamp's Q&A note.
