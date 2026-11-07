@@ -1,9 +1,10 @@
 'use strict';
 
 // Basecamp's router. It verifies the request came from Google Chat, checks the sender is
-// allowed, and routes the event. The one command so far is "brief <deal#> [store]",
-// which answers right away and posts the Roamer brief when it is ready. App Home shows
-// open deals, each with a Brief button that does the same.
+// allowed, and routes the event. Commands: "brief <deal#> [store]", which answers right
+// away and posts the Roamer brief when it is ready, and "open a space for <deal#>", which
+// opens the deal's Chat space with the brief as its first post. App Home shows open deals,
+// each with a Brief button.
 
 const { errorFields } = require('./errors');
 const { parseEvent, replyFor, updateMessageFor, homeFor, homeUpdateFor, shapeOf } = require('./chat/events');
@@ -11,7 +12,9 @@ const { renderNotAllowedHome } = require('./chat/homeCard');
 
 const MESSAGES = {
   added: "Basecamp is here. I'm in shadow mode. Try \"brief 51431\" for a Roamer brief on a Utah deal.",
-  help: 'Try "brief 51431" for a Roamer brief on a Utah deal.',
+  help: 'Try "brief 51431" for a Roamer brief on a Utah deal, or "open a space for 51431" for its deal space.',
+  opening: (n) => `Opening a space for deal ${n}. I'll post the link here when it's ready.`,
+  spaceDirectOnly: (n) => `Ask me to open the space for deal ${n} in a direct message with me.`,
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
   paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out. Home still shows every deal, delivery, and last contact.",
@@ -22,10 +25,15 @@ const MESSAGES = {
 
 const STORES = new Set(['UT']);
 
-// "brief 51431" or "brief 51431 UT". Deal numbers are digits only.
+// "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
+// Deal numbers are digits only.
 function parseCommand(text) {
-  const m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(text || '');
-  return m ? { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() } : null;
+  const t = text || '';
+  let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
+  if (m) return { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
+  m = /^open\s+(?:a\s+)?(?:deal\s+)?space\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
+  if (m) return { command: 'space', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
+  return null;
 }
 
 function log(severity, message, fields = {}) {
@@ -42,7 +50,7 @@ function log(severity, message, fields = {}) {
 // else allowed keeps Home but gets a short answer instead of a brief. Left out, every
 // allowed user may brief (tests only); server.js always passes it, so an empty BRIEF_USERS
 // means nobody.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -178,6 +186,13 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
         return { status: 200, body: replyFor(event, MESSAGES[off]) };
       }
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
+      if (cmd.command === 'space') {
+        // Asked for in a direct message, where the reply (with the Roamer's name) is private.
+        // Opening a space can write a brief, so it needs the same brief permission.
+        if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.spaceDirectOnly(cmd.dealNumber)) };
+        startSpace({ spaceName: event.spaceName, userName: event.userName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
+        return { status: 200, body: replyFor(event, MESSAGES.opening(cmd.dealNumber)) };
+      }
       // A brief holds a Roamer's personal details, so it is posted only where the reader
       // should see them: a direct message with Basecamp. When deal spaces exist, a deal's
       // space will also get briefs for that deal, and only that deal.

@@ -208,13 +208,23 @@ function createDealContext({ hubspot }) {
       .sort((a, b) => b.at.localeCompare(a.at));
     if (!ours.length) return null;
     const parsed = parseBriefNote(ours[0].text);
-    return { id: ours[0].id, brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null };
+    return { id: ours[0].id, brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null, spaceName: parsed ? parsed.spaceName : null };
+  }
+
+  // The contact the deal's brief note was written for, if still on the deal; null otherwise.
+  async function pickedBefore(dealId, contactIds) {
+    const note = await findBriefNote(dealId);
+    const id = note && note.signature ? note.signature.contactId : null;
+    return id && contactIds.includes(id) ? id : null;
   }
 
   // `contactId` is the Roamer someone picked when the deal has more than one contact.
+  // `rememberPick`: with several contacts and none picked, use the Roamer the deal's brief
+  // note was written for, if still on the deal. Opening a space uses it, so the Roamer
+  // already picked for the brief is not asked for again.
   // Without it, a deal with several contacts returns `choices` instead of a context, so
   // Basecamp can ask which one is the Roamer rather than guess.
-  return async function load({ store = 'UT', dealNumber, contactId }) {
+  return async function load({ store = 'UT', dealNumber, contactId, rememberPick = false }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal) return { found: false };
     if (deal.duplicate) return { found: false, duplicate: true };
@@ -227,6 +237,8 @@ function createDealContext({ hubspot }) {
       // A picked contact must still be on this deal; an old button must not read someone else.
       if (!contactIds.includes(String(contactId))) return { found: true, deal, notOnDeal: true };
       roamerId = String(contactId);
+    } else if (contactIds.length > 1 && rememberPick && (roamerId = await pickedBefore(deal.id, contactIds))) {
+      // The Roamer picked for this deal's brief.
     } else if (contactIds.length > 1) {
       const { records: people } = await batchRead('contacts', contactIds.slice(0, MAX_CHOICES), CONTACT_PROPS);
       const choices = people.map((p) => ({ id: String(p.id), name: [p.properties.firstname, p.properties.lastname].filter(Boolean).join(' ') || `Contact ${p.id}` }));

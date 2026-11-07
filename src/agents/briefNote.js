@@ -31,7 +31,7 @@ const flat = (text) => noDashes(String(text)).replace(/\s+/g, ' ').trim();
 const field = (text) => flat(text).replace(/\|/g, '/');
 const escapeHtml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function noteLines({ brief, context, now }) {
+function noteLines({ brief, context, now, spaceName }) {
   const sig = briefSignature(context);
   const item = (i) => `• ${flat(i.detail)} (${i.date}, ${i.channel})`;
   return [
@@ -47,13 +47,14 @@ function noteLines({ brief, context, now }) {
     ...brief.mods.map((m) => `• ${field(m.name)} | ${field(m.price) || NO_PRICE} | ${m.status} (${m.date}, ${m.channel})`),
     'JOURNEY',
     ...brief.journey.map(item),
-    `Basecamp key: contact ${sig.contactId}, ${sig.itemCount} items, newest ${sig.newestAt || 'none'}`,
+    `Basecamp key: contact ${sig.contactId}, ${sig.itemCount} items, newest ${sig.newestAt || 'none'}${spaceName ? `, space ${spaceName}` : ''}`,
   ];
 }
 
-// The note body as HubSpot stores it: one paragraph per line.
-function renderBriefNote({ brief, context, now = new Date() }) {
-  return noteLines({ brief, context, now })
+// The note body as HubSpot stores it: one paragraph per line. `spaceName` is the deal's
+// Chat space, when it has one; the note is where Basecamp remembers it.
+function renderBriefNote({ brief, context, now = new Date(), spaceName = null }) {
+  return noteLines({ brief, context, now, spaceName })
     .map((line, i) => (i === 0 ? `<p><strong>${escapeHtml(line)}</strong></p>` : `<p>${escapeHtml(line)}</p>`))
     .join('');
 }
@@ -74,6 +75,7 @@ function parseBriefNote(text) {
   if (lines[0] !== MARKER) return null;
   const brief = { headline: '', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
   let signature = null;
+  let spaceName = null;
   let section = null;
   for (const line of lines.slice(1)) {
     if (line === 'WOW' || line === 'MODS' || line === 'JOURNEY') {
@@ -84,8 +86,9 @@ function parseBriefNote(text) {
     if ((m = /^Headline: (.*)$/.exec(line))) brief.headline = m[1];
     else if ((m = /^Tags: ?(.*)$/.exec(line))) brief.tags = m[1] ? m[1].split(' | ') : [];
     else if ((m = /^Fact: (.*?) \| (.*)$/.exec(line))) brief.key_facts.push({ label: m[1], value: m[2] });
-    else if ((m = /^Basecamp key: contact (\d*), (\d+) items, newest (.*)$/.exec(line))) {
+    else if ((m = /^Basecamp key: contact (\d*), (\d+) items, newest (.*?)(?:, space (spaces\/[\w-]+))?$/.exec(line))) {
       signature = { contactId: m[1], itemCount: Number(m[2]), newestAt: m[3] === 'none' ? '' : m[3] };
+      spaceName = m[4] || null;
     } else if (section && (m = ITEM_LINE.exec(line))) {
       const [, body, date, channel] = m;
       if (section === 'mods') {
@@ -100,7 +103,7 @@ function parseBriefNote(text) {
     }
   }
   if (!signature || !brief.headline || !isBrief(brief)) return null;
-  return { brief, signature };
+  return { brief, signature, spaceName };
 }
 
 module.exports = { MARKER, renderBriefNote, parseBriefNote, isBriefNoteText, briefSignature, sameSignature };

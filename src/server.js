@@ -24,7 +24,9 @@ const { renderHome } = require('./chat/homeCard');
 const { createHubSpotClient } = require('./hubspot/client');
 const { createDealContext } = require('./hubspot/dealContext');
 const { createOpenDeals } = require('./hubspot/openDeals');
-const { createBriefJob } = require('./briefJob');
+const { createBriefJob, createBriefSource, createNoteKeeper } = require('./briefJob');
+const { createSpaceJob } = require('./spaceJob');
+const { createSpaces } = require('./chat/spaces');
 const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createRouter } = require('./router');
 
@@ -77,23 +79,34 @@ function features(audience) {
   const spaceFor = async ({ spaceName, userName }) => spaceName || findDirectMessage(userName);
 
   let startBrief;
+  let startSpace;
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
       spaceFor(job)
         .then((space) => sendMessage(space, "Briefs aren't switched on yet."))
         .catch(() => {});
+    startSpace = startBrief;
   } else {
-    const runBrief = createBriefJob({
-      loadContext: createDealContext({ hubspot }),
-      saveBriefNote: createBriefNoteSaver({ hubspot }),
-      anthropic: new Anthropic({ apiKey: ANTHROPIC_API_KEY }),
+    const loadContext = createDealContext({ hubspot });
+    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    const saveBriefNote = createBriefNoteSaver({ hubspot });
+    // Bump v when the avatar image changes.
+    const avatarUrl = `${new URL(audience).origin}/avatar.png?v=2`;
+    const runBrief = createBriefJob({ loadContext, saveBriefNote, anthropic, sendMessage, log, avatarUrl, endpoint: audience });
+    const openSpace = createSpaceJob({
+      loadContext,
+      getBrief: createBriefSource({ anthropic, log }),
+      keepNote: createNoteKeeper({ saveBriefNote, log }),
+      spaces: createSpaces(),
       sendMessage,
       log,
-      // Bump v when the avatar image changes.
-      avatarUrl: `${new URL(audience).origin}/avatar.png?v=2`,
-      endpoint: audience,
+      avatarUrl,
     });
+    // Not awaited: opening a space outlives the request and reports back when done.
+    startSpace = (job) => {
+      openSpace(job).catch((err) => log('ERROR', 'open space crashed', { dealNumber: job.dealNumber, error: errorFields(err) }));
+    };
     startBrief = (job) => {
       spaceFor(job)
         .then((spaceName) => runBrief({ ...job, spaceName }))
@@ -123,7 +136,7 @@ function features(audience) {
     }
   }
 
-  return { startBrief, buildHome };
+  return { startBrief, startSpace, buildHome };
 }
 
 function start() {

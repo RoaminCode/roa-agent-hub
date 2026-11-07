@@ -8,9 +8,11 @@ const { renderBriefNote, isBriefNoteText } = require('../agents/briefNote');
 const { cleanText } = require('./dealContext');
 
 function createBriefNoteSaver({ hubspot, now = () => new Date() }) {
-  return async function saveBriefNote({ context, brief }) {
+  // `spaceName` records the deal's Chat space; left out, the space already on the note is kept.
+  return async function saveBriefNote({ context, brief, spaceName }) {
     const at = now();
-    const body = renderBriefNote({ brief, context, now: at });
+    const space = spaceName || (context.briefNote && context.briefNote.spaceName) || null;
+    const body = renderBriefNote({ brief, context, now: at, spaceName: space });
     const timestamp = at.toISOString();
     if (context.briefNote) {
       const id = await hubspot.updateNote({ noteId: context.briefNote.id, body, timestamp, isOurs: (html) => isBriefNoteText(cleanText(html)) });

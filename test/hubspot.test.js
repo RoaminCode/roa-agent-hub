@@ -236,3 +236,17 @@ test('a deal with no brief note has none', async () => {
   const ctx = await createDealContext({ hubspot: fakeHubSpot() })({ store: 'UT', dealNumber: '90001' });
   assert.strictEqual(ctx.briefNote, null);
 });
+
+test('opening a space remembers the Roamer picked for the brief; a brief still asks', async () => {
+  const { renderBriefNote } = require('../src/agents/briefNote');
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  const body = renderBriefNote({ brief, context: { contact: { id: 78 }, items: [] } });
+  const hubspot = fakeHubSpot({ contacts: [77, 78], dealNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
+  const load = createDealContext({ hubspot });
+  const remembered = await load({ store: 'UT', dealNumber: '90001', rememberPick: true });
+  assert.strictEqual(remembered.contact.properties.firstname, 'Chris');
+  const asked = await load({ store: 'UT', dealNumber: '90001' });
+  assert.strictEqual(asked.choices.length, 2);
+  const none = await createDealContext({ hubspot: fakeHubSpot({ contacts: [77, 78] }) })({ store: 'UT', dealNumber: '90001', rememberPick: true });
+  assert.strictEqual(none.choices.length, 2);
+});

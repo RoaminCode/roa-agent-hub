@@ -19,9 +19,53 @@ const SORRY = {
   noCredits: "Basecamp's AI credits have run out, so I can't write briefs right now. Blake will need to add more. Home still shows every deal.",
 };
 
+// The brief for a loaded deal: the saved one from the deal's HubSpot note when nothing in
+// the record changed since it was written (no AI call, no credits), otherwise a fresh one.
+// Returns { brief, reused }, or null when the model gave no usable brief. Shared by briefs
+// and deal spaces.
+function createBriefSource({ anthropic, log }) {
+  return async function getBrief({ context, dealNumber, started = Date.now() }) {
+    const saved = context.briefNote;
+    if (saved && saved.brief && sameSignature(saved.signature, briefSignature(context))) {
+      log('INFO', 'brief reused from HubSpot note', { dealNumber, items: context.items.length, ms: Date.now() - started });
+      return { brief: saved.brief, reused: true };
+    }
+    const result = await writeBrief({ anthropic, context });
+    log('INFO', 'brief finished', {
+      dealNumber,
+      ok: result.ok,
+      reason: result.reason || null,
+      items: context.items.length,
+      omitted: context.omitted,
+      clipped: context.clipped,
+      missing: context.missing,
+      inputTokens: result.usage ? result.usage.input_tokens : null,
+      outputTokens: result.usage ? result.usage.output_tokens : null,
+      ms: Date.now() - started,
+    });
+    return result.ok ? { brief: result.brief, reused: false } : null;
+  };
+}
+
+// Saves a brief as the deal's brief note, if notes are on. A failure is logged, never
+// thrown: the brief has already reached the Team Member.
+function createNoteKeeper({ saveBriefNote, log }) {
+  return async function keepNote({ context, brief, dealNumber, spaceName }) {
+    if (!saveBriefNote) return;
+    try {
+      const note = await saveBriefNote({ context, brief, spaceName });
+      log('INFO', 'brief note saved', { dealNumber, noteId: note.id, updated: note.updated });
+    } catch (err) {
+      log('ERROR', 'could not save brief note', { dealNumber, error: errorFields(err) });
+    }
+  };
+}
+
 // `endpoint` is Basecamp's own URL, which the contact picker's buttons call.
 // `saveBriefNote`, when given, keeps each new brief as the deal's brief note in HubSpot.
 function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, endpoint, saveBriefNote }) {
+  const getBrief = createBriefSource({ anthropic, log });
+  const keepNote = createNoteKeeper({ saveBriefNote, log });
   // `announce`, when given, is posted before any work so the user knows the brief is coming.
   // `contactId` is the Roamer picked from the contact picker, when the deal has several.
   return async function runBrief({ spaceName, dealNumber, store = 'UT', announce, contactId }) {
@@ -40,39 +84,12 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, e
         return await sendMessage(spaceName, SORRY.noContact(dealNumber));
       }
 
-      // A saved brief is reused when nothing in the record changed since it was written:
-      // no AI call, no credits.
-      const saved = context.briefNote;
-      if (saved && saved.brief && sameSignature(saved.signature, briefSignature(context))) {
-        log('INFO', 'brief reused from HubSpot note', { dealNumber, items: context.items.length, ms: Date.now() - started });
-        return await sendMessage(spaceName, renderBriefCard({ dealNumber, context, brief: saved.brief, avatarUrl }));
-      }
-
-      const result = await writeBrief({ anthropic, context });
-      log('INFO', 'brief finished', {
-        dealNumber,
-        ok: result.ok,
-        reason: result.reason || null,
-        items: context.items.length,
-        omitted: context.omitted,
-        clipped: context.clipped,
-        missing: context.missing,
-        inputTokens: result.usage ? result.usage.input_tokens : null,
-        outputTokens: result.usage ? result.usage.output_tokens : null,
-        ms: Date.now() - started,
-      });
-      if (!result.ok) return await sendMessage(spaceName, SORRY.failed(dealNumber));
-      await sendMessage(spaceName, renderBriefCard({ dealNumber, context, brief: result.brief, avatarUrl }));
+      const got = await getBrief({ context, dealNumber, started });
+      if (!got) return await sendMessage(spaceName, SORRY.failed(dealNumber));
+      await sendMessage(spaceName, renderBriefCard({ dealNumber, context, brief: got.brief, avatarUrl }));
       // The card is out first; a note that fails to save is logged, and the next brief
       // simply writes a fresh one.
-      if (saveBriefNote) {
-        try {
-          const note = await saveBriefNote({ context, brief: result.brief });
-          log('INFO', 'brief note saved', { dealNumber, noteId: note.id, updated: note.updated });
-        } catch (err) {
-          log('ERROR', 'could not save brief note', { dealNumber, error: errorFields(err) });
-        }
-      }
+      if (!got.reused) await keepNote({ context, brief: got.brief, dealNumber });
     } catch (err) {
       // Out of credits gets its own log line, so it can be found and alerted on by name.
       const noCredits = isOutOfCredits(err);
@@ -84,4 +101,4 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, e
   };
 }
 
-module.exports = { createBriefJob, SORRY };
+module.exports = { createBriefJob, createBriefSource, createNoteKeeper, SORRY };
