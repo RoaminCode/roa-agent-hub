@@ -15,7 +15,7 @@ const { renderNotAllowedHome } = require('./chat/homeCard');
 
 const MESSAGES = {
   added: "Basecamp is here. I'm in shadow mode. Try \"brief 51431\" for a Roamer brief on a Utah deal.",
-  help: 'Try "brief 51431" for a Roamer brief on a Utah deal, or "open a space for 51431" for its deal space. In a deal space, "/note <text>" saves a note to the deal's Delivery record in HubSpot.',
+  help: "Try \"brief 51431\" for a Roamer brief on a Utah deal, or \"open a space for 51431\" for its deal space. In a deal space, \"/note <text>\" saves a note to the deal's Delivery record in HubSpot.",
   opening: (n) => `Opening a space for deal ${n}. I'll post the link here when it's ready.`,
   spaceDirectOnly: (n) => `Ask me to open the space for deal ${n} in a direct message with me.`,
   adopting: (n) => `Setting this space up for deal ${n}. The brief will be here shortly.`,
