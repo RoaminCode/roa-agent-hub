@@ -125,10 +125,11 @@ test('the note also goes on the Roamer the brief was written for', async () => {
   assert.strictEqual(none.calls[0][1].contactId, null);
 });
 
-test('"/note <text>" is the same as "note <text>"; /ask and /wow say they are not built yet', async () => {
+test('"/note <text>" is the same as "note <text>"; /ask routes; /wow says it is not built yet', async () => {
   const { NOT_BUILT } = require('../src/router');
   const saved = [];
-  const r = createRouter({ verify: async () => true, allowedUsers: ['casey@example.com'], saveSpaceNote: async (n) => (saved.push(n.text), 'ok') });
+  const asked = [];
+  const r = createRouter({ verify: async () => true, allowedUsers: ['casey@example.com'], saveSpaceNote: async (n) => (saved.push(n.text), 'ok'), askQuestion: async (q) => (asked.push(q.text), 'routed') });
   const slash = (id, args) => ({
     commonEventObject: { hostApp: 'CHAT' },
     chat: {
@@ -144,7 +145,8 @@ test('"/note <text>" is the same as "note <text>"; /ask and /wow say they are no
   const said = (res) => res.body.hostAppDataAction.chatDataAction.createMessageAction.message.text;
   assert.strictEqual(said(await r({ headers: { authorization: 'x' }, body: slash(1, 'Pat wants Saturday') })), 'ok');
   assert.deepStrictEqual(saved, ['Pat wants Saturday']);
-  assert.strictEqual(said(await r({ headers: { authorization: 'x' }, body: slash(2, 'who has the title?') })), NOT_BUILT.ask);
+  assert.strictEqual(said(await r({ headers: { authorization: 'x' }, body: slash(2, 'who has the title?') })), 'routed');
+  assert.deepStrictEqual(asked, ['who has the title?']);
   assert.strictEqual(said(await r({ headers: { authorization: 'x' }, body: slash(3, '') })), NOT_BUILT.wow);
   assert.strictEqual(said(await r({ headers: { authorization: 'x' }, body: slash(9, '') })), MESSAGES.help);
   // A classic event carries the command id on the message.

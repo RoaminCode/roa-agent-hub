@@ -9,6 +9,8 @@
 //   BRIEF_USERS     comma-separated emails who may start a Roamer brief, the only thing that
 //                   spends AI credits. Unset or empty means nobody. Each must also be in
 //                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
+//   SHADOW_REVIEWER the email that gets every routed question in shadow mode (Blake); unset,
+//                   questions are not routed
 //   HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY
 //                   from Secret Manager; without both, briefs are turned off
 //   PORT            set by Cloud Run
@@ -30,6 +32,7 @@ const { createSpaces } = require('./chat/spaces');
 const { createSpaceNotes } = require('./spaceNotes');
 const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createDb } = require('./db');
+const { createQuestionRouter } = require('./askJob');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
 
@@ -93,6 +96,7 @@ function features(audience) {
   let startBrief;
   let startSpace;
   let useSpace;
+  let askQuestion = async () => "Questions aren't switched on yet.";
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -121,6 +125,11 @@ function features(audience) {
     // A space asked for from Home reports back in the user's direct message.
     startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
     useSpace = later('use space', spaceJob.useSpace);
+    if (process.env.SHADOW_REVIEWER) {
+      askQuestion = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log });
+    } else {
+      log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
+    }
     startBrief = (job) => {
       spaceFor(job)
         .then((spaceName) => runBrief({ ...job, spaceName }))
@@ -171,7 +180,20 @@ function features(audience) {
     }
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, saveSpaceNote, buildHome };
+  // Each person's Chat id, recorded once per instance, so Basecamp can reach their direct
+  // message (the shadow reviewer's, for routed questions).
+  const known = new Set();
+  function seenPerson({ email, userName }) {
+    const key = `${email}|${userName}`;
+    if (known.has(key)) return;
+    known.add(key);
+    db.rememberPerson({ email, userName }).catch((err) => {
+      known.delete(key);
+      log('WARNING', 'could not record person', { error: errorFields(err) });
+    });
+  }
+
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {

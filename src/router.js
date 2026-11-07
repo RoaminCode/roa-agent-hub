@@ -33,21 +33,22 @@ const STORES = new Set(['UT']);
 
 // App commands, by the id each has in the Chat app configuration (Chat API > Configuration
 // > Commands). 1 to 3 are slash commands; 4 is the "Save to HubSpot" message action, chosen
-// from any message's menu, which saves that whole message. /ask and /wow are registered
-// ahead of the build so Team Members see them; until built they say so.
+// from any message's menu, which saves that whole message. /wow is registered ahead of
+// its build so Team Members see it; until built it says so.
 const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage' };
 const NOT_BUILT = {
-  ask: "/ask isn't built yet. It will send a question to the Team Member who owns the answer.",
   wow: "/wow isn't built yet. It will suggest a personal WOW for this Roamer's delivery, from the brief.",
 };
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
 // "use this space for 51431"; "note <text>" (also "note: <text>"), whose text keeps its
-// line breaks. Deal numbers are digits only.
+// line breaks; "ask <question>". Deal numbers are digits only.
 function parseCommand(text) {
   const t = text || '';
   const note = /^note\b:?\s*([\s\S]*)$/i.exec(t);
   if (note) return { command: 'note', text: note[1].trim() };
+  const ask = /^ask\b:?\s*([\s\S]*)$/i.exec(t);
+  if (ask) return { command: 'ask', text: ask[1].trim() };
   let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
   if (m) return { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
   m = /^open\s+(?:a\s+)?(?:deal\s+)?space\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
@@ -76,7 +77,11 @@ function log(severity, message, fields = {}) {
 // so it needs only ALLOWED_USERS, and works while briefs are paused.
 // useSpace starts "use this space"; requestAccess({ dealNumber, userName, userEmail,
 // userDisplayName }) asks a deal's space to add someone, from Home. Both outlive the request.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+// askQuestion({ spaceName, isDirectMessage, userEmail, userDisplayName, text }) routes a
+// question and returns the reply; it spends AI credits, so it needs the brief permission.
+// seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
+// later reach that person's direct message.
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -156,6 +161,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     if (!isAllowed) {
       return { status: 200, body: replyFor(event, MESSAGES.notAllowed) };
     }
+    if (event.userName) seenPerson({ email: event.userEmail, userName: event.userName });
 
     // Home's deal space buttons. "Create space" can write a brief, so it needs the brief
     // permission; "Request access" spends nothing. Each redraws Home with the tapped
@@ -232,7 +238,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       // "/note <text>" arrives with only the text; it is the same as "note <text>". "Save to
       // HubSpot" on a message saves the whole message, credited to whoever wrote it.
       let cmd;
-      if (slash === 'note') cmd = { command: 'note', text: event.text };
+      if (slash === 'note' || slash === 'ask') cmd = { command: slash, text: event.text };
       else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
@@ -253,6 +259,11 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       if (off) {
         logRefused(off, event.userEmail);
         return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
+      if (cmd.command === 'ask') {
+        // Answered in the request (one short AI call), so the reply lands in the question's thread.
+        const said = await askQuestion({ spaceName: event.spaceName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, userDisplayName: event.userDisplayName, text: cmd.text });
+        return { status: 200, body: replyFor(event, said) };
       }
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
       if (cmd.command === 'use') {

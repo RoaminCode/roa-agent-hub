@@ -14,6 +14,9 @@
 //                           linkedBy (status "ready" or "gone")
 //   accessRequests/{auto}   dealId, spaceName, user, at
 //   spaceNotes/{noteId}     dealId, spaceName, user, at, chars
+//   people/{email}          userName (Chat id), seenAt
+//   questions/{auto}        dealId, spaceName, askedBy, role, model, inputTokens,
+//                           outputTokens, costUsd, status, at (never the question)
 
 const { safeError } = require('./errors');
 
@@ -120,7 +123,36 @@ function createDb({ firestore, now = () => new Date() }) {
     await firestore.collection('spaceNotes').doc(String(noteId)).set({ dealId: dealDocId(dealId), spaceName, user, chars, at: stamp() });
   }
 
-  return { getDeal, getSpace, recordBrief, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote };
+  // A person's Chat id ("users/123") by their email, so Basecamp can reach their direct
+  // message (Chat finds one by id, not email). Recorded from their own Chat events.
+  async function rememberPerson({ email, userName }) {
+    if (!email || !/^users\/[\w-]+$/.test(userName || '')) return;
+    await firestore.collection('people').doc(String(email).toLowerCase()).set({ userName, seenAt: stamp() }, { merge: true });
+  }
+
+  async function getPerson(email) {
+    const snap = await firestore.collection('people').doc(String(email || '').toLowerCase()).get();
+    return snap.exists ? snap.data() : null;
+  }
+
+  // A routed question, without its text: who asked, where, the role, and what the routing cost.
+  async function recordQuestion({ dealId, spaceName, askedBy, role, model, inputTokens, outputTokens, costUsd, status }) {
+    const ref = await firestore.collection('questions').add({
+      dealId: dealId ? dealDocId(dealId) : null,
+      spaceName: spaceName || null,
+      askedBy,
+      role: role || null,
+      model: model || null,
+      inputTokens: inputTokens ?? null,
+      outputTokens: outputTokens ?? null,
+      costUsd: costUsd ?? null,
+      status,
+      at: stamp(),
+    });
+    return ref.id;
+  }
+
+  return { getDeal, getSpace, recordBrief, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion };
 }
 
 module.exports = { createDb, CLAIM_MS };
