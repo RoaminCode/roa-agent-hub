@@ -284,3 +284,7 @@ test('record dates are Utah dates: an evening text is not moved to the next day'
   assert.match(formatRecord({ ...context, items }), /<item date="2026-10-20" channel="text"/);
   assert.match(stampLine({ ...context, items }, new Date('2026-11-07T03:14:00Z')), /through Oct 20\./);
 });
+
+test('the instructions tell the brief never to mention Podium', () => {
+  assert.match(SYSTEM, /Never mention Podium, even where the record does\./);
+});
