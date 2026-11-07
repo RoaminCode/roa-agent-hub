@@ -9,6 +9,8 @@
 //   BRIEF_USERS     comma-separated emails who may start a Roamer brief, the only thing that
 //                   spends AI credits. Unset or empty means nobody. Each must also be in
 //                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
+//   WOW_SHEET_ID    the "ROA WOW Ideas" Google Sheet /wow reads and updates (shared with
+//                   basecamp-router as an editor); unset, the database library is used
 //   SHADOW_REVIEWER the email that gets every routed question in shadow mode (Blake); unset,
 //                   questions are not routed
 //   HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY
@@ -35,6 +37,7 @@ const { createDb } = require('./db');
 const { createQuestionRouter } = require('./askJob');
 const { createQaNotes } = require('./hubspot/qaNotes');
 const { createWow } = require('./wowJob');
+const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries } = require('./hubspot/deliveries');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
@@ -144,7 +147,11 @@ function features(audience) {
     } else {
       log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
     }
-    const wowPlans = createWow({ anthropic, db, readBriefNote: loadContext.readBriefNote, findDealSpace, createNote: hubspot.createNote, log, endpoint: audience });
+    // The WOW idea library: the team's sheet when WOW_SHEET_ID is set, else the database.
+    const sheetId = process.env.WOW_SHEET_ID;
+    const library = sheetId ? createSheetLibrary({ sheetId }) : createDbLibrary({ db });
+    const sheetUrl = sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}/edit` : null;
+    const wowPlans = createWow({ anthropic, db, library, readBriefNote: loadContext.readBriefNote, findDealSpace, createNote: hubspot.createNote, log, endpoint: audience, sheetUrl });
     // The ideas are posted in the thread they were asked in, when ready.
     startWow = later('wow', async (job) => sendMessage(job.spaceName, await wowPlans.wow(job), { threadName: job.threadName }));
     chooseWow = wowPlans.choose;

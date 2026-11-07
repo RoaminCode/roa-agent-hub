@@ -6,11 +6,12 @@ const { suggestWow, formatWowInput, STARTER_IDEAS, MODEL } = require('../src/age
 const { createWow, wowCard, renderWowNote, SAY, MARKER } = require('../src/wowJob');
 const { createRouter, parseCommand, MESSAGES } = require('../src/router');
 const { createDb } = require('../src/db');
+const { createDbLibrary, createSheetLibrary } = require('../src/wowLibrary');
 const { createFakeFirestore } = require('./fakeFirestore');
 
 const NOW = new Date('2026-11-07T23:00:00Z');
 const brief = { headline: 'Pat loves dark chocolate.', tags: [], key_facts: [], wow: [{ detail: 'Loves dark chocolate', date: '2026-11-01', channel: 'call' }], mods: [], journey: [] };
-const SUGGESTION = { ideaId: '', title: 'Dark chocolate basket', tailored: 'A basket of dark chocolate in the trailer for Pat.', why: 'Loves dark chocolate (2026-11-01, call)', idea: 'A gift basket built around a favorite treat', category: 'Gift', tier: '$$', owner: 'Delivery Coach' };
+const SUGGESTION = { ideaId: '', title: 'Dark chocolate basket', tailored: 'A basket of dark chocolate in the trailer for Pat.', why: 'Loves dark chocolate (2026-11-01, call)', idea: 'A gift basket built around a favorite treat', fitsWhen: 'The record names a favorite treat', category: 'Gift', tier: '$$', owner: 'Delivery Coach' };
 
 const fakeAnthropic = (out) => {
   const sent = [];
@@ -40,6 +41,7 @@ async function harness({ briefNoteId = '9', suggestions = [SUGGESTION] } = {}) {
   const w = createWow({
     anthropic: {},
     db,
+    library: createDbLibrary({ db }),
     readBriefNote: async (id) => (id === '9' ? { id, brief } : null),
     findDealSpace: async ({ dealNumber }) => (dealNumber === '90001' ? { deal: { id: '111' } } : null),
     createNote: async (n) => (notes.push(n), '700'),
@@ -59,7 +61,7 @@ test('/wow in a deal space tailors from its brief and the library, and returns a
   // The library is seeded from the starter list the first time.
   assert.strictEqual(h.seen[0].ideas.length, STARTER_IDEAS.length);
   const params = card.cardsV2[0].card.sections[0].widgets[2].buttonList.buttons[0].onClick.action.parameters;
-  assert.deepStrictEqual(Object.fromEntries(params.map((p) => [p.key, p.value])), { action: 'wowPick', d: '111', n: '90001', i: '', t: SUGGESTION.title, w: SUGGESTION.tailored, g: SUGGESTION.idea, c: 'Gift', r: '$$' });
+  assert.deepStrictEqual(Object.fromEntries(params.map((p) => [p.key, p.value])), { action: 'wowPick', d: '111', n: '90001', i: '', t: SUGGESTION.title, w: SUGGESTION.tailored, g: SUGGESTION.idea, f: SUGGESTION.fitsWhen, c: 'Gift', r: '$$' });
 });
 
 test('/wow needs a deal and its brief', async () => {
@@ -124,4 +126,42 @@ test('the router: /wow starts in the background, "wow ideas" answers at once, Us
   const res = await r({ headers: { authorization: 'x' }, body: click });
   assert.deepStrictEqual(res.body, { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text: 'chosen' } } } } });
   assert.deepStrictEqual(picks, ['111']);
+});
+
+
+test('the sheet library reads active ideas and standards, counts a chosen idea, and adds a new one', async () => {
+  const requests = [];
+  const cells = { F3: 2 };
+  const auth = {
+    getClient: async () => ({
+      request: async (r) => {
+        requests.push([r.method, decodeURIComponent(r.url), r.data]);
+        const url = decodeURIComponent(r.url);
+        if (r.method === 'GET' && url.includes("'Ideas'!A2:G"))
+          return { data: { values: [['Practice course', 'First-time owner', 'Experience', '$', 'Yes', '0', 'Blake'], ['Old idea', '', 'Gift', '$', 'No', '9', 'x'], ['Day pack', 'Loves hiking', 'Gear', '$$', 'Yes', '2', 'Basecamp']] } };
+        if (r.method === 'GET' && url.includes('Standard at every delivery')) return { data: { values: [['Lunch during the walkthrough'], [''], ['A full tank of LP']] } };
+        if (r.method === 'GET' && url.includes("'Ideas'!F3")) return { data: { values: [[String(cells.F3)]] } };
+        return { data: {} };
+      },
+    }),
+  };
+  const lib = createSheetLibrary({ sheetId: '1aQ3f46vWKeCcRyesMiRfZQUle81jIHM1mpJwmGsVpUI', auth });
+  const ideas = await lib.listIdeas();
+  assert.deepStrictEqual(ideas.map((i) => [i.id, i.idea, i.fitsWhen, i.uses]), [['row-4', 'Day pack', 'Loves hiking', 2], ['row-2', 'Practice course', 'First-time owner', 0]]);
+  assert.deepStrictEqual(await lib.standards(), ['Lunch during the walkthrough', 'A full tank of LP']);
+  await lib.useIdea({ ideaId: 'row-3' });
+  assert.deepStrictEqual(requests.at(-1), ['PUT', "https://sheets.googleapis.com/v4/spreadsheets/1aQ3f46vWKeCcRyesMiRfZQUle81jIHM1mpJwmGsVpUI/values/'Ideas'!F3?valueInputOption=RAW", { values: [[3]] }]);
+  await lib.addIdea({ idea: 'Trekking poles', fitsWhen: 'Loves hiking', category: 'Gear', tier: '$$' });
+  assert.deepStrictEqual(requests.at(-1)[2], { values: [['Trekking poles', 'Loves hiking', 'Gear', '$$', 'Yes', 1, 'Basecamp']] });
+  assert.ok(requests.at(-1)[1].includes(':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS'));
+  await assert.rejects(lib.useIdea({ ideaId: 'row-3; drop' }), /invalid idea id/);
+  assert.throws(() => createSheetLibrary({ sheetId: '../x' }), /looks wrong/);
+});
+
+test('the standards from the sheet go into the WOW instructions', async () => {
+  const sent = [];
+  const anthropic = { messages: { create: async (b) => (sent.push(b), { stop_reason: 'end_turn', usage: {}, content: [{ type: 'text', text: JSON.stringify({ suggestions: [SUGGESTION] }) }] }) } };
+  await suggestWow({ anthropic, brief, ideas: [], standards: ['Valet parking for the trailer'] });
+  assert.ok(sent[0].system.includes('- Valet parking for the trailer'));
+  assert.ok(!sent[0].system.includes('Lunch during the walkthrough'));
 });

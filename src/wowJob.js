@@ -9,7 +9,7 @@
 // deliveries. Nothing reaches the Roamer. Logs steps, never Roamer details.
 
 const { errorFields, isOutOfCredits } = require('./errors');
-const { suggestWow, STARTER_IDEAS } = require('./agents/wowPlan');
+const { suggestWow } = require('./agents/wowPlan');
 const { writtenAt, noDashes } = require('./agents/roamerBrief');
 
 const MARKER = 'Basecamp WOW plan';
@@ -52,6 +52,7 @@ function wowCard({ dealId, dealNumber, suggestions, endpoint }) {
                     { key: 't', value: s.title },
                     { key: 'w', value: s.tailored },
                     { key: 'g', value: s.idea },
+                    { key: 'f', value: s.fitsWhen || '' },
                     { key: 'c', value: s.category },
                     { key: 'r', value: s.tier },
                   ],
@@ -80,11 +81,17 @@ function renderWowNote({ title, tailored, category, tier, who, now }) {
 
 // `readBriefNote(noteId)` reads a deal's saved brief (hubspot/dealContext.js);
 // `findDealSpace({ dealNumber })` finds a deal by number; `createNote` is the HubSpot client's.
-function createWow({ anthropic, db, readBriefNote, findDealSpace, createNote, log, endpoint = '', suggest = suggestWow, now = () => new Date() }) {
+// `library` is the WOW idea library (wowLibrary.js): the team's sheet, or the database.
+// `sheetUrl`, when set, is linked from "/wow ideas".
+function createWow({ anthropic, db, library, readBriefNote, findDealSpace, createNote, log, endpoint = '', sheetUrl = null, suggest = suggestWow, now = () => new Date() }) {
   async function listIdeas() {
-    const ideas = await db.listWowIdeas(STARTER_IDEAS);
+    const ideas = await library.listIdeas();
     if (!ideas.length) return SAY.noIdeas;
-    return ['*WOW idea library* (most used first)', ...ideas.map((i) => `• ${i.idea} (${i.category}, ${i.tier}${i.uses ? `, used ${i.uses}` : ''})`)].join('\n');
+    return [
+      '*WOW idea library* (most used first)',
+      ...ideas.map((i) => `• ${i.idea} (${i.category}, ${i.tier}${i.uses ? `, used ${i.uses}` : ''})`),
+      ...(sheetUrl ? ['', `Edit the list: ${sheetUrl}`] : []),
+    ].join('\n');
   }
 
   // Returns the reply: a card of ideas, or text.
@@ -113,8 +120,8 @@ function createWow({ anthropic, db, readBriefNote, findDealSpace, createNote, lo
       const saved = record.briefNoteId ? await readBriefNote(record.briefNoteId) : null;
       if (!saved || !saved.brief) return SAY.noBrief(dealNumber);
 
-      const ideas = await db.listWowIdeas(STARTER_IDEAS);
-      const result = await suggest({ anthropic, brief: saved.brief, ideas });
+      const [ideas, standards] = await Promise.all([library.listIdeas(), library.standards()]);
+      const result = await suggest({ anthropic, brief: saved.brief, ideas, standards });
       const usage = result.usage || {};
       log('INFO', result.ok ? 'wow ideas' : 'wow ideas failed', {
         dealNumber,
@@ -153,10 +160,15 @@ function createWow({ anthropic, db, readBriefNote, findDealSpace, createNote, lo
         body: renderWowNote({ title, tailored, category: p.c || 'Gift', tier: p.r || '$', who, now: at }),
         timestamp: at.toISOString(),
       });
-      const ideaId = await db
-        .useWowIdea({ ideaId: p.i || null, idea: noDashes(p.g || tailored), category: p.c || 'Gift', tier: p.r || '$', by: userEmail })
-        .catch((e) => (log('ERROR', 'could not remember wow idea', { dealNumber, error: errorFields(e) }), null));
-      log('INFO', 'wow plan chosen', { dealNumber, noteId, ideaId, fromLibrary: Boolean(p.i), user: userEmail });
+      // Remembered in the library: a library idea is counted, a new one is added in general form.
+      const remembered = await (p.i
+        ? library.useIdea({ ideaId: p.i })
+        : library.addIdea({ idea: noDashes(p.g || tailored), fitsWhen: noDashes(p.f || ''), category: p.c || 'Gift', tier: p.r || '$', by: userEmail })
+      ).then(
+        () => true,
+        (e) => (log('ERROR', 'could not remember wow idea', { dealNumber, error: errorFields(e) }), false),
+      );
+      log('INFO', 'wow plan chosen', { dealNumber, noteId, fromLibrary: Boolean(p.i), remembered, library: library.source, user: userEmail });
       return SAY.chosen(title, dealNumber || '', who);
     } catch (err) {
       log('ERROR', 'wow plan not saved', { dealNumber, error: errorFields(err) });
