@@ -12,7 +12,12 @@ const MODEL = 'claude-sonnet-5-5';
 // never suggests them or a variation of them (Blake, 2026-11-07).
 const STANDARD_AT_DELIVERY = [
   'A welcome screen on the large TV, greeting the Roamer by name with images of their trailer',
+  'A long, thorough walkthrough of the trailer',
   'Lunch during the walkthrough',
+  'A full tank of LP (propane)',
+  'Fresh water filled, when the Roamer asks',
+  'A gift bag with camping chairs, mugs, and plates',
+  'A one-year subscription to a trip-planning app (onX) for planning their trips',
 ];
 
 // The library's first ideas (second set, 2026-11-07, after Blake found the first set too
@@ -21,7 +26,7 @@ const STANDARD_AT_DELIVERY = [
 const STARTER_IDEAS = [
   { idea: 'A towing and backing practice course on the lot with a Team Member, for first-time owners', category: 'Experience', tier: '$' },
   { idea: 'A first-trip plan for the trip they mentioned: route, campsites, fuel and water stops', category: 'Trip', tier: '$' },
-  { idea: 'Offline maps and routes for their first destination, loaded before pickup', category: 'Trip', tier: '$' },
+  { idea: 'Plan their first trip with them in the trip-planning app included with delivery', category: 'Trip', tier: '$' },
   { idea: 'Gear they said they would bring, mounted or set up in the trailer before handover', category: 'Gear', tier: '$$' },
   { idea: 'An introduction to a Roamer with the same trailer or the same kind of trips', category: 'Personal touch', tier: '$' },
   { idea: 'A check-in call from their Delivery Coach after their first trip', category: 'Personal touch', tier: '$' },
