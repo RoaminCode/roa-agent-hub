@@ -9,7 +9,7 @@
 // Collections:
 //   deals/{hubspotDealId}   dealNumber, store, contactId, briefNoteId, briefSignature,
 //                           briefWrittenAt, spaceName, spaceUri, spaceHow, spaceLinkedAt,
-//                           spaceLinkedBy, spaceClaim, deliveryId,
+//                           spaceLinkedBy, spaceClaim, deliveryId, briefUpdates, briefFullAt,
 //                           deliveryCreatedByBasecamp, deliveryLinkedAt, updatedAt
 //   spaces/{spaceId}        spaceName, dealId, dealNumber, store, how, status, linkedAt,
 //                           linkedBy (status "ready" or "gone")
@@ -54,10 +54,19 @@ function createDb({ firestore, now = () => new Date() }) {
     return snap.exists ? snap.data() : null;
   }
 
-  // The brief note just saved: its id, what the brief was built from, and when.
-  async function recordBrief({ dealId, dealNumber, store, contactId, noteId, signature }) {
-    await deals.doc(dealDocId(dealId)).set(
-      { dealNumber: String(dealNumber), store, contactId: contactId ? String(contactId) : null, briefNoteId: String(noteId), briefSignature: signature, briefWrittenAt: stamp(), updatedAt: stamp() },
+  // The brief note just saved: its id, what the brief was built from, and when. `mode`
+  // keeps the brief's history: a "full" read resets the update count and its date, an
+  // "update" adds one, and a "reuse" (saved again for its space) changes neither.
+  async function recordBrief({ dealId, dealNumber, store, contactId, noteId, signature, mode = 'full' }) {
+    const ref = deals.doc(dealDocId(dealId));
+    const history = {};
+    if (mode === 'full') Object.assign(history, { briefUpdates: 0, briefFullAt: stamp() });
+    if (mode === 'update') {
+      const snap = await ref.get();
+      history.briefUpdates = ((snap.exists && snap.data().briefUpdates) || 0) + 1;
+    }
+    await ref.set(
+      { dealNumber: String(dealNumber), store, contactId: contactId ? String(contactId) : null, briefNoteId: String(noteId), briefSignature: signature, briefWrittenAt: stamp(), ...history, updatedAt: stamp() },
       { merge: true },
     );
   }

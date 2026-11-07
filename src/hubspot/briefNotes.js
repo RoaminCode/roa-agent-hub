@@ -10,7 +10,9 @@ const { cleanText } = require('./dealContext');
 
 function createBriefNoteSaver({ hubspot, db = null, now = () => new Date() }) {
   // `spaceName` records the deal's Chat space; left out, the deal's current space is kept.
-  return async function saveBriefNote({ context, brief, spaceName }) {
+  // `mode` is how the brief was made: "full" (whole record), "update" (new items only), or
+  // "reuse" (unchanged, saved again only to record its space).
+  return async function saveBriefNote({ context, brief, spaceName, mode = 'full' }) {
     const at = now();
     const space = spaceName || context.spaceName || (context.briefNote && context.briefNote.spaceName) || null;
     const body = renderBriefNote({ brief, context, now: at, spaceName: space });
@@ -31,6 +33,7 @@ function createBriefNoteSaver({ hubspot, db = null, now = () => new Date() }) {
         contactId: context.contact ? context.contact.id : null,
         noteId: saved.id,
         signature: briefSignature(context),
+        mode,
       });
     }
     return saved;

@@ -17,12 +17,12 @@ const CONTACT_PROPS = ['firstname', 'lastname'];
 const SOURCES = {
   calls: {
     channel: 'call',
-    props: ['hs_timestamp', 'hs_call_direction', 'hs_call_title', 'hs_call_summary', 'hs_call_body', 'hs_call_duration', 'hubspot_owner_id'],
+    props: ['hs_timestamp', 'hs_lastmodifieddate', 'hs_call_direction', 'hs_call_title', 'hs_call_summary', 'hs_call_body', 'hs_call_duration', 'hubspot_owner_id'],
     maxChars: 6000,
   },
-  communications: { channel: 'text', props: ['hs_timestamp', 'hs_communication_channel_type', 'hs_communication_body'], maxChars: 1500 },
-  emails: { channel: 'email', props: ['hs_timestamp', 'hs_email_direction', 'hs_email_subject', 'hs_email_text', 'hubspot_owner_id'], maxChars: 3000 },
-  notes: { channel: 'note', props: ['hs_timestamp', 'hs_note_body', 'hubspot_owner_id'], maxChars: 3000 },
+  communications: { channel: 'text', props: ['hs_timestamp', 'hs_lastmodifieddate', 'hs_communication_channel_type', 'hs_communication_body'], maxChars: 1500 },
+  emails: { channel: 'email', props: ['hs_timestamp', 'hs_lastmodifieddate', 'hs_email_direction', 'hs_email_subject', 'hs_email_text', 'hubspot_owner_id'], maxChars: 3000 },
+  notes: { channel: 'note', props: ['hs_timestamp', 'hs_lastmodifieddate', 'hs_note_body', 'hubspot_owner_id'], maxChars: 3000 },
 };
 
 // Buttons offered when a deal has several contacts and Basecamp asks which is the Roamer.
@@ -112,7 +112,9 @@ function toItem(type, record, ownerName) {
   }
 
   if (!text) return null;
-  return { id: record.id, channel, at, who, ...clip(text, maxChars) };
+  // `modified` is when the item was last changed, such as a call summary filled in after the
+  // call; an incremental brief update checks it (see briefJob.js).
+  return { id: record.id, channel, at, modified: p.hs_lastmodifieddate || null, who, ...clip(text, maxChars) };
 }
 
 // Keep the newest items that fit the budget; report how many older ones were left out.
@@ -317,6 +319,9 @@ function createDealContext({ hubspot, db = null }) {
       spaceName: spaceOf(record, briefNote),
       // The deal's Delivery record, once it has one; Basecamp's notes go there.
       deliveryId: (record && record.deliveryId) || null,
+      // When the saved brief was written, how many updates since its last full read, and
+      // when that was; null without Basecamp's records. Decides update or full rebuild.
+      briefMeta: record && record.briefWrittenAt ? { writtenAt: record.briefWrittenAt, updates: record.briefUpdates || 0, fullAt: record.briefFullAt || null } : null,
       // Items kept but shortened to fit, and records HubSpot did not return.
       clipped: items.filter((i) => i.clipped).length,
       missing,

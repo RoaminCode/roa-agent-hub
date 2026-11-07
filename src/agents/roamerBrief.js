@@ -159,6 +159,59 @@ async function writeBrief({ anthropic, context }) {
   return { ok: true, brief, usage: message.usage, model: message.model };
 }
 
+// Updating a saved brief from only what is new, instead of rereading the whole record.
+// The same rules apply; the model sees the current brief and the new items, and says when
+// the new items change too much to patch, so Basecamp rereads everything instead.
+const UPDATE_SYSTEM = `${SYSTEM}
+
+Updating a brief: this time you receive the deal's current brief, written earlier from the full record, and only the record items added since then. Return the whole brief, updated:
+- Keep every item that still holds, with its original date and channel.
+- Add what the new items bring, under the same rules and limits. When a new item changes something already in the brief (a mod's status, a date, a plan), replace that item with the newer one. When it contradicts it, say so in that item and give each version.
+- Rewrite the headline and tags only if the new items change what matters most.
+- In "new_since", list what the new items added or changed, one short sentence each with its date and channel, at most 8, most important first; empty if the new items hold nothing worth a Team Member's attention.
+- Set "rebuild" to true, with the rest as you best can, only if the new items change so much that patching the brief would mislead (for example, the Roamer changed trailers or the deal was restructured). Basecamp then rereads the whole record.`;
+
+const UPDATE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['rebuild', 'new_since', 'brief'],
+  properties: {
+    rebuild: { type: 'boolean' },
+    new_since: { type: 'array', items: ITEM },
+    brief: SCHEMA,
+  },
+};
+
+// The current brief and the new items, in the same record format as a full brief.
+function formatUpdate({ context, brief, newItems }) {
+  const record = formatRecord({ ...context, items: newItems, omitted: 0, clipped: newItems.filter((i) => i.clipped).length, missing: 0 });
+  return `<current_brief>\n${escapeRecord(JSON.stringify(brief, null, 2))}\n</current_brief>\n\nRecord items added since the brief was written:\n\n${record}`;
+}
+
+// { ok: true, rebuild, brief, newSince, usage } or { ok: false, reason, usage }.
+async function updateBrief({ anthropic, context, brief, newItems }) {
+  const stream = anthropic.beta.messages.stream({
+    model: MODEL,
+    max_tokens: 16000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: UPDATE_SCHEMA } },
+    system: UPDATE_SYSTEM,
+    messages: [{ role: 'user', content: formatUpdate({ context, brief, newItems }) }],
+  });
+  const message = await stream.finalMessage();
+  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage: message.usage };
+  if (message.stop_reason === 'max_tokens') return { ok: false, reason: 'too_long', usage: message.usage };
+  let out;
+  try {
+    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
+  } catch {
+    return { ok: false, reason: 'bad_output', usage: message.usage };
+  }
+  if (!out || typeof out.rebuild !== 'boolean' || !Array.isArray(out.new_since) || !isBrief(out.brief)) return { ok: false, reason: 'bad_output', usage: message.usage };
+  return { ok: true, rebuild: out.rebuild, brief: out.brief, newSince: out.new_since, usage: message.usage, model: message.model };
+}
+
 // The schema constrains the model's output; this catches anything that still slips past,
 // such as from a fallback model, before a card is built from it. Checks every field the
 // cards read, as the type the cards expect.
@@ -252,4 +305,4 @@ function renderBrief({ dealNumber, context, brief, now }) {
   return text;
 }
 
-module.exports = { writeBrief, renderBrief, formatRecord, basisLine, stampLine, writtenAt, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };
+module.exports = { writeBrief, updateBrief, formatUpdate, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };

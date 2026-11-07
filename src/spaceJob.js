@@ -80,12 +80,13 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
   }
 
   // The brief card and the pin reminder in the space, then the space saved on the note.
-  async function postBrief({ space, context, got, dealNumber, setStep }) {
+  // `saved` is true when this brief was already saved (and its history counted) before.
+  async function postBrief({ space, context, got, dealNumber, setStep, saved = false }) {
     setStep('post brief');
     await sendMessage(space, renderBriefCard({ dealNumber, context, brief: got.brief, avatarUrl }));
     await sendMessage(space, SAY.pinIt);
     setStep('save note');
-    await keepNote({ context, brief: got.brief, dealNumber, spaceName: space });
+    await keepNote({ context, brief: got.brief, dealNumber, spaceName: space, mode: saved || got.reused ? 'reuse' : got.mode });
   }
 
   function failed(err, { dealNumber, step, started, reply }) {
@@ -122,9 +123,11 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       }
       // A new brief is saved now, so it is not lost if Google refuses the space; the next
       // try reuses it instead of writing it again. The save after posting updates this note.
+      let saved = false;
       if (!got.reused) {
-        const note = await keepNote({ context, brief: got.brief, dealNumber });
+        const note = await keepNote({ context, brief: got.brief, dealNumber, mode: got.mode });
         if (note) context = { ...context, briefNote: { ...(context.briefNote || {}), id: note.id } };
+        saved = Boolean(note);
       }
 
       step = 'create space';
@@ -137,7 +140,7 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       claimed = null;
       step = 'add member';
       await spaces.addMember(space.name, userName);
-      await postBrief({ space: space.name, context, got, dealNumber, setStep: (s) => (step = s) });
+      await postBrief({ space: space.name, context, got, dealNumber, saved, setStep: (s) => (step = s) });
       step = 'delivery record';
       await delivery(context, dealNumber);
       log('INFO', 'deal space opened', { dealNumber, space: space.name, reusedBrief: got.reused, ms: Date.now() - started });
