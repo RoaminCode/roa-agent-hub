@@ -129,7 +129,8 @@ function fitBudget(items, maxChars = MAX_TOTAL_CHARS) {
   return { items: kept, omitted: items.length - kept.length };
 }
 
-function createDealContext({ hubspot }) {
+// `db` is Basecamp's own records (db.js); without it, everything comes from HubSpot.
+function createDealContext({ hubspot, db = null }) {
   const owners = new Map();
 
   // Names are cached for the life of the instance; a failed lookup is not, so the next
@@ -198,7 +199,14 @@ function createDealContext({ hubspot }) {
   // Basecamp's brief note on the deal, if there is one: { id, brief, signature }, with
   // brief and signature null when the note is not in Basecamp's layout (it is then
   // rewritten, never trusted). The newest wins if there is ever more than one.
-  async function findBriefNote(dealId) {
+  // With Basecamp's record of the deal (`record`, from the database), the note is read
+  // directly by its id, and what the brief was built from comes from the record, which
+  // no one edits by hand. Without one, or if that note is gone, the deal's notes are searched.
+  async function findBriefNote(dealId, record = null) {
+    if (record && record.briefNoteId) {
+      const direct = await readBriefNote(record.briefNoteId);
+      if (direct) return { ...direct, signature: record.briefSignature || direct.signature };
+    }
     const ids = await associatedIds('deals', dealId, 'notes');
     if (!ids.length) return null;
     const { records } = await batchRead('notes', ids, ['hs_note_body', 'hs_timestamp']);
@@ -211,9 +219,31 @@ function createDealContext({ hubspot }) {
     return { id: ours[0].id, brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null, spaceName: parsed ? parsed.spaceName : null };
   }
 
+  // One note by id, when it is Basecamp's brief note; null when it is gone or not ours.
+  async function readBriefNote(noteId) {
+    if (!/^\d+$/.test(String(noteId))) return null;
+    let note;
+    try {
+      note = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body`);
+    } catch (err) {
+      if (err.status === 404) return null;
+      throw err;
+    }
+    const text = cleanText((note.properties || {}).hs_note_body);
+    if (!isBriefNoteText(text)) return null;
+    const parsed = parseBriefNote(text);
+    return { id: String(noteId), brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null, spaceName: parsed ? parsed.spaceName : null };
+  }
+
+  // The deal's space: Basecamp's record when there is one (the authority); otherwise the
+  // space written on the brief note, from before the database.
+  const spaceOf = (record, note) => (record ? record.spaceName || null : note ? note.spaceName : null);
+  const recordOf = (dealId) => (db ? db.getDeal(dealId) : null);
+
   // The contact the deal's brief note was written for, if still on the deal; null otherwise.
   async function pickedBefore(dealId, contactIds) {
-    const note = await findBriefNote(dealId);
+    const record = await recordOf(dealId);
+    const note = await findBriefNote(dealId, record);
     const id = note && note.signature ? note.signature.contactId : null;
     return id && contactIds.includes(id) ? id : null;
   }
@@ -269,15 +299,20 @@ function createDealContext({ hubspot }) {
       all.push(...items);
     }
     const { items, omitted } = fitBudget(all);
+    const record = await recordOf(deal.id);
+    const briefNote = await findBriefNote(deal.id, record);
 
     return {
       found: true,
+      store,
       deal,
       salesCoach: ownerName(deal.properties.hubspot_owner_id),
       contact,
       items,
       omitted,
-      briefNote: await findBriefNote(deal.id),
+      briefNote,
+      // The deal's Chat space, or null.
+      spaceName: spaceOf(record, briefNote),
       // Items kept but shortened to fit, and records HubSpot did not return.
       clipped: items.filter((i) => i.clipped).length,
       missing,
@@ -285,15 +320,15 @@ function createDealContext({ hubspot }) {
     };
   }
 
-  // Just the deal, the Chat space recorded on its brief note, and the Roamer the brief was
-  // written for, without reading the Roamer's record: a note from a deal space only needs
-  // to know the space is the deal's, and whose record the note also belongs on.
+  // Just the deal, its Chat space, and the Roamer the brief was written for, without
+  // reading the Roamer's record.
   load.findDealSpace = async function findDealSpace({ store = 'UT', dealNumber }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal || deal.duplicate) return null;
-    const note = await findBriefNote(deal.id);
-    const contactId = note && note.signature && note.signature.contactId ? note.signature.contactId : null;
-    return { deal, spaceName: note ? note.spaceName : null, contactId };
+    const record = await recordOf(deal.id);
+    const note = await findBriefNote(deal.id, record);
+    const contactId = (record && record.contactId) || (note && note.signature && note.signature.contactId) || null;
+    return { deal, spaceName: spaceOf(record, note), contactId };
   };
 
   return load;

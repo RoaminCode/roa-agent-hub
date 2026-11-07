@@ -5,14 +5,26 @@ const assert = require('node:assert');
 const { createSpaceNotes, renderSpaceNote, SAY, MAX_CHARS } = require('../src/spaceNotes');
 const { createRouter, MESSAGES } = require('../src/router');
 const { parseEvent } = require('../src/chat/events');
+const { createDb } = require('../src/db');
+const { createFakeFirestore } = require('./fakeFirestore');
 
 const NOW = new Date('2026-11-07T16:50:00Z');
 
-function harness({ found = { deal: { id: '111' }, spaceName: 'spaces/DEAL' }, failWrite = null } = {}) {
+// A linked deal space, with the Roamer recorded when `contactId` is given.
+async function linkedDb({ contactId = null } = {}) {
+  const firestore = createFakeFirestore();
+  const db = createDb({ firestore, now: () => NOW });
+  await db.linkSpace({ dealId: '111', dealNumber: '90001', store: 'UT', spaceName: 'spaces/DEAL', spaceUri: 'u', how: 'adopted', by: 'b' });
+  if (contactId) await db.recordBrief({ dealId: '111', dealNumber: '90001', store: 'UT', contactId, noteId: '9', signature: {} });
+  return { db, data: firestore.data };
+}
+
+async function harness({ contactId = null, failWrite = null, db = null } = {}) {
   const calls = [];
   const logs = [];
+  const linked = db ? { db, data: null } : await linkedDb({ contactId });
   const save = createSpaceNotes({
-    findDealSpace: async (q) => (calls.push(['find', q]), found),
+    db: linked.db,
     createDealNote: async (n) => {
       calls.push(['create', n]);
       if (failWrite) throw failWrite;
@@ -21,48 +33,45 @@ function harness({ found = { deal: { id: '111' }, spaceName: 'spaces/DEAL' }, fa
     log: (...args) => logs.push(args),
     now: () => NOW,
   });
-  const run = (over = {}) =>
-    save({ spaceName: 'spaces/DEAL', spaceDisplayName: '90001 · Pat Sample', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Pat asked for <b>Saturday</b>\nafter 10', ...over });
-  return { calls, logs, run };
+  const run = (over = {}) => save({ spaceName: 'spaces/DEAL', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Pat asked for <b>Saturday</b>\nafter 10', ...over });
+  return { calls, logs, run, data: linked.data };
 }
 
-test('a note in the deal space is saved to that deal, as written, signed and timed', async () => {
-  const { calls, logs, run } = harness();
+test('a note in the deal space is saved to that deal, as written, signed and timed, and recorded', async () => {
+  const { calls, logs, run, data } = await harness();
   assert.strictEqual(await run(), SAY.saved('90001'));
-  assert.deepStrictEqual(calls[0], ['find', { store: 'UT', dealNumber: '90001' }]);
-  const { dealId, body, timestamp } = calls[1][1];
+  const { dealId, body, timestamp } = calls[0][1];
   assert.strictEqual(dealId, '111');
   assert.strictEqual(timestamp, NOW.toISOString());
   assert.strictEqual(
     body,
     '<p><strong>Note from the deal space</strong></p><p>Pat asked for &lt;b&gt;Saturday&lt;/b&gt;<br>after 10</p><p>Added by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT.</p>',
   );
-  // The log says a note was saved, never what it says.
+  // The log and the database say a note was saved, never what it says.
   assert.ok(!JSON.stringify(logs).includes('Saturday'));
+  assert.deepStrictEqual(data.spaceNotes['555'], { dealId: '111', spaceName: 'spaces/DEAL', user: 'casey@example.com', chars: 38, at: NOW.toISOString() });
 });
 
-test('a space that is not the deal\'s recorded space saves nothing', async () => {
-  for (const [found, over] of [
-    [{ deal: { id: '111' }, spaceName: 'spaces/OTHER' }, {}],
-    [{ deal: { id: '111' }, spaceName: null }, {}],
-    [null, {}],
-    [undefined, { spaceDisplayName: 'Delivery team' }],
-  ]) {
-    const { calls, run } = harness({ found });
-    assert.strictEqual(await run(over), SAY.notDealSpace);
-    assert.ok(!calls.some((c) => c[0] === 'create'));
-  }
+test('a space that is not a linked deal space saves nothing', async () => {
+  const { calls, run } = await harness();
+  assert.strictEqual(await run({ spaceName: 'spaces/OTHER' }), SAY.notDealSpace);
+  // A space the deal has moved away from no longer takes notes.
+  const moved = await linkedDb();
+  await moved.db.linkSpace({ dealId: '111', dealNumber: '90001', store: 'UT', spaceName: 'spaces/NEWER', spaceUri: 'u', how: 'created', by: 'b' });
+  const old = await harness({ db: moved.db });
+  assert.strictEqual(await old.run(), SAY.notDealSpace);
+  assert.deepStrictEqual([...calls, ...old.calls], []);
 });
 
 test('an empty or overlong note is not saved', async () => {
-  const { calls, run } = harness();
+  const { calls, run } = await harness();
   assert.strictEqual(await run({ text: '  ' }), SAY.empty);
   assert.strictEqual(await run({ text: 'x'.repeat(MAX_CHARS + 1) }), SAY.tooLong);
   assert.deepStrictEqual(calls, []);
 });
 
 test('a failed save says nothing was saved and logs the error', async () => {
-  const { logs, run } = harness({ failWrite: Object.assign(new Error('boom'), { status: 500 }) });
+  const { logs, run } = await harness({ failWrite: Object.assign(new Error('boom'), { status: 500 }) });
   assert.strictEqual(await run(), SAY.failed('90001'));
   assert.strictEqual(logs.at(-1)[1], 'space note failed');
 });
@@ -108,10 +117,10 @@ test('events carry the space and sender display names', () => {
 });
 
 test('the note also goes on the Roamer the brief was written for', async () => {
-  const { calls, run } = harness({ found: { deal: { id: '111' }, spaceName: 'spaces/DEAL', contactId: '77' } });
+  const { calls, run } = await harness({ contactId: '77' });
   await run();
-  assert.strictEqual(calls[1][1].contactId, '77');
-  const none = harness();
+  assert.strictEqual(calls[0][1].contactId, '77');
+  const none = await harness();
   await none.run();
-  assert.strictEqual(none.calls[1][1].contactId, null);
+  assert.strictEqual(none.calls[0][1].contactId, null);
 });

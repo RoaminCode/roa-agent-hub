@@ -4,10 +4,11 @@
 // post, for a person to pin (Chat apps cannot pin). Two ways in:
 //   openSpace: Basecamp creates the space and adds the person who asked (needs the admin-
 //              approved scopes for creating spaces and adding people).
-//   useSpace:  a person creates the space, names it with the deal number first, adds
-//              Basecamp, and says "use this space for <deal#>" in it. Needs no approval.
-// Either way the space is remembered on the deal's brief note in HubSpot, so a deal gets
-// one space. Logs steps and timing, never Roamer details.
+//   useSpace:  a person creates the space, adds Basecamp, and says "use this space for
+//              <deal#>" in it. Needs no approval.
+// Either way the space is recorded in Basecamp's database (db.js), so a deal gets one
+// space, and written on the deal's brief note in HubSpot for people to see. Logs steps
+// and timing, never Roamer details.
 
 const { errorFields, isOutOfCredits } = require('./errors');
 const { renderBriefCard } = require('./chat/briefCard');
@@ -22,8 +23,7 @@ const SAY = {
   exists: (n, uri) => `Deal ${n} already has a space${uri ? `: ${uri}` : '.'}`,
   opened: (n, roamer, uri) => `Opened the space for deal ${n}${roamer ? `, ${roamer}` : ''}${uri ? `: ${uri}` : '.'}`,
   pinIt: 'This is the deal space. Pin the brief above so it stays at hand: open its menu and choose Pin.',
-  // Notes find their deal by the number at the start of the space's name.
-  rename: (n) => `Name this space starting with the deal number, such as "${n} · Roamer name", then ask me again.`,
+  busy: (n) => `The space for deal ${n} is being created right now. I'll post the link when it's ready.`,
   // Google refuses until a Workspace admin approves Basecamp creating spaces and adding people.
   notApproved: "I couldn't create the space: Google hasn't approved Basecamp creating spaces yet. Blake can see which permission is missing in the logs.",
   failed: (n) => `I couldn't open the space for deal ${n}. Blake can see what happened in the logs.`,
@@ -46,12 +46,10 @@ function describe(dealNumber, context) {
     .join(' · ');
 }
 
-// Whether a space's name starts with the deal number.
-const namedFor = (displayName, dealNumber) => new RegExp(`^#?${dealNumber}\\b`).test(String(displayName || '').trim());
-
-function createSpaceJob({ loadContext, getBrief, keepNote, spaces, sendMessage, log, avatarUrl }) {
+function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessage, log, avatarUrl }) {
   // The deal's context when it may get a space, else the reply that says why not. A deal
-  // whose recorded space still exists (and is not `here`) gets that space's link.
+  // whose recorded space still exists (and is not `here`) gets that space's link; one
+  // whose space is gone from Chat has it marked gone, and may get a new one.
   async function check({ dealNumber, store, here = null }) {
     const context = await loadContext({ store, dealNumber, rememberPick: true });
     if (context.duplicate) return { say: SAY.duplicate(dealNumber, store) };
@@ -62,10 +60,12 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, sendMessage, 
       return { say: SAY.noContact(dealNumber) };
     }
     if (context.deal.properties.dealstage !== OPEN_STAGE) return { say: SAY.closed(dealNumber) };
-    const recorded = context.briefNote && context.briefNote.spaceName;
+    const recorded = context.spaceName;
     if (recorded && recorded !== here) {
       const existing = await spaces.findSpace(recorded);
       if (existing) return { say: SAY.exists(dealNumber, existing.uri) };
+      await db.markSpaceGone({ dealId: context.deal.id, spaceName: recorded });
+      log('INFO', 'recorded deal space is gone', { dealNumber, space: recorded });
     }
     return { context };
   }
@@ -90,41 +90,59 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, sendMessage, 
 
   // `spaceName` is where the request came from (a direct message), for replies. `userName`
   // ("users/123") is who asked, and becomes the space's member.
-  async function openSpace({ spaceName, userName, dealNumber, store = 'UT' }) {
+  async function openSpace({ spaceName, userName, userEmail, dealNumber, store = 'UT' }) {
     const started = Date.now();
     let step = 'load';
+    let claimed = null;
     const reply = (text) => sendMessage(spaceName, text);
     try {
       const { say, context } = await check({ dealNumber, store });
       if (say) return await reply(say);
 
+      // One run creates a deal's space at a time; a second tap waits for the first.
+      step = 'claim';
+      if ((await db.claimSpace({ dealId: context.deal.id, by: userEmail || null })).busy) return await reply(SAY.busy(dealNumber));
+      claimed = context.deal.id;
+
       step = 'brief';
       const got = await getBrief({ context, dealNumber, started });
-      if (!got) return await reply(SAY.failed(dealNumber));
+      if (!got) {
+        await db.releaseClaim(claimed);
+        return await reply(SAY.failed(dealNumber));
+      }
 
       step = 'create space';
       const roamer = roamerName(context);
       const space = await spaces.createSpace({ displayName: [dealNumber, roamer].filter(Boolean).join(' · '), description: describe(dealNumber, context) });
+      // Recorded before anything else can fail, so a retry finds this space instead of
+      // creating another.
+      step = 'record space';
+      await db.linkSpace({ dealId: context.deal.id, dealNumber, store, spaceName: space.name, spaceUri: space.uri, how: 'created', by: userEmail || null });
+      claimed = null;
       step = 'add member';
       await spaces.addMember(space.name, userName);
       await postBrief({ space: space.name, context, got, dealNumber, setStep: (s) => (step = s) });
       log('INFO', 'deal space opened', { dealNumber, space: space.name, reusedBrief: got.reused, ms: Date.now() - started });
       await reply(SAY.opened(dealNumber, roamer, space.uri));
     } catch (err) {
+      if (claimed) await db.releaseClaim(claimed).catch((e) => log('ERROR', 'could not release space claim', { dealNumber, error: errorFields(e) }));
       await failed(err, { dealNumber, step, started, reply });
     }
   }
 
   // "use this space for <deal#>", said in the space itself (`spaceName`), named
   // `spaceDisplayName`. Replies go to that space.
-  async function useSpace({ spaceName, spaceDisplayName, dealNumber, store = 'UT' }) {
+  async function useSpace({ spaceName, userEmail, dealNumber, store = 'UT' }) {
     const started = Date.now();
     let step = 'load';
     const reply = (text) => sendMessage(spaceName, text);
     try {
-      if (!namedFor(spaceDisplayName, dealNumber)) return await reply(SAY.rename(dealNumber));
       const { say, context } = await check({ dealNumber, store, here: spaceName });
       if (say) return await reply(say);
+
+      step = 'record space';
+      const space = await spaces.findSpace(spaceName);
+      await db.linkSpace({ dealId: context.deal.id, dealNumber, store, spaceName, spaceUri: space ? space.uri : null, how: 'adopted', by: userEmail || null });
 
       step = 'brief';
       const got = await getBrief({ context, dealNumber, started });
@@ -150,9 +168,9 @@ const ACCESS = {
 };
 
 // "Request access" from Home: posts a request in the deal's space, where any member can
-// add the person, and tells the person in their direct message with Basecamp.
-// `findDirectMessage(userName)` finds that direct message.
-function createAccessRequests({ findDealSpace, spaces, sendMessage, findDirectMessage, log }) {
+// add the person, tells the person in their direct message with Basecamp, and records the
+// request. `findDirectMessage(userName)` finds that direct message.
+function createAccessRequests({ findDealSpace, spaces, db, sendMessage, findDirectMessage, log }) {
   return async function requestAccess({ dealNumber, userName, userEmail, userDisplayName, store = 'UT' }) {
     let step = 'find space';
     try {
@@ -163,6 +181,7 @@ function createAccessRequests({ findDealSpace, spaces, sendMessage, findDirectMe
       if (await spaces.isMember(space.name, userName)) return await tell(ACCESS.already(dealNumber, space.uri));
       step = 'post request';
       await sendMessage(space.name, ACCESS.asked(userDisplayName ? `${userDisplayName} (${userEmail})` : userEmail));
+      await db.recordAccessRequest({ dealId: found.deal.id, spaceName: space.name, user: userEmail });
       log('INFO', 'deal space access requested', { dealNumber, space: space.name, user: userEmail });
       await tell(ACCESS.sent(dealNumber));
     } catch (err) {
@@ -174,29 +193,15 @@ function createAccessRequests({ findDealSpace, spaces, sendMessage, findDirectMe
   };
 }
 
-// Which open deals have a deal space, for Home: every space Basecamp is in whose name
-// starts with a deal number, kept only when that deal's brief note records the same space.
-// The list is reused for `freshMs`; whether the viewer is in each space is checked per Home.
+// Which open deals have a deal space, for Home, from Basecamp's records; whether the
+// viewer is in each space is checked with Chat on each Home open.
 // Returns spacesFor(userName): Map(dealNumber -> { uri, member }).
-function createDealSpaceIndex({ spaces, findDealSpace, freshMs = 90 * 1000, clock = Date.now }) {
-  let cache = null;
-  async function dealSpaces() {
-    if (cache && clock() - cache.at < freshMs) return cache.map;
-    const map = new Map();
-    for (const sp of await spaces.listSpaces()) {
-      const m = /^#?(\d{3,8})\b/.exec(sp.displayName.trim());
-      if (!m || map.has(m[1])) continue;
-      const found = await findDealSpace({ dealNumber: m[1] });
-      if (found && found.spaceName === sp.name) map.set(m[1], { name: sp.name, uri: sp.uri });
-    }
-    cache = { at: clock(), map };
-    return map;
-  }
+function createDealSpaceIndex({ spaces, db, store = 'UT' }) {
   return async function spacesFor(userName) {
-    const out = new Map();
-    for (const [n, sp] of await dealSpaces()) out.set(n, { uri: sp.uri, member: await spaces.isMember(sp.name, userName) });
-    return out;
+    const list = await db.listDealSpaces(store);
+    const members = await Promise.all(list.map((sp) => spaces.isMember(sp.spaceName, userName)));
+    return new Map(list.map((sp, i) => [sp.dealNumber, { uri: sp.uri, member: members[i] }]));
   };
 }
 
-module.exports = { createSpaceJob, createAccessRequests, createDealSpaceIndex, namedFor, SAY, ACCESS };
+module.exports = { createSpaceJob, createAccessRequests, createDealSpaceIndex, SAY, ACCESS };

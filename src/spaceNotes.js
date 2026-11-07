@@ -2,10 +2,9 @@
 
 // Notes from a deal space to HubSpot. "@Basecamp note <text>" in a deal space saves the
 // text, as written, as a HubSpot note on that deal and its Roamer, signed with who added
-// it and when.
-// No AI. The deal comes from the space's name, which starts with the deal number, and the
-// note is saved only when that deal's brief note records this same space, so a note can
-// never land on the wrong deal. Logs steps, never the note's text.
+// it and when. No AI. The deal comes from Basecamp's record of the space (db.js), so a note
+// lands only on the deal the space was linked to, never on a guess. Logs steps, never the
+// note's text.
 
 const { errorFields } = require('./errors');
 const { writtenAt } = require('./agents/roamerBrief');
@@ -17,9 +16,10 @@ const SAY = {
   empty: 'Add the note after the word "note", for example: note Roamer asked for the delivery to move to Saturday.',
   tooLong: `That note is over ${MAX_CHARS} characters. Split it into shorter notes.`,
   directOnly: 'Notes go to HubSpot from a deal space, so they land on the right deal. Send "note ..." in the deal\'s space.',
-  notDealSpace: "This space isn't linked to a deal, so I didn't save the note. Deal spaces are named with the deal number first and recorded on the deal's brief note.",
+  notDealSpace: "This space isn't linked to a deal, so I didn't save the note. Link it first with \"use this space for <deal#>\".",
   saved: (n) => `Saved to HubSpot on deal ${n}.`,
   failed: (n) => `I couldn't save that note to deal ${n}. Nothing was saved; Blake can see what happened in the logs.`,
+  failedHere: "I couldn't save that note. Nothing was saved; Blake can see what happened in the logs.",
 };
 
 const escapeHtml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -34,33 +34,33 @@ function renderSpaceNote({ text, userDisplayName, userEmail, now }) {
   ].join('');
 }
 
-function createSpaceNotes({ findDealSpace, createDealNote, log, now = () => new Date() }) {
+function createSpaceNotes({ db, createDealNote, log, now = () => new Date() }) {
   // Returns the reply to post in the space.
-  return async function saveSpaceNote({ spaceName, spaceDisplayName, userEmail, userDisplayName, text, store = 'UT' }) {
+  return async function saveSpaceNote({ spaceName, userEmail, userDisplayName, text }) {
     const note = String(text || '').trim();
     if (!note) return SAY.empty;
     if (note.length > MAX_CHARS) return SAY.tooLong;
 
-    const m = /^#?(\d{3,8})\b/.exec(String(spaceDisplayName || '').trim());
-    if (!m) {
-      log('INFO', 'space note not saved: space name has no deal number', { space: spaceName });
-      return SAY.notDealSpace;
-    }
-    const dealNumber = m[1];
+    let dealNumber = null;
     try {
-      const found = await findDealSpace({ store, dealNumber });
-      if (!found || found.spaceName !== spaceName) {
-        log('INFO', 'space note not saved: space is not the deal\'s recorded space', { dealNumber, space: spaceName });
+      const space = await db.getSpace(spaceName);
+      const deal = space && space.status === 'ready' ? await db.getDeal(space.dealId) : null;
+      // The deal record is the authority: a space it no longer names is not the deal's.
+      if (!deal || deal.spaceName !== spaceName) {
+        log('INFO', 'space note not saved: space is not a deal space', { space: spaceName });
         return SAY.notDealSpace;
       }
+      dealNumber = space.dealNumber;
       const at = now();
       // Also on the Roamer's contact, so the next brief reads it (and is rewritten, not reused).
-      const id = await createDealNote({ dealId: found.deal.id, contactId: found.contactId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at }), timestamp: at.toISOString() });
+      const id = await createDealNote({ dealId: space.dealId, contactId: deal.contactId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at }), timestamp: at.toISOString() });
+      // The note is in HubSpot by now; failing to record it here must not say otherwise.
+      await db.recordSpaceNote({ noteId: id, dealId: space.dealId, spaceName, user: userEmail, chars: note.length }).catch((e) => log('ERROR', 'could not record space note', { dealNumber, noteId: id, error: errorFields(e) }));
       log('INFO', 'space note saved', { dealNumber, space: spaceName, noteId: id, user: userEmail, chars: note.length });
       return SAY.saved(dealNumber);
     } catch (err) {
       log('ERROR', 'space note failed', { dealNumber, space: spaceName, error: errorFields(err) });
-      return SAY.failed(dealNumber);
+      return dealNumber ? SAY.failed(dealNumber) : SAY.failedHere;
     }
   };
 }

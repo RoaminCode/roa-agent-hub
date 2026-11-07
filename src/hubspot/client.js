@@ -46,7 +46,9 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     }
     if (!res.ok) {
       // The status and path are enough to debug; response bodies can hold Roamer details.
-      throw safeError(`HubSpot ${method} ${path.split('?')[0]} failed: HTTP ${res.status}`);
+      const err = safeError(`HubSpot ${method} ${path.split('?')[0]} failed: HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
     }
     return res.json();
   }

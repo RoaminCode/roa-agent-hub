@@ -274,3 +274,44 @@ test('createDealNote also puts the note on the Roamer when given a contact', asy
   ]);
   await assert.rejects(hubspot.createDealNote({ dealId: '111', contactId: '77/x', body: 'x', timestamp: 't' }), /invalid contact id/);
 });
+
+test("with Basecamp's record, the brief note is read by id and the space and signature come from the record", async () => {
+  const { renderBriefNote } = require('../src/agents/briefNote');
+  const { createFakeFirestore } = require('./fakeFirestore');
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  // The note says one space; the record, which only Basecamp writes, says another and wins.
+  const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, spaceName: 'spaces/EDITED' });
+  const base = fakeHubSpot();
+  const gets = [];
+  const hubspot = {
+    ...base,
+    get: async (path) => {
+      gets.push(path);
+      if (path.startsWith('/crm/v3/objects/notes/')) return { id: '5', properties: { hs_note_body: body } };
+      return base.get(path);
+    },
+  };
+  // The fake's deal id is not numeric, so the record is put straight into the fake store.
+  const firestore = createFakeFirestore({ deals: { d1: { spaceName: 'spaces/REAL', briefNoteId: '5', briefSignature: { contactId: '77', itemCount: 99, newestAt: 'x' }, contactId: '77' } } });
+  const ctx = await createDealContext({ hubspot, db: { getDeal: async (id) => (await firestore.collection('deals').doc(id).get()).data() || null } })({ store: 'UT', dealNumber: '90001' });
+  assert.strictEqual(ctx.spaceName, 'spaces/REAL');
+  assert.strictEqual(ctx.briefNote.id, '5');
+  assert.strictEqual(ctx.briefNote.signature.itemCount, 99);
+  assert.ok(gets.includes('/crm/v3/objects/notes/5?properties=hs_note_body'));
+  assert.ok(!gets.some((p) => p.includes('/deals/d1/associations/notes')));
+});
+
+test('saving a brief note records its id and what it was built from', async () => {
+  const { createBriefNoteSaver } = require('../src/hubspot/briefNotes');
+  const { createDb } = require('../src/db');
+  const { createFakeFirestore } = require('./fakeFirestore');
+  const firestore = createFakeFirestore();
+  const save = createBriefNoteSaver({ hubspot: { createDealNote: async () => '321' }, db: createDb({ firestore }) });
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  await save({ context: { store: 'UT', deal: { id: '111', properties: { ls_deal_number: '90001' } }, contact: { id: '77' }, items: [{ at: '2026-11-01T00:00:00Z' }], briefNote: null }, brief });
+  const rec = firestore.data.deals['111'];
+  assert.strictEqual(rec.briefNoteId, '321');
+  assert.strictEqual(rec.contactId, '77');
+  assert.deepStrictEqual(rec.briefSignature, { contactId: '77', itemCount: 1, newestAt: '2026-11-01T00:00:00Z' });
+  assert.strictEqual(rec.dealNumber, '90001');
+});

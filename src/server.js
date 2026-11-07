@@ -29,6 +29,8 @@ const { createSpaceJob, createAccessRequests, createDealSpaceIndex } = require('
 const { createSpaces } = require('./chat/spaces');
 const { createSpaceNotes } = require('./spaceNotes');
 const { createBriefNoteSaver } = require('./hubspot/briefNotes');
+const { createDb } = require('./db');
+const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -80,7 +82,9 @@ function features(audience) {
   const spaceFor = async ({ spaceName, userName }) => spaceName || findDirectMessage(userName);
 
   const spaces = createSpaces();
-  const findDealSpace = hubspot ? createDealContext({ hubspot }).findDealSpace : null;
+  // Basecamp's own records (IDs, timestamps, statuses) in the project's Firestore database.
+  const db = createDb({ firestore: new Firestore({ ignoreUndefinedProperties: true }) });
+  const findDealSpace = hubspot ? createDealContext({ hubspot, db }).findDealSpace : null;
   // Not awaited, like briefs: these outlive the request and report back when done.
   const later = (what, run) => (job) => {
     run(job).catch((err) => log('ERROR', `${what} crashed`, { dealNumber: job.dealNumber, error: errorFields(err) }));
@@ -98,9 +102,9 @@ function features(audience) {
     startSpace = startBrief;
     useSpace = later('use space', (job) => sendMessage(job.spaceName, "Briefs aren't switched on yet."));
   } else {
-    const loadContext = createDealContext({ hubspot });
+    const loadContext = createDealContext({ hubspot, db });
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-    const saveBriefNote = createBriefNoteSaver({ hubspot });
+    const saveBriefNote = createBriefNoteSaver({ hubspot, db });
     // Bump v when the avatar image changes.
     const avatarUrl = `${new URL(audience).origin}/avatar.png?v=2`;
     const runBrief = createBriefJob({ loadContext, saveBriefNote, anthropic, sendMessage, log, avatarUrl, endpoint: audience });
@@ -109,6 +113,7 @@ function features(audience) {
       getBrief: createBriefSource({ anthropic, log }),
       keepNote: createNoteKeeper({ saveBriefNote, log }),
       spaces,
+      db,
       sendMessage,
       log,
       avatarUrl,
@@ -125,13 +130,13 @@ function features(audience) {
 
   // Notes from deal spaces need HubSpot only, no AI.
   const saveSpaceNote = hubspot
-    ? createSpaceNotes({ findDealSpace, createDealNote: hubspot.createDealNote, log })
+    ? createSpaceNotes({ db, createDealNote: hubspot.createDealNote, log })
     : async () => "Notes aren't switched on yet.";
   const requestAccess = later(
     'access request',
-    hubspot ? createAccessRequests({ findDealSpace, spaces, sendMessage, findDirectMessage, log }) : async () => {},
+    hubspot ? createAccessRequests({ findDealSpace, spaces, db, sendMessage, findDirectMessage, log }) : async () => {},
   );
-  const spacesFor = hubspot ? createDealSpaceIndex({ spaces, findDealSpace }) : null;
+  const spacesFor = hubspot ? createDealSpaceIndex({ spaces, db }) : null;
 
   const listOpenDeals = hubspot ? createOpenDeals({ hubspot }) : null;
   // Loading deals takes about 4 seconds; a Brief tap redraws Home and should answer at

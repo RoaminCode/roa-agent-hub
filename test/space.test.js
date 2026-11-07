@@ -2,103 +2,125 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { createSpaceJob, createAccessRequests, createDealSpaceIndex, namedFor, SAY, ACCESS } = require('../src/spaceJob');
+const { createSpaceJob, createAccessRequests, createDealSpaceIndex, SAY, ACCESS } = require('../src/spaceJob');
 const { createSpaces } = require('../src/chat/spaces');
 const { createRouter, parseCommand, MESSAGES } = require('../src/router');
 const { renderBriefNote, parseBriefNote } = require('../src/agents/briefNote');
 const { cleanText } = require('../src/hubspot/dealContext');
 const { createBriefNoteSaver } = require('../src/hubspot/briefNotes');
+const { createDb } = require('../src/db');
+const { createFakeFirestore } = require('./fakeFirestore');
 
+const NOW = new Date('2026-11-07T17:00:00Z');
 const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
 const context = (over = {}) => ({
   found: true,
+  store: 'UT',
   deal: { id: '111', properties: { dealstage: '85341732', projected_delivery_date: '2026-11-14T00:00:00Z' } },
   contact: { id: '222', properties: { firstname: 'Pat', lastname: 'Sample' } },
   salesCoach: 'Casey Coach',
   items: [],
   briefNote: null,
+  spaceName: null,
   ...over,
 });
 
-// A space job with every outside call recorded.
-function harness({ ctx = context(), found = null, createError = null, brief: got = { brief, reused: true } } = {}) {
+// A space job with every outside call recorded, and Basecamp's database in memory.
+function harness({ ctx = context(), found = null, createError = null, memberError = null, brief: got = { brief, reused: true }, data = {} } = {}) {
   const calls = [];
   const logs = [];
+  const firestore = createFakeFirestore(data);
+  const db = createDb({ firestore, now: () => NOW });
   const { openSpace: job, useSpace } = createSpaceJob({
     loadContext: async (q) => (calls.push(['load', q]), ctx),
     getBrief: async () => (calls.push(['brief']), got),
     keepNote: async (args) => calls.push(['note', args.spaceName]),
     spaces: {
-      findSpace: async (name) => (calls.push(['find', name]), found),
+      findSpace: async (name) => (calls.push(['find', name]), name === 'spaces/MINE' ? { name, uri: 'https://chat.google.com/room/MINE' } : found),
       createSpace: async (args) => {
         calls.push(['create', args.displayName, args.description]);
         if (createError) throw createError;
         return { name: 'spaces/NEW', uri: 'https://chat.google.com/room/NEW' };
       },
-      addMember: async (space, user) => calls.push(['member', space, user]),
+      addMember: async (space, user) => {
+        calls.push(['member', space, user]);
+        if (memberError) throw memberError;
+      },
     },
+    db,
     sendMessage: async (space, message) => calls.push(['send', space, typeof message === 'string' ? message : message.cardsV2[0].cardId]),
     log: (...args) => logs.push(args),
     avatarUrl: 'https://example.com/a.png',
   });
-  const run = () => job({ spaceName: 'spaces/DM', userName: 'users/1', dealNumber: '90001', store: 'UT' });
-  const use = (spaceDisplayName = '90001 · Pat Sample') => useSpace({ spaceName: 'spaces/MINE', spaceDisplayName, dealNumber: '90001', store: 'UT' });
-  return { calls, logs, run, use };
+  const run = () => job({ spaceName: 'spaces/DM', userName: 'users/1', userEmail: 'blake@example.com', dealNumber: '90001', store: 'UT' });
+  const use = () => useSpace({ spaceName: 'spaces/MINE', userEmail: 'blake@example.com', dealNumber: '90001', store: 'UT' });
+  return { calls, logs, run, use, data: firestore.data, db };
 }
 
-test('"use this space": the brief and pin reminder are posted there and the space saved on the note', async () => {
-  const { calls, logs, use } = harness();
+test('"use this space": records the space, posts the brief and pin reminder there, keeps the note', async () => {
+  const { calls, logs, use, data } = harness();
   await use();
   assert.deepStrictEqual(calls, [
     ['load', { store: 'UT', dealNumber: '90001', rememberPick: true }],
+    ['find', 'spaces/MINE'],
     ['brief'],
     ['send', 'spaces/MINE', 'brief-90001'],
     ['send', 'spaces/MINE', SAY.pinIt],
     ['note', 'spaces/MINE'],
   ]);
   assert.strictEqual(logs.at(-1)[1], 'deal space adopted');
+  const { updatedAt, ...deal } = data.deals['111'];
+  assert.ok(updatedAt);
+  assert.deepStrictEqual(deal, {
+    dealNumber: '90001',
+    store: 'UT',
+    spaceName: 'spaces/MINE',
+    spaceUri: 'https://chat.google.com/room/MINE',
+    spaceHow: 'adopted',
+    spaceLinkedAt: NOW.toISOString(),
+    spaceLinkedBy: 'blake@example.com',
+    spaceClaim: null,
+  });
+  assert.strictEqual(data.spaces.MINE.status, 'ready');
+  assert.strictEqual(data.spaces.MINE.dealId, '111');
 });
 
-test('"use this space" needs the deal number first in the name, and one space per deal', async () => {
-  const misnamed = harness();
-  await misnamed.use('Pat delivery');
-  assert.deepStrictEqual(misnamed.calls, [['send', 'spaces/MINE', SAY.rename('90001')]]);
-  assert.ok(namedFor('#90001 Pat', '90001') && !namedFor('900012 Pat', '90001'));
-
-  const other = harness({ ctx: context({ briefNote: { id: '9', spaceName: 'spaces/OLD' } }), found: { name: 'spaces/OLD', uri: 'https://chat.google.com/room/OLD' } });
+test('"use this space" keeps one space per deal; asked again in the same space it re-posts', async () => {
+  const other = harness({ ctx: context({ spaceName: 'spaces/OLD' }), found: { name: 'spaces/OLD', uri: 'https://chat.google.com/room/OLD' } });
   await other.use();
   assert.deepStrictEqual(other.calls.at(-1), ['send', 'spaces/MINE', SAY.exists('90001', 'https://chat.google.com/room/OLD')]);
 
-  // Asked again in the space already recorded: the brief is posted again, no "already has".
-  const same = harness({ ctx: context({ briefNote: { id: '9', spaceName: 'spaces/MINE' } }) });
+  const same = harness({ ctx: context({ spaceName: 'spaces/MINE' }) });
   await same.use();
-  assert.ok(!same.calls.some((c) => c[0] === 'find'));
   assert.deepStrictEqual(same.calls.at(-1), ['note', 'spaces/MINE']);
 });
 
 function accessHarness({ found = { deal: { id: '1' }, spaceName: 'spaces/DEAL' }, exists = true, member = false } = {}) {
   const calls = [];
+  const firestore = createFakeFirestore();
   const request = createAccessRequests({
     findDealSpace: async () => found,
     spaces: {
       findSpace: async (name) => (exists ? { name, uri: 'https://chat.google.com/room/DEAL' } : null),
       isMember: async () => member,
     },
+    db: createDb({ firestore, now: () => NOW }),
     sendMessage: async (space, text) => calls.push([space, text]),
     findDirectMessage: async () => 'spaces/DM',
     log: () => {},
   });
   const run = () => request({ dealNumber: '90001', userName: 'users/2', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach' });
-  return { calls, run };
+  return { calls, run, data: firestore.data };
 }
 
-test('request access asks in the deal space and tells the person', async () => {
-  const { calls, run } = accessHarness();
+test('request access asks in the deal space, tells the person, and records the request', async () => {
+  const { calls, run, data } = accessHarness();
   await run();
   assert.deepStrictEqual(calls, [
     ['spaces/DEAL', ACCESS.asked('Casey Coach (casey@example.com)')],
     ['spaces/DM', ACCESS.sent('90001')],
   ]);
+  assert.deepStrictEqual(Object.values(data.accessRequests), [{ dealId: '1', spaceName: 'spaces/DEAL', user: 'casey@example.com', at: NOW.toISOString() }]);
   const inIt = accessHarness({ member: true });
   await inIt.run();
   assert.deepStrictEqual(inIt.calls, [['spaces/DM', ACCESS.already('90001', 'https://chat.google.com/room/DEAL')]]);
@@ -107,24 +129,21 @@ test('request access asks in the deal space and tells the person', async () => {
   assert.deepStrictEqual(gone.calls, [['spaces/DM', ACCESS.noSpace('90001')]]);
 });
 
-test('Home finds deal spaces by name, trusting only those the brief note records', async () => {
-  const listed = [
-    { name: 'spaces/A', displayName: '90001 · Pat Sample', uri: 'u/A' },
-    { name: 'spaces/B', displayName: '90002 · Someone made this', uri: 'u/B' },
-    { name: 'spaces/C', displayName: 'Delivery team', uri: 'u/C' },
-  ];
-  let lists = 0;
-  const spacesFor = createDealSpaceIndex({
-    spaces: { listSpaces: async () => (lists++, listed), isMember: async (space, user) => space === 'spaces/A' && user === 'users/1' },
-    findDealSpace: async ({ dealNumber }) => ({ deal: { id: dealNumber }, spaceName: dealNumber === '90001' ? 'spaces/A' : 'spaces/OTHER' }),
-  });
-  assert.deepStrictEqual([...(await spacesFor('users/1'))], [['90001', { uri: 'u/A', member: true }]]);
-  assert.deepStrictEqual([...(await spacesFor('users/2'))], [['90001', { uri: 'u/A', member: false }]]);
-  assert.strictEqual(lists, 1);
+test('Home reads deal spaces from the database and checks membership per viewer', async () => {
+  const db = createDb({ firestore: createFakeFirestore(), now: () => NOW });
+  await db.linkSpace({ dealId: '1', dealNumber: '90001', store: 'UT', spaceName: 'spaces/A', spaceUri: 'u/A', how: 'adopted', by: 'b' });
+  await db.linkSpace({ dealId: '2', dealNumber: '90002', store: 'UT', spaceName: 'spaces/B', spaceUri: 'u/B', how: 'adopted', by: 'b' });
+  // Deal 2 moved to a new space: the old one is marked gone and not shown.
+  await db.linkSpace({ dealId: '2', dealNumber: '90002', store: 'UT', spaceName: 'spaces/C', spaceUri: 'u/C', how: 'created', by: 'b' });
+  const spacesFor = createDealSpaceIndex({ db, spaces: { isMember: async (space, user) => space === 'spaces/A' && user === 'users/1' } });
+  assert.deepStrictEqual([...(await spacesFor('users/1'))].sort(), [
+    ['90001', { uri: 'u/A', member: true }],
+    ['90002', { uri: 'u/C', member: false }],
+  ]);
 });
 
-test('opens a space: asker as member, brief first, a pin reminder, the space saved on the note, link back', async () => {
-  const { calls, logs, run } = harness();
+test('opens a space: claim, brief, create and record at once, member, brief and pin, note, link back', async () => {
+  const { calls, logs, run, data } = harness();
   await run();
   assert.deepStrictEqual(calls, [
     ['load', { store: 'UT', dealNumber: '90001', rememberPick: true }],
@@ -137,10 +156,30 @@ test('opens a space: asker as member, brief first, a pin reminder, the space sav
     ['send', 'spaces/DM', SAY.opened('90001', 'Pat Sample', 'https://chat.google.com/room/NEW')],
   ]);
   assert.strictEqual(logs.at(-1)[1], 'deal space opened');
+  assert.strictEqual(data.deals['111'].spaceName, 'spaces/NEW');
+  assert.strictEqual(data.deals['111'].spaceHow, 'created');
+  assert.strictEqual(data.deals['111'].spaceClaim, null);
+});
+
+test('a space created but not joined is still recorded, so a retry links it instead of making another', async () => {
+  const { run, data } = harness({ memberError: Object.assign(new Error('x'), { status: 500 }) });
+  await run();
+  assert.strictEqual(data.deals['111'].spaceName, 'spaces/NEW');
+});
+
+test('a second request while one is creating the space waits; an old abandoned claim does not block', async () => {
+  const busy = harness({ data: { deals: { 111: { spaceClaim: { by: 'x', at: new Date(NOW - 60 * 1000).toISOString() } } } } });
+  await busy.run();
+  assert.deepStrictEqual(busy.calls.at(-1), ['send', 'spaces/DM', SAY.busy('90001')]);
+  assert.ok(!busy.calls.some((c) => c[0] === 'create'));
+
+  const stale = harness({ data: { deals: { 111: { spaceClaim: { by: 'x', at: new Date(NOW - 10 * 60 * 1000).toISOString() } } } } });
+  await stale.run();
+  assert.ok(stale.calls.some((c) => c[0] === 'create'));
 });
 
 test('a deal with a space gets its link, not a second space', async () => {
-  const { calls, run } = harness({ ctx: context({ briefNote: { id: '9', spaceName: 'spaces/OLD' } }), found: { name: 'spaces/OLD', uri: 'https://chat.google.com/room/OLD' } });
+  const { calls, run } = harness({ ctx: context({ spaceName: 'spaces/OLD' }), found: { name: 'spaces/OLD', uri: 'https://chat.google.com/room/OLD' } });
   await run();
   assert.deepStrictEqual(calls.slice(1), [
     ['find', 'spaces/OLD'],
@@ -148,10 +187,12 @@ test('a deal with a space gets its link, not a second space', async () => {
   ]);
 });
 
-test('a recorded space that is gone is opened again', async () => {
-  const { calls, run } = harness({ ctx: context({ briefNote: { id: '9', spaceName: 'spaces/OLD' } }), found: null });
+test('a recorded space that is gone is marked gone and opened again', async () => {
+  const { calls, run, data } = harness({ ctx: context({ spaceName: 'spaces/OLD' }), found: null });
   await run();
   assert.ok(calls.some((c) => c[0] === 'create'));
+  assert.strictEqual(data.spaces.OLD.status, 'gone');
+  assert.strictEqual(data.deals['111'].spaceName, 'spaces/NEW');
 });
 
 test('closed deals, several contacts, and missing deals get a plain answer and no space', async () => {
@@ -166,20 +207,22 @@ test('closed deals, several contacts, and missing deals get a plain answer and n
   }
 });
 
-test('Google refusing to create a space says it is not approved yet, and logs the step', async () => {
-  const { calls, logs, run } = harness({ createError: Object.assign(new Error('forbidden'), { status: 403 }) });
+test('Google refusing to create a space says it is not approved yet, logs the step, and frees the claim', async () => {
+  const { calls, logs, run, data } = harness({ createError: Object.assign(new Error('forbidden'), { status: 403 }) });
   await run();
   assert.deepStrictEqual(calls.at(-1), ['send', 'spaces/DM', SAY.notApproved]);
   const failed = logs.find((l) => l[1] === 'open space failed');
   assert.strictEqual(failed[2].step, 'create space');
   assert.strictEqual(failed[2].error.status, 403);
+  assert.strictEqual(data.deals['111'].spaceClaim, null);
 });
 
-test('no usable brief means no space', async () => {
-  const { calls, run } = harness({ brief: null });
+test('no usable brief means no space, and the claim is freed', async () => {
+  const { calls, run, data } = harness({ brief: null });
   await run();
   assert.deepStrictEqual(calls.at(-1), ['send', 'spaces/DM', SAY.failed('90001')]);
   assert.ok(!calls.some((c) => c[0] === 'create'));
+  assert.strictEqual(data.deals['111'].spaceClaim, null);
 });
 
 test('reads "open a space for <deal>" and its short forms', () => {
