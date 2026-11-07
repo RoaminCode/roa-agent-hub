@@ -330,3 +330,34 @@ test('a new brief is saved before the space is created, so a refused space does 
   await reused.run();
   assert.strictEqual(reused.calls.filter((c) => c[0] === 'note').length, 1);
 });
+
+test('opening or using a space finds or creates the Delivery record after the brief; a failure there keeps the space', async () => {
+  const ensured = [];
+  const run = async (fail) => {
+    const { createSpaceJob: make } = require('../src/spaceJob');
+    const logs = [];
+    const job = make({
+      loadContext: async () => context(),
+      getBrief: async () => ({ brief, reused: true }),
+      keepNote: async () => null,
+      spaces: { findSpace: async (n) => ({ name: n, uri: 'u' }), createSpace: async () => ({ name: 'spaces/NEW', uri: 'u' }), addMember: async () => {} },
+      db: createDb({ firestore: createFakeFirestore(), now: () => NOW }),
+      sendMessage: async () => {},
+      log: (...l) => logs.push(l),
+      avatarUrl: 'a',
+      ensureDelivery: async (a) => {
+        ensured.push(a);
+        if (fail) throw new Error('hubspot down');
+        return { id: '888', created: true };
+      },
+    });
+    await job.useSpace({ spaceName: 'spaces/MINE', userEmail: 'b', dealNumber: '90001' });
+    return logs;
+  };
+  const ok = await run(false);
+  assert.deepStrictEqual(ensured[0], { dealId: '111', dealNumber: '90001', contactId: '222' });
+  assert.strictEqual(ok.at(-1)[1], 'deal space adopted');
+  const failed = await run(true);
+  assert.ok(failed.some((l) => l[1] === 'could not find or create Delivery record'));
+  assert.strictEqual(failed.at(-1)[1], 'deal space adopted');
+});

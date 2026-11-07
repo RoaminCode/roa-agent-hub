@@ -1,9 +1,10 @@
 'use strict';
 
 // Minimal HubSpot API client. Reads: GET, plus POST only to search and batch-read
-// endpoints, which read data. Agents never edit HubSpot fields. The only writes are
-// Basecamp's own notes, through two narrow methods: create a note on a deal, and update a
-// note that a check proves is Basecamp's own. There is no general write.
+// endpoints, which read data. Agents never edit HubSpot fields. The only writes are narrow
+// methods: create a note on a deal, update a note that a check proves is Basecamp's own,
+// create a deal's Delivery record (stage Deposit Received, nothing else filled) linked to
+// the deal and the Roamer, and link a note to a Delivery record. There is no general write.
 
 const { safeError } = require('../errors');
 
@@ -14,6 +15,17 @@ const NOTE_PATH = /^\/crm\/v3\/objects\/notes\/\d+$/;
 // HubSpot's association types for a note on a deal and on a contact.
 const NOTE_TO_DEAL = 214;
 const NOTE_TO_CONTACT = 202;
+
+// The Delivery custom object, its pipeline's first stage, and its association types
+// (defined in this HubSpot account, so "USER_DEFINED").
+const DELIVERY = '2-59426991';
+const DELIVERIES = `/crm/v3/objects/${DELIVERY}`;
+const DELIVERY_PIPELINE = '883780109';
+const DEPOSIT_RECEIVED = '1327357231';
+const DELIVERY_TO_DEAL = 98;
+const DELIVERY_TO_CONTACT = 96;
+const NOTE_TO_DELIVERY = 95;
+const NOTE_DELIVERY_LINK = new RegExp(`^/crm/v4/objects/notes/\\d+/associations/${DELIVERY}/\\d+$`);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,7 +39,8 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
   async function request(method, path, body, { write = false } = {}) {
     const isRead = method === 'GET' || (method === 'POST' && READ_POST.test(path));
     const isNoteWrite = write && ((method === 'POST' && path === NOTES) || (method === 'PATCH' && NOTE_PATH.test(path)));
-    if (!isRead && !isNoteWrite) {
+    const isDeliveryWrite = write && ((method === 'POST' && path === DELIVERIES) || (method === 'PUT' && NOTE_DELIVERY_LINK.test(path)));
+    if (!isRead && !isNoteWrite && !isDeliveryWrite) {
       throw safeError(`HubSpot client refuses ${method} to ${path}: only search and batch read are allowed`);
     }
     const send = () =>
@@ -54,17 +67,23 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
   }
 
   // A new note on one deal, and also on the deal's Roamer when `contactId` is given (so the
-  // Roamer's record, which briefs read, includes it). Returns the note's id.
-  async function createDealNote({ dealId, contactId = null, body, timestamp }) {
+  // Roamer's record, which briefs read, includes it) and on its Delivery record when
+  // `deliveryId` is given. Returns the note's id.
+  async function createDealNote({ dealId, contactId = null, deliveryId = null, body, timestamp }) {
     if (!/^\d+$/.test(String(dealId))) throw safeError('createDealNote: invalid deal id');
     if (contactId !== null && !/^\d+$/.test(String(contactId))) throw safeError('createDealNote: invalid contact id');
-    const on = (id, typeId) => ({ to: { id: String(id) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: typeId }] });
+    if (deliveryId !== null && !/^\d+$/.test(String(deliveryId))) throw safeError('createDealNote: invalid delivery id');
+    const on = (id, typeId, category = 'HUBSPOT_DEFINED') => ({ to: { id: String(id) }, types: [{ associationCategory: category, associationTypeId: typeId }] });
     const note = await request(
       'POST',
       NOTES,
       {
         properties: { hs_timestamp: timestamp, hs_note_body: body },
-        associations: [on(dealId, NOTE_TO_DEAL), ...(contactId !== null ? [on(contactId, NOTE_TO_CONTACT)] : [])],
+        associations: [
+          on(dealId, NOTE_TO_DEAL),
+          ...(contactId !== null ? [on(contactId, NOTE_TO_CONTACT)] : []),
+          ...(deliveryId !== null ? [on(deliveryId, NOTE_TO_DELIVERY, 'USER_DEFINED')] : []),
+        ],
       },
       { write: true },
     );
@@ -82,12 +101,39 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     return String(noteId);
   }
 
+  // A deal's Delivery record: Delivery Pipeline, stage Deposit Received, no other fields,
+  // linked to the deal and its Roamer. Returns its id. Callers check first that the deal has
+  // none (hubspot/deliveries.js).
+  async function createDelivery({ dealId, contactId = null }) {
+    if (!/^\d+$/.test(String(dealId))) throw safeError('createDelivery: invalid deal id');
+    if (contactId !== null && !/^\d+$/.test(String(contactId))) throw safeError('createDelivery: invalid contact id');
+    const on = (id, typeId) => ({ to: { id: String(id) }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: typeId }] });
+    const delivery = await request(
+      'POST',
+      DELIVERIES,
+      {
+        properties: { hs_pipeline: DELIVERY_PIPELINE, hs_pipeline_stage: DEPOSIT_RECEIVED },
+        associations: [on(dealId, DELIVERY_TO_DEAL), ...(contactId !== null ? [on(contactId, DELIVERY_TO_CONTACT)] : [])],
+      },
+      { write: true },
+    );
+    return String(delivery.id);
+  }
+
+  // Links an existing note (such as the deal's brief note) to a Delivery record.
+  async function linkNoteToDelivery({ noteId, deliveryId }) {
+    if (!/^\d+$/.test(String(noteId)) || !/^\d+$/.test(String(deliveryId))) throw safeError('linkNoteToDelivery: invalid id');
+    await request('PUT', `/crm/v4/objects/notes/${noteId}/associations/${DELIVERY}/${deliveryId}`, [{ associationCategory: 'USER_DEFINED', associationTypeId: NOTE_TO_DELIVERY }], { write: true });
+  }
+
   return {
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, body),
     createDealNote,
     updateNote,
+    createDelivery,
+    linkNoteToDelivery,
   };
 }
 
-module.exports = { createHubSpotClient };
+module.exports = { createHubSpotClient, DELIVERY, DELIVERY_PIPELINE, DEPOSIT_RECEIVED };

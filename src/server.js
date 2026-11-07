@@ -34,6 +34,7 @@ const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createDb } = require('./db');
 const { createQuestionRouter } = require('./askJob');
 const { createQaNotes } = require('./hubspot/qaNotes');
+const { createDeliveries } = require('./hubspot/deliveries');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
 
@@ -120,6 +121,7 @@ function features(audience) {
       keepNote: createNoteKeeper({ saveBriefNote, log }),
       spaces,
       db,
+      ensureDelivery: createDeliveries({ hubspot, db, log }),
       sendMessage,
       log,
       avatarUrl,

@@ -9,7 +9,8 @@
 // Collections:
 //   deals/{hubspotDealId}   dealNumber, store, contactId, briefNoteId, briefSignature,
 //                           briefWrittenAt, spaceName, spaceUri, spaceHow, spaceLinkedAt,
-//                           spaceLinkedBy, spaceClaim, updatedAt
+//                           spaceLinkedBy, spaceClaim, deliveryId,
+//                           deliveryCreatedByBasecamp, deliveryLinkedAt, updatedAt
 //   spaces/{spaceId}        spaceName, dealId, dealNumber, store, how, status, linkedAt,
 //                           linkedBy (status "ready" or "gone")
 //   accessRequests/{auto}   dealId, spaceName, user, at
@@ -72,6 +73,11 @@ function createDb({ firestore, now = () => new Date() }) {
       tx.set(ref, { spaceClaim: { by, at: stamp() }, updatedAt: stamp() }, { merge: true });
       return { claimed: true };
     });
+  }
+
+  // The deal's HubSpot Delivery record, and whether Basecamp created it.
+  async function recordDelivery({ dealId, deliveryId, created }) {
+    await deals.doc(dealDocId(dealId)).set({ deliveryId: String(deliveryId), deliveryCreatedByBasecamp: Boolean(created), deliveryLinkedAt: stamp(), updatedAt: stamp() }, { merge: true });
   }
 
   async function releaseClaim(dealId) {
@@ -174,7 +180,7 @@ function createDb({ firestore, now = () => new Date() }) {
     await firestore.collection('questions').doc(id).set({ status: 'answered', answeredBy, answeredAt: stamp(), answers }, { merge: true });
   }
 
-  return { getDeal, getSpace, recordBrief, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered };
+  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered };
 }
 
 module.exports = { createDb, CLAIM_MS };

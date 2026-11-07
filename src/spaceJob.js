@@ -46,7 +46,16 @@ function describe(dealNumber, context) {
     .join(' · ');
 }
 
-function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessage, log, avatarUrl }) {
+// `ensureDelivery` (hubspot/deliveries.js) finds or creates the deal's Delivery record once
+// the space is open; a failure there is logged and the space stays open.
+function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessage, log, avatarUrl, ensureDelivery = null }) {
+  async function delivery(context, dealNumber) {
+    if (!ensureDelivery) return;
+    await ensureDelivery({ dealId: context.deal.id, dealNumber, contactId: context.contact ? context.contact.id : null }).catch((err) =>
+      log('ERROR', 'could not find or create Delivery record', { dealNumber, error: errorFields(err) }),
+    );
+  }
+
   // The deal's context when it may get a space, else the reply that says why not. A deal
   // whose recorded space still exists (and is not `here`) gets that space's link; one
   // whose space is gone from Chat has it marked gone, and may get a new one.
@@ -129,6 +138,8 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       step = 'add member';
       await spaces.addMember(space.name, userName);
       await postBrief({ space: space.name, context, got, dealNumber, setStep: (s) => (step = s) });
+      step = 'delivery record';
+      await delivery(context, dealNumber);
       log('INFO', 'deal space opened', { dealNumber, space: space.name, reusedBrief: got.reused, ms: Date.now() - started });
       await reply(SAY.opened(dealNumber, roamer, space.uri));
     } catch (err) {
@@ -156,6 +167,8 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       if (!got) return await reply(SAY.failed(dealNumber));
 
       await postBrief({ space: spaceName, context, got, dealNumber, setStep: (s) => (step = s) });
+      step = 'delivery record';
+      await delivery(context, dealNumber);
       log('INFO', 'deal space adopted', { dealNumber, space: spaceName, reusedBrief: got.reused, ms: Date.now() - started });
     } catch (err) {
       await failed(err, { dealNumber, step, started, reply });

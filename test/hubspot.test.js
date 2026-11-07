@@ -17,9 +17,9 @@ test('the HubSpot client only POSTs to search and batch read', async () => {
   assert.strictEqual(calls.length, 2);
 });
 
-test('the HubSpot client offers no writes but the two note methods', () => {
+test('the HubSpot client offers no writes but the note and Delivery record methods', () => {
   const hubspot = createHubSpotClient({ token: 't', fetchImpl: async () => ok({}) });
-  assert.deepStrictEqual(Object.keys(hubspot).sort(), ['createDealNote', 'get', 'post', 'updateNote']);
+  assert.deepStrictEqual(Object.keys(hubspot).sort(), ['createDealNote', 'createDelivery', 'get', 'linkNoteToDelivery', 'post', 'updateNote']);
 });
 
 test('createDealNote creates one note on one deal, and nothing else', async () => {
@@ -314,4 +314,61 @@ test('saving a brief note records its id and what it was built from', async () =
   assert.strictEqual(rec.contactId, '77');
   assert.deepStrictEqual(rec.briefSignature, { contactId: '77', itemCount: 1, newestAt: '2026-11-01T00:00:00Z' });
   assert.strictEqual(rec.dealNumber, '90001');
+});
+
+test('createDelivery makes one Delivery record at Deposit Received, linked to the deal and the Roamer, nothing else filled', async () => {
+  const calls = [];
+  const hubspot = createHubSpotClient({ token: 't', fetchImpl: async (url, opts) => (calls.push([opts.method, url, opts.body && JSON.parse(opts.body)]), ok({ id: 888 })) });
+  assert.strictEqual(await hubspot.createDelivery({ dealId: '111', contactId: '77' }), '888');
+  assert.deepStrictEqual(calls[0], [
+    'POST',
+    'https://api.hubapi.com/crm/v3/objects/2-59426991',
+    {
+      properties: { hs_pipeline: '883780109', hs_pipeline_stage: '1327357231' },
+      associations: [
+        { to: { id: '111' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 98 }] },
+        { to: { id: '77' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 96 }] },
+      ],
+    },
+  ]);
+  await hubspot.linkNoteToDelivery({ noteId: '5', deliveryId: '888' });
+  assert.deepStrictEqual(calls[1], ['PUT', 'https://api.hubapi.com/crm/v4/objects/notes/5/associations/2-59426991/888', [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }]]);
+  await hubspot.createDealNote({ dealId: '111', contactId: '77', deliveryId: '888', body: 'x', timestamp: 't' });
+  assert.deepStrictEqual(calls[2][2].associations[2], { to: { id: '888' }, types: [{ associationCategory: 'USER_DEFINED', associationTypeId: 95 }] });
+  await assert.rejects(hubspot.createDelivery({ dealId: '1/../x' }), /invalid deal id/);
+  await assert.rejects(hubspot.linkNoteToDelivery({ noteId: '5', deliveryId: '8/x' }), /invalid id/);
+  // The guard still refuses any other write, including to other objects' records.
+  await assert.rejects(hubspot.post('/crm/v3/objects/deals', {}), /refuses/);
+});
+
+test('ensureDelivery uses the deal\'s Delivery record, or creates and links one, once', async () => {
+  const { createDeliveries } = require('../src/hubspot/deliveries');
+  const { createDb } = require('../src/db');
+  const { createFakeFirestore } = require('./fakeFirestore');
+  const setup = async (linked) => {
+    const firestore = createFakeFirestore();
+    const db = createDb({ firestore });
+    await db.recordBrief({ dealId: '111', dealNumber: '90001', store: 'UT', contactId: '77', noteId: '5', signature: {} });
+    const calls = [];
+    const hubspot = {
+      get: async (path) => (calls.push(['get', path]), { results: linked.map((id) => ({ toObjectId: id })) }),
+      createDelivery: async (a) => (calls.push(['create', a]), '888'),
+      linkNoteToDelivery: async (a) => calls.push(['link', a]),
+    };
+    const logs = [];
+    return { ensure: createDeliveries({ hubspot, db, log: (...l) => logs.push(l) }), calls, logs, data: firestore.data };
+  };
+
+  const fresh = await setup([]);
+  assert.deepStrictEqual(await fresh.ensure({ dealId: '111', dealNumber: '90001', contactId: '77' }), { id: '888', created: true });
+  assert.deepStrictEqual(fresh.calls.slice(1), [['create', { dealId: '111', contactId: '77' }], ['link', { noteId: '5', deliveryId: '888' }]]);
+  assert.strictEqual(fresh.data.deals['111'].deliveryId, '888');
+  // Recorded: the second time asks HubSpot nothing.
+  assert.deepStrictEqual(await fresh.ensure({ dealId: '111', dealNumber: '90001', contactId: '77' }), { id: '888', created: false });
+  assert.strictEqual(fresh.calls.length, 3);
+
+  const existing = await setup([4002, 4001]);
+  assert.deepStrictEqual(await existing.ensure({ dealId: '111', dealNumber: '90001', contactId: '77' }), { id: '4001', created: false });
+  assert.ok(!existing.calls.some((c) => c[0] === 'create'));
+  assert.ok(existing.logs.some((l) => l[1].includes('more than one Delivery record')));
 });

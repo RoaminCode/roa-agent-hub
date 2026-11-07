@@ -93,7 +93,7 @@ test('a question goes to Blake labeled with its role and topic, is kept in HubSp
       null,
     ],
   ]);
-  assert.deepStrictEqual(qa, [['question', { dealId: '111', contactId: '77', topic: 'awning arm', question: 'Has the awning arm come in?', askedBy: 'Casey Coach', at: NOW }]]);
+  assert.deepStrictEqual(qa, [['question', { dealId: '111', contactId: '77', deliveryId: null, topic: 'awning arm', question: 'Has the awning arm come in?', askedBy: 'Casey Coach', at: NOW }]]);
   const [q] = Object.values(data.questions);
   assert.deepStrictEqual(q, {
     dealId: '111',

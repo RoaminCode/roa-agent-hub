@@ -69,6 +69,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       // In a linked deal space, the question is about that deal.
       let spaceUri = null;
       let contactId = null;
+      let deliveryId = null;
       if (!isDirectMessage) {
         const space = await db.getSpace(spaceName);
         const deal = space && space.status === 'ready' ? await db.getDeal(space.dealId) : null;
@@ -77,6 +78,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
           dealNumber = space.dealNumber;
           spaceUri = deal.spaceUri || null;
           contactId = deal.contactId || null;
+          deliveryId = deal.deliveryId || null;
         }
       }
 
@@ -101,7 +103,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       let noteId = null;
       if (dealId && qaNotes) {
         noteId = await qaNotes
-          .addQuestion({ dealId, contactId, topic: routed.topic, question, askedBy: nameOf(userDisplayName, userEmail), at: now() })
+          .addQuestion({ dealId, contactId, deliveryId, topic: routed.topic, question, askedBy: nameOf(userDisplayName, userEmail), at: now() })
           .catch((e) => (log('ERROR', 'could not save question to HubSpot', { dealNumber, error: errorFields(e) }), null));
       }
 
