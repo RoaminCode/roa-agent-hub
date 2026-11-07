@@ -165,3 +165,12 @@ test('the standards from the sheet go into the WOW instructions', async () => {
   assert.ok(sent[0].system.includes('- Valet parking for the trailer'));
   assert.ok(!sent[0].system.includes('Lunch during the walkthrough'));
 });
+
+test('the WOW ideas quick command (6) starts /wow with nothing typed', async () => {
+  const started = [];
+  const r = createRouter({ verify: async () => true, allowedUsers: ['b@example.com'], briefUsers: ['b@example.com'], startWow: (j) => started.push(j.text) });
+  const quick = { commonEventObject: { hostApp: 'CHAT' }, chat: { user: { email: 'b@example.com', name: 'users/5' }, eventTime: 't', appCommandPayload: { appCommandMetadata: { appCommandId: 6, appCommandType: 'QUICK_COMMAND' }, space: { name: 'spaces/DEAL', spaceType: 'SPACE' }, message: { text: 'something typed' } } } };
+  const res = await r({ headers: { authorization: 'x' }, body: quick });
+  assert.strictEqual(res.body.hostAppDataAction.chatDataAction.createMessageAction.message.text, MESSAGES.wowWorking);
+  assert.deepStrictEqual(started, ['']);
+});

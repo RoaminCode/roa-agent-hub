@@ -32,10 +32,12 @@ const MESSAGES = {
 const STORES = new Set(['UT']);
 
 // App commands, by the id each has in the Chat app configuration (Chat API > Configuration
-// > Commands). 1 to 3 are slash commands; 4 is the "Save to HubSpot" message action, chosen
-// from any message's menu, which saves that whole message. A command registered ahead of
-// its build would say so here (none now).
-const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text' };
+// > Commands). 1, 2, 3, and 5 are slash commands (/note, /ask, /wow, /text); 4 is the "Save
+// to HubSpot" message action, chosen from any message's menu, which saves that whole
+// message; 6 is the "WOW ideas" quick command in the + menu, the same as /wow with nothing
+// typed (a quick command carries no text). A command registered ahead of its build would
+// say so here (none now).
+const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text', 6: 'wowQuick' };
 const NOT_BUILT = {};
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
@@ -304,6 +306,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       let cmd;
       if (slash === 'note' || slash === 'ask' || slash === 'wow' || slash === 'text') cmd = { command: slash, text: event.text };
       else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
+      else if (slash === 'wowQuick') cmd = { command: 'wow', text: '' };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (cmd.command === 'note') {
