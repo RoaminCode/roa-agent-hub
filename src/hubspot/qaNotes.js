@@ -32,15 +32,32 @@ function createQaNotes({ hubspot }) {
     return hubspot.createNote({ contactId: contactId || null, deliveryId: deliveryId || null, body: renderQaNote({ topic, question, askedBy, at }), timestamp: at.toISOString() });
   }
 
-  // Adds an answer to the end of a topic note, which must still be Basecamp's Q&A note.
-  async function addAnswer({ noteId, answer, answeredBy, at }) {
+  // Adds a line ("Q" or "A") to the end of a topic note, which must still be Basecamp's Q&A note.
+  async function append({ noteId, kind, text, who, at }) {
     if (!/^\d+$/.test(String(noteId))) throw new Error('addAnswer: invalid note id');
     const current = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body`);
-    const body = `${(current.properties || {}).hs_note_body || ''}${entry('A', at, answeredBy, answer)}`;
+    const body = `${(current.properties || {}).hs_note_body || ''}${entry(kind, at, who, text)}`;
     return hubspot.updateNote({ noteId, body, timestamp: at.toISOString(), isOurs: (html) => isQaNoteText(cleanText(html)) });
   }
 
-  return { addQuestion, addAnswer };
+  // Adds an answer to the end of a topic note.
+  const addAnswer = ({ noteId, answer, answeredBy, at }) => append({ noteId, kind: 'A', text: answer, who: answeredBy, at });
+
+  // Adds a follow-up question to an earlier topic's note, so related questions stay together.
+  const addFollowUp = ({ noteId, question, askedBy, at }) => append({ noteId, kind: 'Q', text: question, who: askedBy, at });
+
+  // The text of a deal's Q&A notes, as [{ noteId, text }], skipping any that are gone or no
+  // longer Basecamp's. One batch read for all of them.
+  async function readNotes(noteIds) {
+    const ids = [...new Set(noteIds.filter((id) => /^\d+$/.test(String(id))))].slice(0, 50);
+    if (!ids.length) return [];
+    const page = await hubspot.post('/crm/v3/objects/notes/batch/read', { properties: ['hs_note_body'], inputs: ids.map((id) => ({ id: String(id) })) });
+    return (page.results || [])
+      .map((r) => ({ noteId: String(r.id), text: cleanText((r.properties || {}).hs_note_body) }))
+      .filter((n) => isQaNoteText(n.text));
+  }
+
+  return { addQuestion, addAnswer, addFollowUp, readNotes };
 }
 
 module.exports = { createQaNotes, renderQaNote, isQaNoteText, MARKER };

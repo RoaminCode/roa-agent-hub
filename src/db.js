@@ -19,8 +19,9 @@
 //   questions/{auto}        dealId, spaceName, originThread, reviewerThread, noteId, topic,
 //                           askedBy, role, model, inputTokens, outputTokens, costUsd,
 //                           status ("shadow", "answered", "failed"), answers, answeredBy,
-//                           answeredAt, at (never the question or answer: those are in
-//                           the HubSpot Q&A note)
+//                           answeredAt, reuse { decision, noteId, kind, stillGood },
+//                           reuseVerdict, reuseVerdictBy, reuseVerdictAt, at (never the
+//                           question or answer: those are in the HubSpot Q&A note)
 
 const { safeError } = require('./errors');
 
@@ -185,11 +186,27 @@ function createDb({ firestore, now = () => new Date() }) {
     return doc ? { id: doc.id, ...doc.data() } : null;
   }
 
+  // A deal's questions that have a Q&A note, as [{ id, noteId, topic, status, answeredAt }].
+  async function listDealQuestions(dealId) {
+    const snap = await firestore.collection('questions').where('dealId', '==', dealDocId(dealId)).get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((q) => q.noteId);
+  }
+
+  // Blake's verdict on what Basecamp would have reused for a question: "right" or "wrong".
+  async function recordReuseVerdict({ id, verdict, by }) {
+    await firestore.collection('questions').doc(id).set({ reuseVerdict: verdict, reuseVerdictBy: by, reuseVerdictAt: stamp() }, { merge: true });
+  }
+
+  // What the reuse check proposed for a question (no text: the decision and which note).
+  async function recordReuse({ id, reuse }) {
+    await firestore.collection('questions').doc(id).set({ reuse }, { merge: true });
+  }
+
   async function markAnswered({ id, answeredBy, answers }) {
     await firestore.collection('questions').doc(id).set({ status: 'answered', answeredBy, answeredAt: stamp(), answers }, { merge: true });
   }
 
-  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered };
+  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict };
 }
 
 module.exports = { createDb, CLAIM_MS };

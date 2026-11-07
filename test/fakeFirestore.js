@@ -14,6 +14,7 @@ function createFakeFirestore(data = {}) {
     return {
       _name: name,
       _id: id,
+      id,
       get: async () => ({ exists: id in table(name), id, data: () => copy(table(name)[id]) }),
       set: async (value, opts) => write(name, id, value, opts),
     };

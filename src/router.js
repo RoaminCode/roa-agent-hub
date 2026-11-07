@@ -84,7 +84,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -206,6 +206,12 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
         detail: event.formInputs.detail,
         attempt: event.parameters.attempt,
       });
+      return { status: 200, body: updateMessageFor(event, said) };
+    }
+
+    // Right or Wrong on what Basecamp would have answered from an earlier answer. No AI.
+    if (event.type === 'CARD_CLICKED' && event.parameters.action === 'reuseVerdict') {
+      const said = await reuseVerdict({ id: String(event.parameters.id || ''), verdict: String(event.parameters.verdict || ''), userEmail: event.userEmail });
       return { status: 200, body: updateMessageFor(event, said) };
     }
 

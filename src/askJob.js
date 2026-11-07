@@ -15,6 +15,7 @@
 
 const { errorFields, isOutOfCredits } = require('./errors');
 const { routeQuestion, UNSURE } = require('./agents/askRouter');
+const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { noDashes } = require('./agents/roamerBrief');
 
 // How many times Basecamp asks the asker to clarify before sending the question to Blake
@@ -38,6 +39,8 @@ const SAY = {
   relayed: (dealNumber, saved) =>
     `Posted your answer where it was asked${dealNumber ? ` in the deal ${dealNumber} space` : ''}${saved ? ' and added it to the Q&A note in HubSpot' : ''}.`,
   noDetail: 'Type a bit more in the box, then tap Send.',
+  verdict: (v) => (v === 'right' ? 'Marked right. Thanks.' : 'Marked wrong. Thanks; that one counts against reusing answers.'),
+  verdictFailed: "I couldn't record that. Blake can see what happened in the logs.",
   relayFailed: "I couldn't post that answer where the question was asked. Blake can see what happened in the logs.",
 };
 
@@ -92,7 +95,8 @@ function clarifyCard({ clarify, question, attempt, endpoint }) {
 const withDetail = (question, detail) => `${question}\nDetail added: ${detail}`;
 
 // What Blake sees in his direct message with Basecamp.
-function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, question }) {
+// `reuse` is what the reuse check found in the deal's earlier Q&A, or null.
+function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, question, reuse = null }) {
   return [
     '*Routed question (shadow mode)*',
     `Would go to: ${role}`,
@@ -101,9 +105,31 @@ function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, questio
     `Asked by ${who}${dealNumber ? ` in the deal ${dealNumber} space` : ' in a direct message'}${spaceUri ? `: ${spaceUri}` : ''}`,
     '',
     `Question: ${question}`,
+    ...(reuse ? ['', reuseLine(reuse)] : []),
     '',
     'Reply in this thread to answer; I will post it where it was asked.',
   ].join('\n');
+}
+
+// What Basecamp would have done with an earlier answer, for Blake to judge.
+function reuseLine(reuse) {
+  if (reuse.decision === 'answered' && reuse.stillGood) {
+    return `*Basecamp would answer:* "${reuse.answer}" (${reuse.answeredBy}, ${reuse.answeredOn}, ${reuse.kind}). Mark below whether that is right.`;
+  }
+  if (reuse.decision === 'answered') {
+    return `An earlier answer (${reuse.answeredBy}, ${reuse.answeredOn}) is a status more than 48 hours old, so Basecamp would not reuse it; filed with that topic's questions.`;
+  }
+  return "A follow-up on an earlier topic; filed in that topic's Q&A note.";
+}
+
+// Right or Wrong on what Basecamp would have answered, in Blake's thread. The tally decides
+// when Basecamp may answer in deal spaces itself.
+function verdictCard({ questionId, endpoint }) {
+  const tap = (text, verdict) => ({ text, type: 'OUTLINED', onClick: { action: { function: endpoint, parameters: [{ key: 'action', value: 'reuseVerdict' }, { key: 'id', value: questionId }, { key: 'verdict', value: verdict }] } } });
+  return {
+    fallbackText: 'Was that the right answer?',
+    cardsV2: [{ cardId: 'reuse-verdict', card: { sections: [{ widgets: [{ textParagraph: { text: 'Would that have been the right answer?' } }, { buttonList: { buttons: [tap('Right', 'right'), tap('Wrong', 'wrong')] } }] }] } }],
+  };
 }
 
 const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
@@ -111,7 +137,32 @@ const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
 // `qaNotes` keeps questions and answers in HubSpot (hubspot/qaNotes.js); left out, they are
 // only relayed, not kept.
 // `endpoint` is Basecamp's own URL, which a clarify card's Send button calls.
-function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, route = routeQuestion, now = () => new Date() }) {
+// `reuseCheck` compares a question with the deal's earlier Q&A (agents/qaReuse.js).
+function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, route = routeQuestion, reuseCheck = checkEarlier, now = () => new Date() }) {
+  // The deal's earlier Q&A: its questions on record and their notes' text from HubSpot.
+  // Empty when there are none or they can't be read (routing goes on without them).
+  async function earlierQa(dealId, dealNumber) {
+    if (!dealId || !qaNotes || !qaNotes.readNotes) return { questions: [], notes: [] };
+    try {
+      const questions = await db.listDealQuestions(dealId);
+      const notes = questions.length ? await qaNotes.readNotes(questions.map((q) => q.noteId)) : [];
+      return { questions, notes };
+    } catch (err) {
+      log('WARNING', 'could not read earlier Q&A', { dealNumber, error: errorFields(err) });
+      return { questions: [], notes: [] };
+    }
+  }
+
+  // The reuse check's finding, with the 48-hour rule applied to a reused answer. The answer's
+  // time comes from Basecamp's records when the note's question was answered through it.
+  function judgeReuse(found, questions) {
+    if (!found || !found.ok || found.decision === 'new') return null;
+    const answeredAt = questions.filter((q) => q.noteId === found.noteId && q.answeredAt).map((q) => q.answeredAt).sort().pop();
+    const fresh = answeredAt ? now() - Date.parse(answeredAt) <= 48 * 60 * 60 * 1000 : stillGood(found, now());
+    const good = found.decision === 'answered' && (found.kind === 'fact' || fresh);
+    return { decision: found.decision, noteId: found.noteId, kind: found.kind, stillGood: Boolean(good), answer: found.answer, answeredBy: found.answeredBy, answeredOn: found.answeredOn, costUsd: found.costUsd ?? null };
+  }
+
   // Returns the reply to post where the question was asked: text, or a clarify card.
   // `threadName` is the thread it was asked in, where the answer will be posted.
   // `attempt` counts the clarify cards already answered for this question.
@@ -141,7 +192,14 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       }
 
       step = 'route';
-      const routed = await route({ anthropic, question });
+      // Routing and the check against the deal's earlier Q&A run side by side.
+      const earlier = await earlierQa(dealId, dealNumber);
+      const [routed, found] = await Promise.all([
+        route({ anthropic, question }),
+        earlier.notes.length
+          ? reuseCheck({ anthropic, question, notes: earlier.notes }).catch((e) => (log('WARNING', 'reuse check failed', { dealNumber, error: errorFields(e) }), null))
+          : null,
+      ]);
       const usage = routed.usage || {};
       const cost = { model: routed.model || null, inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: routed.costUsd ?? null };
       if (!routed.ok) {
@@ -166,21 +224,26 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         return SAY.noReviewer;
       }
 
-      // On the record before anyone answers. A failed save is logged; routing goes on.
+      const reuse = judgeReuse(found, earlier.questions);
+
+      // On the record before anyone answers: in the earlier topic's note when this follows
+      // up on it, else a new topic note. A failed save is logged; routing goes on.
       let noteId = null;
       if (dealId && qaNotes) {
-        noteId = await qaNotes
-          .addQuestion({ contactId, deliveryId, topic: routed.topic, question, askedBy: nameOf(userDisplayName, userEmail), at: now() })
-          .catch((e) => (log('ERROR', 'could not save question to HubSpot', { dealNumber, error: errorFields(e) }), null));
+        const askedBy = nameOf(userDisplayName, userEmail);
+        const saving = reuse
+          ? qaNotes.addFollowUp({ noteId: reuse.noteId, question, askedBy, at: now() }).then(() => reuse.noteId)
+          : qaNotes.addQuestion({ contactId, deliveryId, topic: routed.topic, question, askedBy, at: now() });
+        noteId = await saving.catch((e) => (log('ERROR', 'could not save question to HubSpot', { dealNumber, error: errorFields(e) }), null));
       }
 
       step = 'send to reviewer';
       const dm = await findDirectMessage(reviewer.userName);
       const who = userDisplayName ? `${userDisplayName} (${userEmail})` : userEmail;
-      const sent = await sendMessage(dm, reviewMessage({ role: routed.role, reason: routed.reason, topic: routed.topic, who, dealNumber, spaceUri, question }));
+      const sent = await sendMessage(dm, reviewMessage({ role: routed.role, reason: routed.reason, topic: routed.topic, who, dealNumber, spaceUri, question, reuse }));
 
       // Blake has it by now; failing to record it must not say otherwise.
-      await db
+      const questionId = await db
         .recordQuestion({
           dealId,
           spaceName,
@@ -193,8 +256,27 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
           status: 'shadow',
           ...cost,
         })
-        .catch((e) => log('ERROR', 'could not record question', { dealNumber, error: errorFields(e) }));
-      log('INFO', 'question routed', { dealNumber, role: routed.role, topic: routed.topic, noteId, user: userEmail, chars: question.length, ...cost, ms: Date.now() - started });
+        .catch((e) => (log('ERROR', 'could not record question', { dealNumber, error: errorFields(e) }), null));
+      if (questionId && reuse) {
+        const { answer, answeredBy, ...kept } = reuse;
+        await db.recordReuse({ id: questionId, reuse: kept }).catch((e) => log('ERROR', 'could not record reuse', { dealNumber, error: errorFields(e) }));
+        // Only a reusable answer needs Blake's verdict.
+        if (reuse.decision === 'answered' && reuse.stillGood && sent && sent.threadName) {
+          await sendMessage(dm, verdictCard({ questionId, endpoint }), { threadName: sent.threadName }).catch((e) => log('ERROR', 'could not post reuse verdict card', { dealNumber, error: errorFields(e) }));
+        }
+      }
+      log('INFO', 'question routed', {
+        dealNumber,
+        role: routed.role,
+        topic: routed.topic,
+        noteId,
+        reuse: reuse ? `${reuse.decision}${reuse.decision === 'answered' ? (reuse.stillGood ? ' (reusable)' : ' (too old)') : ''}` : 'new',
+        reuseCostUsd: found && found.ok ? found.costUsd : null,
+        user: userEmail,
+        chars: question.length,
+        ...cost,
+        ms: Date.now() - started,
+      });
       return SAY.routed(routed.role);
     } catch (err) {
       log('ERROR', isOutOfCredits(err) ? 'question failed: out of AI credits' : 'question failed', { dealNumber, step, error: errorFields(err), ms: Date.now() - started });
@@ -240,7 +322,15 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     return ask({ spaceName, threadName, isDirectMessage, userEmail, userDisplayName, text: withDetail(String(question || ''), added), attempt: Number.isInteger(n) && n > 0 ? n : MAX_CLARIFY });
   }
 
-  return { ask, relayAnswer, clarify };
+  // Right or Wrong on a reusable answer, from the card in Blake's thread.
+  async function reuseVerdict({ id, verdict, userEmail }) {
+    if (!/^[\w-]+$/.test(String(id || '')) || !['right', 'wrong'].includes(verdict)) return SAY.verdictFailed;
+    await db.recordReuseVerdict({ id, verdict, by: userEmail });
+    log('INFO', 'reuse verdict', { question: id, verdict, user: userEmail });
+    return SAY.verdict(verdict);
+  }
+
+  return { ask, relayAnswer, clarify, reuseVerdict };
 }
 
-module.exports = { createQuestionRouter, reviewMessage, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY };
+module.exports = { createQuestionRouter, reviewMessage, reuseLine, verdictCard, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY };
