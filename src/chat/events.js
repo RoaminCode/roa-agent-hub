@@ -24,6 +24,12 @@ function isDirect(space) {
   return Boolean(space) && (space.spaceType === 'DIRECT_MESSAGE' || space.type === 'DM' || space.singleUserBotDm === true);
 }
 
+// The id of the slash command used ("1" for /note; see SLASH_COMMANDS in router.js), or null.
+// For a slash command, the message's argumentText is what follows the command.
+function commandIdOf(id) {
+  return id === undefined || id === null || id === '' ? null : String(id);
+}
+
 function userOf(user) {
   return {
     userEmail: user && user.email ? user.email.toLowerCase() : null,
@@ -42,6 +48,7 @@ function parseClassic(body) {
     isDirectMessage: isDirect(body.space),
     ...userOf(body.user),
     ...fromMessage(body.message),
+    commandId: commandIdOf(body.message && body.message.slashCommand && body.message.slashCommand.commandId),
     // Card buttons are add-on events; a classic click carries no parameters Basecamp reads.
     parameters: {},
   };
@@ -57,6 +64,10 @@ function parseAddOn(body) {
   } else if (chat.type === 'SUBMIT_FORM' || (common.invokedFunction && !chat.messagePayload)) {
     type = 'CARD_CLICKED';
     payload = chat.buttonClickedPayload || chat.submitFormPayload || {};
+  } else if (chat.appCommandPayload) {
+    // A slash command such as "/note ...": read as a message, with the command's id.
+    type = 'MESSAGE';
+    payload = chat.appCommandPayload;
   } else if (chat.messagePayload) {
     type = 'MESSAGE';
     payload = chat.messagePayload;
@@ -82,6 +93,7 @@ function parseAddOn(body) {
     isDirectMessage: isDirect(payload.space),
     ...userOf(chat.user),
     ...fromMessage(payload.message),
+    commandId: commandIdOf(payload.appCommandMetadata && payload.appCommandMetadata.appCommandId),
     parameters: common.parameters || {},
   };
 }

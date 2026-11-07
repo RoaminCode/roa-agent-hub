@@ -16,7 +16,7 @@ const { SAY: NOTE_SAY } = require('./spaceNotes');
 
 const MESSAGES = {
   added: "Basecamp is here. I'm in shadow mode. Try \"brief 51431\" for a Roamer brief on a Utah deal.",
-  help: 'Try "brief 51431" for a Roamer brief on a Utah deal, or "open a space for 51431" for its deal space. In a deal space, "note <text>" saves a note to the deal in HubSpot.',
+  help: 'Try "brief 51431" for a Roamer brief on a Utah deal, or "open a space for 51431" for its deal space. In a deal space, "/note <text>" saves a note to the deal in HubSpot.',
   opening: (n) => `Opening a space for deal ${n}. I'll post the link here when it's ready.`,
   spaceDirectOnly: (n) => `Ask me to open the space for deal ${n} in a direct message with me.`,
   adopting: (n) => `Setting this space up for deal ${n}. The brief will be here shortly.`,
@@ -30,6 +30,15 @@ const MESSAGES = {
 };
 
 const STORES = new Set(['UT']);
+
+// Slash commands, by the id each has in the Chat app configuration (Chat API > Configuration
+// > Commands). /ask and /wow are registered ahead of the build so Team Members see them;
+// until built they say so.
+const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow' };
+const NOT_BUILT = {
+  ask: "/ask isn't built yet. It will send a question to the Team Member who owns the answer.",
+  wow: "/wow isn't built yet. It will suggest a personal WOW for this Roamer's delivery, from the brief.",
+};
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
 // "use this space for 51431"; "note <text>" (also "note: <text>"), whose text keeps its
@@ -216,7 +225,11 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     }
 
     if (event.type === 'MESSAGE') {
-      const cmd = parseCommand(event.text);
+      const slash = event.commandId ? SLASH_COMMANDS[event.commandId] : null;
+      if (event.commandId && !slash) return { status: 200, body: replyFor(event, MESSAGES.help) };
+      if (NOT_BUILT[slash]) return { status: 200, body: replyFor(event, NOT_BUILT[slash]) };
+      // "/note <text>" arrives with only the text; it is the same as "note <text>".
+      const cmd = slash === 'note' ? { command: 'note', text: event.text } : parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
       if (cmd.command === 'note') {
         if (event.isDirectMessage) return { status: 200, body: replyFor(event, NOTE_SAY.directOnly) };
@@ -263,4 +276,4 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
   };
 }
 
-module.exports = { createRouter, parseCommand, MESSAGES };
+module.exports = { createRouter, parseCommand, MESSAGES, NOT_BUILT };
