@@ -47,13 +47,17 @@ function describe(dealNumber, context) {
 }
 
 // `ensureDelivery` (hubspot/deliveries.js) finds or creates the deal's Delivery record once
-// the space is open; a failure there is logged and the space stays open.
+// as the space opens, before the brief is posted, so the brief card links to it and a new
+// brief note is created on it. A failure there is logged and the space still opens.
 function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessage, log, avatarUrl, ensureDelivery = null }) {
-  async function delivery(context, dealNumber) {
-    if (!ensureDelivery) return;
-    await ensureDelivery({ dealId: context.deal.id, dealNumber, dealname: context.deal.properties.dealname || '', contactId: context.contact ? context.contact.id : null }).catch((err) =>
-      log('ERROR', 'could not find or create Delivery record', { dealNumber, error: errorFields(err) }),
-    );
+  // The context with the deal's Delivery record id, once found or created.
+  async function withDelivery(context, dealNumber) {
+    if (!ensureDelivery) return context;
+    const found = await ensureDelivery({ dealId: context.deal.id, dealNumber, dealname: context.deal.properties.dealname || '', contactId: context.contact ? context.contact.id : null }).catch((err) => {
+      log('ERROR', 'could not find or create Delivery record', { dealNumber, error: errorFields(err) });
+      return null;
+    });
+    return found ? { ...context, deliveryId: found.id } : context;
   }
 
   // The deal's context when it may get a space, else the reply that says why not. A deal
@@ -140,9 +144,9 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       claimed = null;
       step = 'add member';
       await spaces.addMember(space.name, userName);
-      await postBrief({ space: space.name, context, got, dealNumber, saved, setStep: (s) => (step = s) });
       step = 'delivery record';
-      await delivery(context, dealNumber);
+      context = await withDelivery(context, dealNumber);
+      await postBrief({ space: space.name, context, got, dealNumber, saved, setStep: (s) => (step = s) });
       log('INFO', 'deal space opened', { dealNumber, space: space.name, reusedBrief: got.reused, ms: Date.now() - started });
       await reply(SAY.opened(dealNumber, roamer, space.uri));
     } catch (err) {
@@ -158,8 +162,9 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
     let step = 'load';
     const reply = (text) => sendMessage(spaceName, text);
     try {
-      const { say, context } = await check({ dealNumber, store, here: spaceName });
-      if (say) return await reply(say);
+      const checked = await check({ dealNumber, store, here: spaceName });
+      if (checked.say) return await reply(checked.say);
+      let context = checked.context;
 
       step = 'record space';
       const space = await spaces.findSpace(spaceName);
@@ -169,9 +174,9 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       const got = await getBrief({ context, dealNumber, started });
       if (!got) return await reply(SAY.failed(dealNumber));
 
-      await postBrief({ space: spaceName, context, got, dealNumber, setStep: (s) => (step = s) });
       step = 'delivery record';
-      await delivery(context, dealNumber);
+      context = await withDelivery(context, dealNumber);
+      await postBrief({ space: spaceName, context, got, dealNumber, setStep: (s) => (step = s) });
       log('INFO', 'deal space adopted', { dealNumber, space: spaceName, reusedBrief: got.reused, ms: Date.now() - started });
     } catch (err) {
       await failed(err, { dealNumber, step, started, reply });

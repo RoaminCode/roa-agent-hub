@@ -167,6 +167,8 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
   const record = `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record`;
   const buttons = [link('Open deal in HubSpot', `${record}/0-3/${context.deal.id}`)];
   if (context.contact) buttons.push(link('Open Roamer in HubSpot', `${record}/0-1/${context.contact.id}`));
+  // The deal's Delivery record (the custom object 2-59426991), once the deal has one.
+  if (context.deliveryId) buttons.push(link('Open Delivery in HubSpot', `${record}/2-59426991/${context.deliveryId}`));
 
   const header = { title: name, subtitle };
   if (avatarUrl) Object.assign(header, { imageUrl: avatarUrl, imageType: 'CIRCLE', imageAltText: 'Basecamp' });

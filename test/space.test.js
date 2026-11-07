@@ -361,3 +361,21 @@ test('opening or using a space finds or creates the Delivery record after the br
   assert.ok(failed.some((l) => l[1] === 'could not find or create Delivery record'));
   assert.strictEqual(failed.at(-1)[1], 'deal space adopted');
 });
+
+test('the Delivery record is found before the brief is posted, so the card can link to it', async () => {
+  const order = [];
+  const { createSpaceJob: make } = require('../src/spaceJob');
+  const job = make({
+    loadContext: async () => context(),
+    getBrief: async () => ({ brief, reused: true }),
+    keepNote: async (a) => order.push(['note', a.context.deliveryId]),
+    spaces: { findSpace: async (n) => ({ name: n, uri: 'u' }) },
+    db: createDb({ firestore: createFakeFirestore(), now: () => NOW }),
+    sendMessage: async (space, m) => order.push(['send', typeof m === 'string' ? 'text' : JSON.stringify(m).includes('2-59426991/888') ? 'card with Delivery' : 'card']),
+    log: () => {},
+    avatarUrl: 'a',
+    ensureDelivery: async () => (order.push(['delivery']), { id: '888', created: true }),
+  });
+  await job.useSpace({ spaceName: 'spaces/MINE', userEmail: 'b', dealNumber: '90001' });
+  assert.deepStrictEqual(order, [['delivery'], ['send', 'card with Delivery'], ['send', 'text'], ['note', '888']]);
+});

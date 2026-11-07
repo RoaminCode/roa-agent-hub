@@ -118,3 +118,13 @@ test('says plainly when no mods were discussed', () => {
   const [, , mods] = sections(card({ headline: 'h', wow: [], journey: [], mods: [] }));
   assert.match(mods.widgets[0].textParagraph.text, /No mods discussed yet/);
 });
+test('the brief card opens the deal, the Roamer, and the Delivery record once the deal has one', () => {
+  const { renderBriefCard } = require('../src/chat/briefCard');
+  const ctx = { deal: { id: '111', properties: { ls_deal_number: '90001' } }, contact: { id: '222', properties: { firstname: 'Pat', lastname: 'Sample' } }, items: [] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  const buttons = (c) => JSON.stringify(renderBriefCard({ dealNumber: '90001', context: c, brief })).match(/"text":"Open [^"]+"/g);
+  assert.deepStrictEqual(buttons(ctx), ['"text":"Open deal in HubSpot"', '"text":"Open Roamer in HubSpot"']);
+  const card = JSON.stringify(renderBriefCard({ dealNumber: '90001', context: { ...ctx, deliveryId: '888' }, brief }));
+  assert.ok(card.includes('"text":"Open Delivery in HubSpot"'));
+  assert.ok(card.includes('https://app.hubspot.com/contacts/39605104/record/2-59426991/888'));
+});
