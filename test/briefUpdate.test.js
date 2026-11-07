@@ -35,7 +35,7 @@ test('plan: nothing new reuses; only new items updates; anything else rereads ev
   assert.strictEqual(full(context({ items: [...OLD, fresh], meta: null })).why, 'no brief history');
   assert.strictEqual(full(context({ items: [...OLD, fresh], meta: { writtenAt: '2026-11-04T00:00:00Z', updates: MAX_UPDATES, fullAt: '2026-11-04T00:00:00Z' } })).mode, 'full');
   assert.strictEqual(full(context({ items: [...OLD, fresh], meta: { writtenAt: '2026-11-04T00:00:00Z', updates: 1, fullAt: '2026-09-01T00:00:00Z' } })).why, '30 days since the last full read');
-  assert.strictEqual(full(context({ items: [...OLD, fresh], meta: { writtenAt: '2026-11-04T00:00:00Z', updates: 1, fullAt: null } })).why, '30 days since the last full read');
+  assert.strictEqual(full(context({ items: [...OLD, fresh], meta: { writtenAt: '2026-11-04T00:00:00Z', updates: 1, fullAt: null } })).why, 'no full read on record yet');
   // An older item removed, or one dated before the brief arriving late.
   assert.strictEqual(full(context({ items: [OLD[0], fresh] })).why, 'older items changed');
   assert.strictEqual(full(context({ items: [...OLD, item('4', '2026-11-02T10:00:00Z'), fresh] })).why, 'older items changed');

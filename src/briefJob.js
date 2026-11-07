@@ -35,7 +35,8 @@ function planBrief(context, now = Date.now()) {
   const meta = context.briefMeta;
   if (!meta) return { mode: 'full', why: 'no brief history' };
   if (meta.updates >= MAX_UPDATES) return { mode: 'full', why: `${MAX_UPDATES} updates since the last full read` };
-  if (!meta.fullAt || now - Date.parse(meta.fullAt) > FULL_EVERY_MS) return { mode: 'full', why: '30 days since the last full read' };
+  if (!meta.fullAt) return { mode: 'full', why: 'no full read on record yet' };
+  if (now - Date.parse(meta.fullAt) > FULL_EVERY_MS) return { mode: 'full', why: '30 days since the last full read' };
   const since = saved.signature.newestAt || '';
   const newItems = context.items.filter((i) => String(i.at || '') > since);
   const older = context.items.filter((i) => String(i.at || '') <= since);
