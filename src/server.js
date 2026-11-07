@@ -25,6 +25,7 @@ const { createHubSpotClient } = require('./hubspot/client');
 const { createDealContext } = require('./hubspot/dealContext');
 const { createOpenDeals } = require('./hubspot/openDeals');
 const { createBriefJob } = require('./briefJob');
+const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createRouter } = require('./router');
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -85,6 +86,7 @@ function features(audience) {
   } else {
     const runBrief = createBriefJob({
       loadContext: createDealContext({ hubspot }),
+      saveBriefNote: createBriefNoteSaver({ hubspot }),
       anthropic: new Anthropic({ apiKey: ANTHROPIC_API_KEY }),
       sendMessage,
       log,

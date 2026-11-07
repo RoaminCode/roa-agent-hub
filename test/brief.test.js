@@ -288,3 +288,56 @@ test('record dates are Utah dates: an evening text is not moved to the next day'
 test('the instructions tell the brief never to mention Podium', () => {
   assert.match(SYSTEM, /Never mention Podium, even where the record does\./);
 });
+
+const { briefSignature } = require('../src/agents/briefNote');
+const withIds = { ...context, deal: { id: '111', properties: context.deal.properties }, contact: { id: '222', properties: context.contact.properties } };
+
+test('a saved brief is reused, with no AI call, when the record has not changed', async () => {
+  const sent = [];
+  const logs = [];
+  const saved = { ...fullBrief, headline: 'Saved headline.' };
+  const run = createBriefJob({
+    loadContext: async () => ({ ...withIds, briefNote: { id: '901', brief: saved, signature: briefSignature(withIds) } }),
+    anthropic: { beta: { messages: { stream: () => assert.fail('no AI call when a saved brief fits') } } },
+    sendMessage: async (space, message) => sent.push(message),
+    log: (...args) => logs.push(args),
+    saveBriefNote: async () => assert.fail('nothing to save when reusing'),
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
+  assert.match(JSON.stringify(sent[0]), /Saved headline\./);
+  assert.strictEqual(logs[0][1], 'brief reused from HubSpot note');
+});
+
+test('a new item in the record means a fresh brief, saved over the old note', async () => {
+  const sent = [];
+  const saves = [];
+  const stale = { contactId: '222', itemCount: 0, newestAt: '' };
+  const run = createBriefJob({
+    loadContext: async () => ({ ...withIds, briefNote: { id: '901', brief: fullBrief, signature: stale } }),
+    anthropic: reply('end_turn', { ...fullBrief, headline: 'Fresh headline.' }),
+    sendMessage: async (space, message) => sent.push(message),
+    log: () => {},
+    saveBriefNote: async ({ context: c, brief }) => (saves.push([c.briefNote.id, brief.headline]), { id: '901', updated: true }),
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
+  assert.match(JSON.stringify(sent[0]), /Fresh headline\./);
+  assert.deepStrictEqual(saves, [['901', 'Fresh headline.']]);
+});
+
+test('a note that will not save is logged, and the brief still arrives', async () => {
+  const sent = [];
+  const logs = [];
+  const run = createBriefJob({
+    loadContext: async () => ({ ...withIds, briefNote: null }),
+    anthropic: reply('end_turn', fullBrief),
+    sendMessage: async (space, message) => sent.push(message),
+    log: (...args) => logs.push(args),
+    saveBriefNote: async () => {
+      throw Object.assign(new Error('HubSpot POST /crm/v3/objects/notes failed: HTTP 403'), { safe: true, status: 403 });
+    },
+  });
+  await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].cardsV2[0].cardId, 'brief-90001');
+  assert.ok(logs.some((l) => l[1] === 'could not save brief note' && l[2].error.status === 403));
+});

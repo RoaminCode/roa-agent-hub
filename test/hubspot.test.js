@@ -17,9 +17,44 @@ test('the HubSpot client only POSTs to search and batch read', async () => {
   assert.strictEqual(calls.length, 2);
 });
 
-test('the HubSpot client offers no write methods', () => {
+test('the HubSpot client offers no writes but the two note methods', () => {
   const hubspot = createHubSpotClient({ token: 't', fetchImpl: async () => ok({}) });
-  assert.deepStrictEqual(Object.keys(hubspot).sort(), ['get', 'post']);
+  assert.deepStrictEqual(Object.keys(hubspot).sort(), ['createDealNote', 'get', 'post', 'updateNote']);
+});
+
+test('createDealNote creates one note on one deal, and nothing else', async () => {
+  const calls = [];
+  const hubspot = createHubSpotClient({ token: 't', fetchImpl: async (url, opts) => (calls.push([opts.method, url, JSON.parse(opts.body)]), ok({ id: 555 })) });
+  assert.strictEqual(await hubspot.createDealNote({ dealId: '111', body: '<p>x</p>', timestamp: '2026-11-07T03:14:00.000Z' }), '555');
+  assert.deepStrictEqual(calls, [
+    [
+      'POST',
+      'https://api.hubapi.com/crm/v3/objects/notes',
+      {
+        properties: { hs_timestamp: '2026-11-07T03:14:00.000Z', hs_note_body: '<p>x</p>' },
+        associations: [{ to: { id: '111' }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] }],
+      },
+    ],
+  ]);
+  await assert.rejects(hubspot.createDealNote({ dealId: '111/../contacts/5', body: 'x', timestamp: 't' }), /invalid deal id/);
+});
+
+test("updateNote reads the note first and refuses one that is not Basecamp's own", async () => {
+  const calls = [];
+  const fetchImpl = (body) => async (url, opts) => (calls.push([opts.method, url]), ok({ properties: { hs_note_body: body } }));
+  const theirs = createHubSpotClient({ token: 't', fetchImpl: fetchImpl('<p>Team Member note</p>') });
+  await assert.rejects(theirs.updateNote({ noteId: '9', body: 'x', timestamp: 't', isOurs: (b) => b.includes('BASECAMP') }), /not Basecamp's own/);
+  assert.deepStrictEqual(calls.map((c) => c[0]), ['GET']);
+  await assert.rejects(theirs.updateNote({ noteId: '9', body: 'x', timestamp: 't' }), /check that the note is Basecamp's own is required/);
+  await assert.rejects(theirs.updateNote({ noteId: '9?x', body: 'x', timestamp: 't', isOurs: () => true }), /invalid note id/);
+
+  calls.length = 0;
+  const ours = createHubSpotClient({ token: 't', fetchImpl: fetchImpl('<p>BASECAMP ROAMER BRIEF</p>') });
+  assert.strictEqual(await ours.updateNote({ noteId: '9', body: 'new', timestamp: 't', isOurs: (b) => b.includes('BASECAMP') }), '9');
+  assert.deepStrictEqual(calls, [
+    ['GET', 'https://api.hubapi.com/crm/v3/objects/notes/9?properties=hs_note_body'],
+    ['PATCH', 'https://api.hubapi.com/crm/v3/objects/notes/9'],
+  ]);
 });
 
 test('HubSpot errors carry the status but not the response body', async () => {
@@ -71,7 +106,7 @@ test('keeps the newest items that fit and counts what was left out', () => {
 
 const PEOPLE = { 77: ['Pat', 'Sample'], 78: ['Chris', 'Sample'] };
 
-function fakeHubSpot({ deals = 1, lose = [], longNote = false, contacts = [77] } = {}) {
+function fakeHubSpot({ deals = 1, lose = [], longNote = false, contacts = [77], contactNotes = [], dealNotes = [] } = {}) {
   const posts = [];
   const data = {
     calls: [{ id: 'c1', properties: { hs_timestamp: '2026-10-02T10:00:00Z', hs_call_direction: 'OUTBOUND', hs_call_summary: 'Talked about the Lake Test trip.', hubspot_owner_id: '9' } }],
@@ -80,14 +115,16 @@ function fakeHubSpot({ deals = 1, lose = [], longNote = false, contacts = [77] }
       { id: 'm2', properties: { hs_timestamp: '2026-10-04T10:00:00Z', hs_communication_channel_type: 'WHATSAPP', hs_communication_body: 'skip me' } },
     ],
     emails: [],
-    notes: longNote ? [{ id: 'n1', properties: { hs_timestamp: '2026-10-01T10:00:00Z', hs_note_body: 'n'.repeat(4000) } }] : [],
+    notes: [...(longNote ? [{ id: 'n1', properties: { hs_timestamp: '2026-10-01T10:00:00Z', hs_note_body: 'n'.repeat(4000) } }] : []), ...contactNotes],
   };
+  const allNotes = () => [...data.notes, ...dealNotes];
   return {
     posts,
     get: async (path) => {
       if (path.startsWith('/crm/v3/owners/9')) return { firstName: 'Casey', lastName: 'Coach' };
       if (path.startsWith('/crm/v3/owners/')) return { firstName: null };
       if (path.includes('/deals/d1/associations/contacts')) return { results: contacts.map((id) => ({ toObjectId: id })) };
+      if (path.includes('/deals/d1/associations/notes')) return { results: dealNotes.map((r) => ({ toObjectId: r.id })) };
       const m = /contacts\/\d+\/associations\/(\w+)/.exec(path);
       if (m) return { results: data[m[1]].map((r) => ({ toObjectId: r.id })) };
       throw new Error(`unexpected GET ${path}`);
@@ -104,7 +141,7 @@ function fakeHubSpot({ deals = 1, lose = [], longNote = false, contacts = [77] }
       }
       const wanted = new Set(body.inputs.map((i) => i.id));
       // Ids in `lose` come back as errors, as in a partial (HTTP 207) batch response.
-      return { results: data[type].filter((r) => wanted.has(r.id) && !lose.includes(r.id)) };
+      return { results: (type === 'notes' ? allNotes() : data[type]).filter((r) => wanted.has(r.id) && !lose.includes(r.id)) };
     },
   };
 }
@@ -177,4 +214,25 @@ test('says when a deal is not in HubSpot', async () => {
 test('refuses a store it has no CMF for', async () => {
   const hubspot = { post: async () => ({ results: [] }), get: async () => ({}) };
   await assert.rejects(createDealContext({ hubspot })({ store: 'ZZ', dealNumber: '1' }), /unknown store/);
+});
+
+test("leaves Basecamp's own brief note out of the record and hands it over separately", async () => {
+  const { renderBriefNote } = require('../src/agents/briefNote');
+  const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, now: new Date('2026-11-07T03:14:00Z') });
+  const note = (id, at) => ({ id, properties: { hs_timestamp: at, hs_note_body: body } });
+  const hubspot = fakeHubSpot({
+    contactNotes: [note('b0', '2026-10-05T10:00:00Z'), { id: 'n2', properties: { hs_timestamp: '2026-10-06T10:00:00Z', hs_note_body: 'Loves dark chocolate' } }],
+    dealNotes: [note('b1', '2026-11-01T10:00:00Z'), note('b2', '2026-11-07T03:14:00Z')],
+  });
+  const ctx = await createDealContext({ hubspot })({ store: 'UT', dealNumber: '90001' });
+  assert.deepStrictEqual(ctx.items.filter((i) => i.channel === 'note').map((i) => i.text), ['Loves dark chocolate']);
+  assert.strictEqual(ctx.counts.note, 1);
+  assert.strictEqual(ctx.briefNote.id, 'b2');
+  assert.deepStrictEqual(ctx.briefNote.brief, brief);
+});
+
+test('a deal with no brief note has none', async () => {
+  const ctx = await createDealContext({ hubspot: fakeHubSpot() })({ store: 'UT', dealNumber: '90001' });
+  assert.strictEqual(ctx.briefNote, null);
 });

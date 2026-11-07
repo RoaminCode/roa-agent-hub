@@ -5,6 +5,7 @@
 // Communications live on the contact, not the deal, whichever department sent them.
 
 const { safeError } = require('../errors');
+const { isBriefNoteText, parseBriefNote } = require('../agents/briefNote');
 
 // LightSpeed store CMF numbers as HubSpot stores them in `ls_cmf`.
 const STORE_CMF = { UT: '76218125' };
@@ -105,6 +106,9 @@ function toItem(type, record, ownerName) {
   } else if (type === 'notes') {
     who = ownerName(p.hubspot_owner_id);
     text = cleanText(p.hs_note_body);
+    // Basecamp's own brief note is never part of the record: a past AI summary is not a
+    // conversation, and reading it back would repeat its mistakes as fact.
+    if (isBriefNoteText(text)) return null;
   }
 
   if (!text) return null;
@@ -191,6 +195,22 @@ function createDealContext({ hubspot }) {
     return results[0] || null;
   }
 
+  // Basecamp's brief note on the deal, if there is one: { id, brief, signature }, with
+  // brief and signature null when the note is not in Basecamp's layout (it is then
+  // rewritten, never trusted). The newest wins if there is ever more than one.
+  async function findBriefNote(dealId) {
+    const ids = await associatedIds('deals', dealId, 'notes');
+    if (!ids.length) return null;
+    const { records } = await batchRead('notes', ids, ['hs_note_body', 'hs_timestamp']);
+    const ours = records
+      .map((r) => ({ id: String(r.id), at: String((r.properties || {}).hs_timestamp || ''), text: cleanText((r.properties || {}).hs_note_body) }))
+      .filter((n) => isBriefNoteText(n.text))
+      .sort((a, b) => b.at.localeCompare(a.at));
+    if (!ours.length) return null;
+    const parsed = parseBriefNote(ours[0].text);
+    return { id: ours[0].id, brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null };
+  }
+
   // `contactId` is the Roamer someone picked when the deal has more than one contact.
   // Without it, a deal with several contacts returns `choices` instead of a context, so
   // Basecamp can ask which one is the Roamer rather than guess.
@@ -245,6 +265,7 @@ function createDealContext({ hubspot }) {
       contact,
       items,
       omitted,
+      briefNote: await findBriefNote(deal.id),
       // Items kept but shortened to fit, and records HubSpot did not return.
       clipped: items.filter((i) => i.clipped).length,
       missing,
