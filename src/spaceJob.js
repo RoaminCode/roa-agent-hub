@@ -96,8 +96,9 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
     let claimed = null;
     const reply = (text) => sendMessage(spaceName, text);
     try {
-      const { say, context } = await check({ dealNumber, store });
-      if (say) return await reply(say);
+      const checked = await check({ dealNumber, store });
+      if (checked.say) return await reply(checked.say);
+      let context = checked.context;
 
       // One run creates a deal's space at a time; a second tap waits for the first.
       step = 'claim';
@@ -109,6 +110,12 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
       if (!got) {
         await db.releaseClaim(claimed);
         return await reply(SAY.failed(dealNumber));
+      }
+      // A new brief is saved now, so it is not lost if Google refuses the space; the next
+      // try reuses it instead of writing it again. The save after posting updates this note.
+      if (!got.reused) {
+        const note = await keepNote({ context, brief: got.brief, dealNumber });
+        if (note) context = { ...context, briefNote: { ...(context.briefNote || {}), id: note.id } };
       }
 
       step = 'create space';

@@ -317,3 +317,16 @@ test('the Chat spaces client lists named spaces across pages and checks membersh
   assert.ok(urls.includes('https://chat.googleapis.com/v1/spaces/A/members/1'));
   assert.strictEqual(await spaces.isMember('spaces/A', 'users/1/../x'), false);
 });
+
+test('a new brief is saved before the space is created, so a refused space does not lose it', async () => {
+  const { calls, run } = harness({ brief: { brief, reused: false }, createError: Object.assign(new Error('forbidden'), { status: 403 }) });
+  await run();
+  const kinds = calls.map((c) => c[0]);
+  assert.ok(kinds.indexOf('note') > -1 && kinds.indexOf('note') < kinds.indexOf('create'));
+  assert.deepStrictEqual(calls.at(-1), ['send', 'spaces/DM', SAY.notApproved]);
+
+  // A reused brief is already saved: no early save, only the one after posting.
+  const reused = harness();
+  await reused.run();
+  assert.strictEqual(reused.calls.filter((c) => c[0] === 'note').length, 1);
+});

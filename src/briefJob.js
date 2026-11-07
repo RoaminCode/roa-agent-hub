@@ -50,13 +50,16 @@ function createBriefSource({ anthropic, log }) {
 // Saves a brief as the deal's brief note, if notes are on. A failure is logged, never
 // thrown: the brief has already reached the Team Member.
 function createNoteKeeper({ saveBriefNote, log }) {
+  // Returns the saved note ({ id, updated }), or null when it was not saved.
   return async function keepNote({ context, brief, dealNumber, spaceName }) {
-    if (!saveBriefNote) return;
+    if (!saveBriefNote) return null;
     try {
       const note = await saveBriefNote({ context, brief, spaceName });
       log('INFO', 'brief note saved', { dealNumber, noteId: note.id, updated: note.updated });
+      return note;
     } catch (err) {
       log('ERROR', 'could not save brief note', { dealNumber, error: errorFields(err) });
+      return null;
     }
   };
 }
