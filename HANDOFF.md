@@ -53,19 +53,38 @@ Blake has been given $10 of Anthropic API credits so Shane can test the Roamer b
 
 ## Next steps
 
-1. **More `/brief` comparisons** on deals Basecamp briefed 2026-10-29, about five, before any brief is written to HubSpot. The prompt and schema live in one place (`src/agents/roamerBrief.js`); splitting them into their own file waits for the Managed Agent move. Then Basecamp's small database (Firestore) for its clock.
-   - **Incremental brief updates (design, not built):** a repeat brief reads only items added or changed since the saved note and opens with "New since [date]"; a full rebuild after about 30 days or on request. Today a changed record gets a full fresh brief.
-2. **The deal space build list (Blake, 2026-11-06), before Shane's test, in order:** HubSpot brief notes (saved brief, reused if it exists); "@Basecamp open a space for [deal#]" with Blake and Shane as members and the brief pinned (pinning by an app is unconfirmed; fallback is the first post); notes from the space to HubSpot; question routing by role (code only; Basecamp answering questions waits until proven against LightSpeed); an on-demand WOW plan for delivery from the brief's Wow details (Shane's ask: a tailored delivery, such as a gift basket with their favorite chocolate; scheduled touchpoints are the delivery clock and wait); approved test texts through Aloware, refused for any number but Blake's and Shane's while in shadow mode. Space creation waits on a Google Workspace super admin (Blake has Cloud access only, not admin.google.com).
-3. **Integration project, on the other computer:** run the handoff in `docs/handoff-to-hs-ls-integration.md` (2026-10-30; replaces the lost 2026-10-28 one, and asks that project's Claude to verify and correct each finding first). Bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
-4. **Try the contact picker live** on the first Utah deal with two contacts, then check that one event in the logs and the add-on error log.
-5. **Set up a Cloud Monitoring alert** on the WARNING log entry "deal has no Roamer contact" so Blake is notified. The log entry exists; the alert does not.
-6. **Small fix, not started:** a third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender, so Home leaves the name off.
-7. **Blake decides:** Utah GM name; the Service Advisor's contact window for a new Future Roamer (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
-8. **Workspace admin (a super admin, not Blake; Blake has Cloud access only):** in admin.google.com, Apps > Google Workspace Marketplace apps > Apps list > Install app > Basecamp (internal) > Admin install. This approves `chat.app.spaces.create` and `chat.app.memberships`. The Cloud side is done 2026-11-07: Marketplace SDK enabled, App Configuration (Private, Standalone Chat App, the three Chat scopes), Store Listing published, Marketplace OAuth client on `basecamp-router`. Also make Basecamp visible to the Utah team.
-9. **Next build:** the rest of Slice 1 at Utah, in shadow mode: "@Basecamp open a space for [deal#]" (the brief becomes the space's first post, and Home can get an Open space button) and the Service Advisor contact check with a draft.
-10. When Team Members get access: Home switches from every Utah deal to "My deals" (deals the viewer owns, or is Service Advisor on).
-11. Prove the agent against the real questions Team Members ask in the pilot spaces, in shadow mode, before it answers in them.
-12. The rest of the HubSpot Delivery object change list (lean fields, relabel `assigned_service_writer` to Service Advisor, retire old fields) for Blake's approval. Nothing changes in HubSpot until approved. The stages are done: Blake rebuilt the Delivery Pipeline (`883780109`) to the spec 2026-11-07, keeping the old stage ids: Deposit Received `1327357231`, Service Review `1327357232`, In the Shop `1327357233`, Delivery Prep `1327357234`, In the Showroom! `1327357235`, Delivered `1327357236` (closed), Cancelled `1481808550` (closed).
+Worked section by section with Blake (list set 2026-11-07).
+
+**A. Ship and verify**
+1. Done 2026-11-07: answer loop and Delivery records deployed (`basecamp-00043-xrx`) and verified live; Delivery title is `delivery_name` with `delivery_trailer` under it; `delivery_date` no longer required.
+2. **Routing check:** a few more `/ask` questions for accuracy and cost, and what Blake's "Not sure" question was (the text is not stored, so only Blake knows), to see whether the role descriptions need tuning before reuse builds on them.
+3. **Remove `crm.schemas.custom.write`** from the Basecamp private app (added only for the `delivery_date` change); then note it removed in "HubSpot access".
+
+**B. Build, in order**
+4. **Incremental brief updates.** When the record has changed, send the model the saved brief plus only items added since its timestamp, and update it ("New since [date]" at the top); contradictions keep both versions. Full rebuild when an existing item was edited later (the call summary gap), every 10 updates or 30 days, or when the model says the new items change too much. Today any change rereads everything (51455 on 2026-11-07: 25 items, 9,337 tokens in, 3,714 out, 37 seconds).
+5. **Q&A reuse in shadow mode.** A new question checks the deal's Q&A notes; Basecamp sends Blake what it would do (answer from an earlier answer, dated and attributed, or route), under the Deal Knowledge rule (facts reused, status answers expire after 48 hours); a related follow-up updates its topic's note. Tighten topics to the thing itself ("awning arm", not "awning arm arrival") and match related questions by meaning.
+6. **Q&A answers in the space**, once 5 is proven.
+7. **`/wow`:** the on-demand WOW plan for delivery from the brief's Wow details (Shane's ask: a tailored delivery, such as a gift basket with their favorite chocolate). Scheduled touchpoints are the delivery clock and wait.
+8. **Approved test texts through Aloware**, refused for any number but Blake's and Shane's in shadow mode, approved in a Chat dialog showing name, number, and exact text.
+
+**C. Waiting on others or on Blake**
+9. **Workspace admin install** (a super admin; Blake has Cloud access only): admin.google.com > Apps > Google Workspace Marketplace apps > Apps list > Install app > Basecamp (internal) > Admin install. Approves `chat.app.spaces.create` and `chat.app.memberships`; the Cloud side is done. Also make Basecamp visible to the Utah team.
+10. **"No Delivery Coach" tag** in HubSpot (Blake creates it): amber, stage Delivery Prep or In the Showroom! and Assigned Delivery Coach empty. Update its filter when that field becomes a user field.
+11. **The rest of the Delivery object change list** (lean fields per the RJB Agent Spec, relabel `assigned_service_writer` to Service Advisor, retire the duplicate status fields, attention tags), for Blake's approval. Small fix: the "In the Showroom! " stage label has a trailing space; the Trailer label is lowercase.
+12. **RJB Agent Spec update:** it still says the Delivery record is created when a Deal enters Deals; it is now created when the deal space opens.
+
+**D. After the build list**
+13. **Add Shane:** `ALLOWED_USERS` and `BRIEF_USERS` (flags file), make the Chat app visible to him, pause briefs when not in use.
+
+**E. Older items**
+14. More `/brief` comparisons on deals Basecamp briefed 2026-10-29, about five.
+15. Try the contact picker live on the first Utah deal with two contacts.
+16. A Cloud Monitoring alert on the WARNING "deal has no Roamer contact".
+17. Small fix: the third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender on Home.
+18. Blake decides: Utah GM name; the Service Advisor's contact window (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+19. **Integration project, on the other computer:** run `docs/handoff-to-hs-ls-integration.md`; bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
+20. When Team Members get access: Home switches from every Utah deal to "My deals".
+21. The Service Advisor contact check with a draft (rest of Slice 1).
 
 ## Setting up on another computer
 
