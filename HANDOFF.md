@@ -81,7 +81,7 @@ Worked section by section with Blake (list set 2026-11-07).
 **E. Older items**
 15. More `/brief` comparisons on deals Basecamp briefed 2026-10-29, about five.
 16. Try the contact picker live on the first Utah deal with two contacts.
-17. A Cloud Monitoring alert on the WARNING "deal has no Roamer contact".
+17. Done 2026-11-08: Cloud Monitoring alert policy "Basecamp: deal has no Roamer contact" (log match on that WARNING from the basecamp service, at most one email an hour, closes after a day) emails blake@rvsofamerica.com through the "Blake (email)" channel. Not yet seen firing: no deal has hit it since.
 18. Done 2026-11-08: the third HubSpot text format, a "Name (Rvs of America):" line then the message, now gives the sender on Home and in briefs. No name ("(Rvs of America):") or another name in the brackets stays unknown rather than guessed. Checked on real texts: 13 of the 500 most recent texts mentioning Rvs use this format; 6 now read a sender, 7 stay unknown, and every message is read.
 19. Blake's answers (2026-11-08): the Utah GM is Jax De Souza; the Service Advisor's contact window is pending a possible process change and adoption; the trailer has arrived (on the lot, in inventory) when a real VIN is added to the deal in HubSpot (that is `ls_unit_vin`, from the LightSpeed sync: on 2026-11-08, 8 of 12 open Utah deals had a 17-character VIN and 4 were empty; `unit_vin_deal` ("LS_VIN") was empty on all 12); deal spaces with real Team Members stay in shadow mode for now, and testing decides later.
 20. **Integration project, on the other computer:** run `docs/handoff-to-hs-ls-integration.md`; bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
