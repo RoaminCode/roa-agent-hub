@@ -32,7 +32,7 @@ test('the 48-hour rule: a fact is reused at any age, a status only within 48 hou
   assert.ok(!stillGood({ kind: 'status', answeredOn: '' }, NOW.getTime()));
 });
 
-async function harness(found, { answeredAt = '2026-11-09T10:00:00Z' } = {}) {
+async function harness(found, { answeredAt = '2026-11-09T10:00:00Z', inBrief = null } = {}) {
   const firestore = createFakeFirestore();
   const db = createDb({ firestore, now: () => NOW });
   await db.linkSpace({ dealId: '111', dealNumber: '90001', store: 'UT', spaceName: 'spaces/DEAL', spaceUri: 'u', how: 'adopted', by: 'b' });
@@ -57,6 +57,8 @@ async function harness(found, { answeredAt = '2026-11-09T10:00:00Z' } = {}) {
     },
     route: async () => ({ ok: true, role: 'Parts Manager', reason: 'parts', topic: 'awning arm tracking', clarify: '', usage: { input_tokens: 1, output_tokens: 1 }, costUsd: 0.001 }),
     reuseCheck: async () => found,
+    readBriefNote: async (id) => (id === '9' ? { brief: { who: 'Pat tows with a Jeep.' } } : null),
+    briefCheck: async () => inBrief || { ok: true, decision: 'not_in_brief', answer: '', part: '', sourceDate: '', kind: 'fact', reason: '' },
     now: () => NOW,
   });
   const ask = () => q.ask({ spaceName: 'spaces/DEAL', threadName: 'spaces/DEAL/threads/Q', isDirectMessage: false, userEmail: 'c@example.com', userDisplayName: 'Casey', text: 'When does the awning arm get here?' });
@@ -118,4 +120,53 @@ test('the router takes Right or Wrong and replaces the card', async () => {
   const res = await r({ headers: { authorization: 'x' }, body: click });
   assert.deepStrictEqual(calls, [{ id: 'q1', verdict: 'right', userEmail: 'b@example.com' }]);
   assert.deepStrictEqual(res.body, { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text: 'Marked right. Thanks.' } } } } });
+});
+
+// The brief as a second source (Blake, 2026-11-07): a Team Member's earlier answer still wins.
+const FROM_BRIEF = { ok: true, decision: 'answered', answer: 'Tows with a Jeep Grand Cherokee.', part: 'Key facts: Tow vehicle', sourceDate: '', kind: 'fact', reason: '', costUsd: 0.0012 };
+
+test('with no earlier answer, Blake sees what the brief would say and a Right/Wrong card; the question gets its own note', async () => {
+  const h = await harness({ ok: true, decision: 'new', noteId: '' }, { inBrief: FROM_BRIEF });
+  await h.ask();
+  const [review, card] = h.sent;
+  assert.ok(review[1].includes(`*Basecamp would answer from the brief:* "Tows with a Jeep Grand Cherokee." (the brief's Key facts: Tow vehicle, fact)`), review[1]);
+  const q = Object.entries(h.data.questions).find(([, v]) => v.originThread === 'spaces/DEAL/threads/Q');
+  assert.deepStrictEqual(card[1], verdictCard({ questionId: q[0], endpoint: 'https://example.com/' }));
+  assert.deepStrictEqual(q[1].reuse, { decision: 'answered', source: 'brief', noteId: null, part: 'Key facts: Tow vehicle', kind: 'fact', stillGood: true, answeredOn: '', costUsd: 0.0012 });
+  assert.deepStrictEqual(h.qa, [['new', 'awning arm tracking']]);
+  assert.ok(!JSON.stringify(h.data.questions).includes('Jeep'));
+});
+
+test("a Team Member's earlier answer wins over the brief, and a follow-up stays filed in its topic", async () => {
+  const both = await harness(ANSWERED, { inBrief: FROM_BRIEF });
+  await both.ask();
+  assert.ok(both.sent[0][1].includes('*Basecamp would answer:* "Arrives Tuesday."'));
+  assert.ok(!both.sent[0][1].includes('from the brief'));
+
+  const follow = await harness({ ...ANSWERED, decision: 'follow_up' }, { inBrief: FROM_BRIEF });
+  await follow.ask();
+  assert.ok(follow.sent[0][1].includes('from the brief'));
+  assert.deepStrictEqual(follow.qa, [['follow-up', '555']]);
+});
+
+test('a status from the brief counts only within 48 hours of its source, and never without a date', async () => {
+  for (const sourceDate of ['2026-11-01', '']) {
+    const h = await harness({ ok: true, decision: 'new', noteId: '' }, { inBrief: { ...FROM_BRIEF, kind: 'status', sourceDate } });
+    await h.ask();
+    assert.ok(h.sent[0][1].includes('The brief has an answer'), h.sent[0][1]);
+    assert.ok(h.sent[0][1].includes('more than 48 hours old'));
+    assert.strictEqual(h.sent.length, 1, 'no verdict card');
+  }
+});
+
+test('the brief check sends the question and the brief to the small model, and refuses an empty answer', async () => {
+  const { checkBrief, SCHEMA: BRIEF_SCHEMA } = require('../src/agents/briefAnswer');
+  const sent = [];
+  const fake = (out) => ({ messages: { create: async (body) => (sent.push(body), { stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 40 }, content: [{ type: 'text', text: JSON.stringify(out) }] }) } });
+  const r = await checkBrief({ anthropic: fake(FROM_BRIEF), question: 'What is <Pat> towing with?', brief: { key_facts: [{ label: 'Tow vehicle', value: 'Jeep' }] } });
+  assert.deepStrictEqual([r.ok, r.decision, r.part], [true, 'answered', 'Key facts: Tow vehicle']);
+  assert.strictEqual(sent[0].model, 'claude-haiku-4-5-20251001');
+  assert.deepStrictEqual(sent[0].output_config.format.schema, BRIEF_SCHEMA);
+  assert.ok(sent[0].messages[0].content.includes('What is &lt;Pat&gt; towing with?'));
+  assert.strictEqual((await checkBrief({ anthropic: fake({ ...FROM_BRIEF, answer: ' ' }), question: 'q', brief: {} })).ok, false);
 });

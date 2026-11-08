@@ -18,6 +18,7 @@
 const { errorFields, isOutOfCredits } = require('./errors');
 const { routeQuestion, UNSURE } = require('./agents/askRouter');
 const { checkEarlier, stillGood } = require('./agents/qaReuse');
+const { checkBrief } = require('./agents/briefAnswer');
 const { noDashes } = require('./agents/roamerBrief');
 const { primary } = require('./chat/style');
 const { OPEN_STAGE } = require('./hubspot/openDeals');
@@ -112,8 +113,14 @@ function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, questio
   ].join('\n');
 }
 
-// What Basecamp would have done with an earlier answer, for Blake to judge.
+// What Basecamp would have done with an earlier answer or the brief, for Blake to judge.
 function reuseLine(reuse) {
+  if (reuse.source === 'brief') {
+    const from = `the brief's ${reuse.part || 'details'}${reuse.answeredOn ? `, from ${reuse.answeredOn}` : ''}, ${reuse.kind}`;
+    return reuse.stillGood
+      ? `*Basecamp would answer from the brief:* "${reuse.answer}" (${from}). Mark below whether that is right.`
+      : `The brief has an answer (${from}), but it is a status more than 48 hours old, so Basecamp would not use it.`;
+  }
   if (reuse.decision === 'answered' && reuse.stillGood) {
     return `*Basecamp would answer:* "${reuse.answer}" (${reuse.answeredBy}, ${reuse.answeredOn}, ${reuse.kind}). Mark below whether that is right.`;
   }
@@ -141,7 +148,30 @@ const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
 // `reuseCheck` compares a question with the deal's earlier Q&A (agents/qaReuse.js).
 // `findDealSpace({ dealNumber })` looks a deal up in HubSpot (hubspot/dealContext.js), so a
 // question asked in a direct message that names a deal is handled as if asked in its space.
-function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, route = routeQuestion, reuseCheck = checkEarlier, now = () => new Date() }) {
+// `readBriefNote(noteId)` reads a deal's saved brief (hubspot/dealContext.js); `briefCheck`
+// looks for the answer in it (agents/briefAnswer.js).
+function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, readBriefNote = null, route = routeQuestion, reuseCheck = checkEarlier, briefCheck = checkBrief, now = () => new Date() }) {
+  // The deal's saved brief, or null when it has none or it can't be read.
+  async function savedBrief(dealId, dealNumber) {
+    if (!dealId || !readBriefNote) return null;
+    try {
+      const record = await db.getDeal(dealId);
+      const saved = record && record.briefNoteId ? await readBriefNote(record.briefNoteId) : null;
+      return (saved && saved.brief) || null;
+    } catch (err) {
+      log('WARNING', 'could not read the brief for a question', { dealNumber, error: errorFields(err) });
+      return null;
+    }
+  }
+
+  // The brief check's finding, with the same 48-hour rule: a status counts only within 48
+  // hours of the brief item it came from, and a status with no date never counts.
+  function judgeBrief(found) {
+    if (!found || !found.ok || found.decision !== 'answered') return null;
+    const good = found.kind === 'fact' || (Boolean(found.sourceDate) && stillGood({ kind: 'status', answeredOn: found.sourceDate }, now()));
+    return { decision: 'answered', source: 'brief', noteId: null, part: found.part, kind: found.kind, stillGood: Boolean(good), answer: found.answer, answeredBy: 'the brief', answeredOn: found.sourceDate || '', costUsd: found.costUsd ?? null };
+  }
+
   // The open deals a direct-message question names: each 5-digit number in it that HubSpot
   // knows as an open Utah deal (a price or a year is not one). Any other number is ignored.
   async function dealsNamedIn(question, dealNumber) {
@@ -223,12 +253,13 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
 
       step = 'route';
       // Routing and the check against the deal's earlier Q&A run side by side.
-      const earlier = await earlierQa(dealId, dealNumber);
-      const [routed, found] = await Promise.all([
+      const [earlier, brief] = await Promise.all([earlierQa(dealId, dealNumber), savedBrief(dealId, dealNumber)]);
+      const [routed, found, inBrief] = await Promise.all([
         route({ anthropic, question }),
         earlier.notes.length
           ? reuseCheck({ anthropic, question, notes: earlier.notes }).catch((e) => (log('WARNING', 'reuse check failed', { dealNumber, error: errorFields(e) }), null))
           : null,
+        brief ? briefCheck({ anthropic, question, brief }).catch((e) => (log('WARNING', 'brief check failed', { dealNumber, error: errorFields(e) }), null)) : null,
       ]);
       const usage = routed.usage || {};
       const cost = { model: routed.model || null, inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: routed.costUsd ?? null };
@@ -254,15 +285,20 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         return SAY.noReviewer;
       }
 
-      const reuse = judgeReuse(found, earlier.questions);
+      // What Basecamp would answer with: a Team Member's earlier answer still good wins, then
+      // the brief's, then whatever the earlier Q&A found (a follow-up, or a stale answer).
+      const qa = judgeReuse(found, earlier.questions);
+      const fromBrief = judgeBrief(inBrief);
+      const good = (r) => r && r.decision === 'answered' && r.stillGood;
+      const reuse = good(qa) ? qa : good(fromBrief) ? fromBrief : qa || fromBrief;
 
       // On the record before anyone answers: in the earlier topic's note when this follows
       // up on it, else a new topic note. A failed save is logged; routing goes on.
       let noteId = null;
       if (dealId && qaNotes) {
         const askedBy = nameOf(userDisplayName, userEmail);
-        const saving = reuse
-          ? qaNotes.addFollowUp({ noteId: reuse.noteId, question, askedBy, at: now() }).then(() => reuse.noteId)
+        const saving = qa
+          ? qaNotes.addFollowUp({ noteId: qa.noteId, question, askedBy, at: now() }).then(() => qa.noteId)
           : qaNotes.addQuestion({ contactId, deliveryId, topic: routed.topic, question, askedBy, at: now() });
         noteId = await saving.catch((e) => (log('ERROR', 'could not save question to HubSpot', { dealNumber, error: errorFields(e) }), null));
       }
@@ -300,8 +336,9 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         role: routed.role,
         topic: routed.topic,
         noteId,
-        reuse: reuse ? `${reuse.decision}${reuse.decision === 'answered' ? (reuse.stillGood ? ' (reusable)' : ' (too old)') : ''}` : 'new',
+        reuse: reuse ? `${reuse.decision}${reuse.source === 'brief' ? ' from the brief' : ''}${reuse.decision === 'answered' ? (reuse.stillGood ? ' (reusable)' : ' (too old)') : ''}` : 'new',
         reuseCostUsd: found && found.ok ? found.costUsd : null,
+        briefCostUsd: inBrief && inBrief.ok ? inBrief.costUsd : null,
         user: userEmail,
         chars: question.length,
         ...cost,

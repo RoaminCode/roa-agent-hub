@@ -47,7 +47,7 @@ test('routing refuses anything but a known role with a topic', async () => {
 
 const ROUTED = { ok: true, role: 'Parts Manager', reason: 'Asks when a part arrives.', topic: 'awning arm', usage: { input_tokens: 600, output_tokens: 30 }, costUsd: 0.00075, model: MODEL };
 
-async function harness({ routed = ROUTED, reviewerKnown = true, linked = true, qaFails = false, relayFails = false, findDealSpace = null } = {}) {
+async function harness({ routed = ROUTED, reviewerKnown = true, linked = true, qaFails = false, relayFails = false, findDealSpace = null, readBriefNote = null, briefCheck } = {}) {
   const firestore = createFakeFirestore();
   const db = createDb({ firestore, now: () => NOW });
   if (linked) {
@@ -78,6 +78,8 @@ async function harness({ routed = ROUTED, reviewerKnown = true, linked = true, q
       addAnswer: async (a) => (qa.push(['answer', a]), '555'),
     },
     findDealSpace,
+    readBriefNote,
+    ...(briefCheck ? { briefCheck } : {}),
     route: async () => routed,
     now: () => NOW,
   });
