@@ -114,6 +114,7 @@ function features(audience) {
   let relayAnswer = async () => null;
   let clarifyQuestion = async () => "Questions aren't switched on yet.";
   let reuseVerdict = async () => "Questions aren't switched on yet.";
+  let answerCard = async () => "Questions aren't switched on yet.";
   let startWow = () => {};
   let startText = async () => "Texts aren't switched on yet.";
   let startNew = () => {};
@@ -158,6 +159,7 @@ function features(audience) {
       relayAnswer = questions.relayAnswer;
       clarifyQuestion = questions.clarify;
       reuseVerdict = questions.reuseVerdict;
+      answerCard = questions.fromCard;
     } else {
       log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
     }
@@ -273,7 +275,7 @@ function features(audience) {
     sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {

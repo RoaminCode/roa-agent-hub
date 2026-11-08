@@ -20,7 +20,7 @@ const { routeQuestion, UNSURE } = require('./agents/askRouter');
 const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { checkBrief } = require('./agents/briefAnswer');
 const { noDashes } = require('./agents/roamerBrief');
-const { primary } = require('./chat/style');
+const { primary, secondary, label } = require('./chat/style');
 const { dealsNamedIn } = require('./hubspot/namedDeals');
 
 // How many times Basecamp asks the asker to clarify before sending the question to Blake
@@ -48,6 +48,7 @@ const SAY = {
   verdict: (v) => (v === 'right' ? 'Marked right. Thanks.' : 'Marked wrong. Thanks; that one counts against reusing answers.'),
   verdictFailed: "I couldn't record that. Blake can see what happened in the logs.",
   relayFailed: "I couldn't post that answer where the question was asked. Blake can see what happened in the logs.",
+  cardGone: "I couldn't find the question this card belongs to. Reply in its thread instead.",
 };
 
 // When Basecamp can't tell who owns a question, it answers in the thread with a card: its
@@ -130,8 +131,57 @@ function reuseLine(reuse) {
   return "A follow-up on an earlier topic; filed in that topic's Q&A note.";
 }
 
+const esc = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// The routed question as a card in the reviewer's direct message, so it is answered from the
+// card instead of a thread reply (a thread reply still works): the question and who asked;
+// Basecamp's suggested answer, when it has a good one, with "Send this answer" (relays it and
+// counts as Right) and "Not right" (counts as Wrong); a box to type an answer and Send; and
+// "Not mine" when it went to the wrong role. Every button carries `ctx` (what the card shows),
+// so the card can be drawn again after a tap. `note` is a line about the last tap.
+function reviewCard(ctx, { reuse = null, endpoint = '', note = '' } = {}) {
+  const { role, reason, who, dealNumber, spaceUri, question } = ctx;
+  const act = (action, extra = []) => ({ action: { function: endpoint, parameters: [{ key: 'action', value: action }, { key: 'ctx', value: JSON.stringify(ctx) }, ...extra] } });
+  const sections = [
+    {
+      widgets: [
+        { textParagraph: { text: `<b>${esc(question)}</b>` } },
+        { textParagraph: { text: `<i>Asked by ${esc(who)}${dealNumber ? ` about deal ${esc(dealNumber)}` : ' in a direct message'}. Why this role: ${esc(reason)}</i>` } },
+        ...(note ? [{ textParagraph: { text: esc(note) } }] : []),
+      ],
+    },
+  ];
+  const suggested = reuse && reuse.decision === 'answered' && reuse.stillGood;
+  if (suggested) {
+    const from = reuse.source === 'brief' ? `From the brief's ${reuse.part || 'details'}` : `From ${reuse.answeredBy}, ${reuse.answeredOn}`;
+    sections.push({
+      header: label('Suggested answer'),
+      widgets: [
+        { textParagraph: { text: esc(reuse.answer) } },
+        { textParagraph: { text: `<i>${esc(from)} (${esc(reuse.kind)})</i>` } },
+        { buttonList: { buttons: [primary('Send this answer', act('qaUse', [{ key: 'm', value: reuse.answer }])), secondary('Not right', act('qaWrong'))] } },
+      ],
+    });
+  } else if (reuse) {
+    sections.push({ widgets: [{ textParagraph: { text: `<i>${esc(reuseLine(reuse).replace(/\*/g, ''))}</i>` } }] });
+  }
+  const buttons = [(suggested ? secondary : primary)('Send', act('qaSend')), secondary('Not mine', act('qaNotMine'))];
+  if (spaceUri) buttons.push(secondary('Open space', { openLink: { url: spaceUri } }));
+  sections.push({ widgets: [{ textInput: { name: 'answer', label: 'Your answer', type: 'MULTIPLE_LINE' } }, { buttonList: { buttons } }] });
+  return {
+    fallbackText: reviewMessage({ ...ctx, reuse }),
+    cardsV2: [
+      {
+        cardId: 'routed-question',
+        card: { header: { title: role === UNSURE ? 'Question to route' : `Question for the ${role}`, subtitle: `Shadow mode: sent to you${dealNumber ? ` · Deal ${dealNumber}` : ''}` }, sections },
+      },
+    ],
+  };
+}
+
 // Right or Wrong on what Basecamp would have answered, in Blake's thread. The tally decides
-// when Basecamp may answer in deal spaces itself.
+// when Basecamp may answer in deal spaces itself. Kept for cards posted before the
+// routed-question card carried its own buttons.
 function verdictCard({ questionId, endpoint }) {
   const tap = (text, verdict) => ({ text, type: 'OUTLINED', onClick: { action: { function: endpoint, parameters: [{ key: 'action', value: 'reuseVerdict' }, { key: 'id', value: questionId }, { key: 'verdict', value: verdict }] } } });
   return {
@@ -294,7 +344,8 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       step = 'send to reviewer';
       const dm = await findDirectMessage(reviewer.userName);
       const who = userDisplayName ? `${userDisplayName} (${userEmail})` : userEmail;
-      const sent = await sendMessage(dm, reviewMessage({ role: routed.role, reason: routed.reason, topic: routed.topic, who, dealNumber, spaceUri, question, reuse }));
+      const ctx = { role: routed.role, reason: routed.reason, topic: routed.topic, who, dealNumber, spaceUri, question };
+      const sent = await sendMessage(dm, reviewCard(ctx, { reuse, endpoint }));
 
       // Blake has it by now; failing to record it must not say otherwise.
       const questionId = await db
@@ -313,11 +364,8 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         .catch((e) => (log('ERROR', 'could not record question', { dealNumber, error: errorFields(e) }), null));
       if (questionId && reuse) {
         const { answer, answeredBy, ...kept } = reuse;
+        // A suggested answer is judged on the card itself: Send this answer or Not right.
         await db.recordReuse({ id: questionId, reuse: kept }).catch((e) => log('ERROR', 'could not record reuse', { dealNumber, error: errorFields(e) }));
-        // Only a reusable answer needs Blake's verdict.
-        if (reuse.decision === 'answered' && reuse.stillGood && sent && sent.threadName) {
-          await sendMessage(dm, verdictCard({ questionId, endpoint }), { threadName: sent.threadName }).catch((e) => log('ERROR', 'could not post reuse verdict card', { dealNumber, error: errorFields(e) }));
-        }
       }
       log('INFO', 'question routed', {
         dealNumber,
@@ -377,6 +425,46 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     return ask({ spaceName, threadName, isDirectMessage, userEmail, userDisplayName, text: withDetail(String(question || ''), added), attempt: Number.isInteger(n) && n > 0 ? n : MAX_CLARIFY });
   }
 
+  // A tap on the routed-question card. Returns what replaces the card: a line saying what
+  // happened once it is answered, or the card drawn again with a note. The question is found
+  // by the card's thread, the same way a thread reply is.
+  async function fromCard({ action, threadName, userEmail, userDisplayName, params = {}, formInputs = {} }) {
+    let ctx = {};
+    try {
+      ctx = JSON.parse(params.ctx || '{}');
+    } catch {
+      ctx = {};
+    }
+    const q = await db.findQuestionByReviewerThread(threadName);
+    if (!q) return SAY.cardGone;
+    const redraw = (note) => reviewCard(ctx, { endpoint, note });
+    if (action === 'qaSend') {
+      const answer = String(formInputs.answer || '').trim();
+      if (!answer) return redraw('Type an answer in the box, then tap Send.');
+      const said = await relayAnswer({ threadName, userEmail, userDisplayName, text: answer });
+      return `*Answered:* ${answer}\n${said}`;
+    }
+    if (action === 'qaUse') {
+      const answer = String(params.m || '').trim();
+      if (!answer) return redraw('Type an answer in the box, then tap Send.');
+      await db.recordReuseVerdict({ id: q.id, verdict: 'right', by: userEmail });
+      log('INFO', 'reuse verdict', { question: q.id, verdict: 'right', user: userEmail, from: 'card' });
+      const said = await relayAnswer({ threadName, userEmail, userDisplayName, text: answer });
+      return `*Sent the suggested answer* (marked right): ${answer}\n${said}`;
+    }
+    if (action === 'qaWrong') {
+      await db.recordReuseVerdict({ id: q.id, verdict: 'wrong', by: userEmail });
+      log('INFO', 'reuse verdict', { question: q.id, verdict: 'wrong', user: userEmail, from: 'card' });
+      return redraw('Suggested answer marked wrong. Type the right answer below.');
+    }
+    if (action === 'qaNotMine') {
+      await db.recordRouteVerdict({ id: q.id, verdict: 'not_mine', by: userEmail });
+      log('INFO', 'route verdict', { question: q.id, verdict: 'not_mine', role: q.role, user: userEmail });
+      return redraw(`Marked as not the ${ctx.role || q.role}'s question. The asker still needs an answer: type one below, or leave it.`);
+    }
+    return SAY.cardGone;
+  }
+
   // Right or Wrong on a reusable answer, from the card in Blake's thread.
   async function reuseVerdict({ id, verdict, userEmail }) {
     if (!/^[\w-]+$/.test(String(id || '')) || !['right', 'wrong'].includes(verdict)) return SAY.verdictFailed;
@@ -385,7 +473,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     return SAY.verdict(verdict);
   }
 
-  return { ask, relayAnswer, clarify, reuseVerdict };
+  return { ask, relayAnswer, clarify, reuseVerdict, fromCard };
 }
 
-module.exports = { createQuestionRouter, reviewMessage, reuseLine, verdictCard, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY };
+module.exports = { createQuestionRouter, reviewMessage, reviewCard, reuseLine, verdictCard, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY };

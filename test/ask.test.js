@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { routeQuestion, costOf, ROLES, UNSURE, MODEL } = require('../src/agents/askRouter');
-const { createQuestionRouter, reviewMessage, clarifyCard, withDetail, SAY, MAX_CLARIFY } = require('../src/askJob');
+const { createQuestionRouter, reviewMessage, reviewCard, clarifyCard, withDetail, SAY, MAX_CLARIFY } = require('../src/askJob');
 const { parseEvent } = require('../src/chat/events');
 const { createQaNotes, renderQaNote, isQaNoteText } = require('../src/hubspot/qaNotes');
 const { createChatSender } = require('../src/chat/send');
@@ -11,6 +11,7 @@ const { createRouter, parseCommand, MESSAGES } = require('../src/router');
 const { createDb } = require('../src/db');
 const { createFakeFirestore } = require('./fakeFirestore');
 
+const textOf = (m) => (typeof m === 'string' ? m : m.fallbackText);
 const NOW = new Date('2026-11-07T19:00:00Z');
 
 // An Anthropic client that answers with `out` and records what it was sent.
@@ -93,7 +94,7 @@ test('a question goes to Blake labeled with its role and topic, is kept in HubSp
   assert.deepStrictEqual(sent, [
     [
       'spaces/DM-9',
-      reviewMessage({ role: 'Parts Manager', reason: 'Asks when a part arrives.', topic: 'awning arm', who: 'Casey Coach (casey@example.com)', dealNumber: '90001', spaceUri: 'https://chat.google.com/room/DEAL', question: 'Has the awning arm come in?' }),
+      reviewCard({ role: 'Parts Manager', reason: 'Asks when a part arrives.', topic: 'awning arm', who: 'Casey Coach (casey@example.com)', dealNumber: '90001', spaceUri: 'https://chat.google.com/room/DEAL', question: 'Has the awning arm come in?' }),
       null,
     ],
   ]);
@@ -153,7 +154,7 @@ test('a relay that cannot post says so and leaves the question unanswered', asyn
 test('a question outside a deal space routes without a HubSpot note; HubSpot failing does not stop routing', async () => {
   const dm = await harness({ linked: false });
   await dm.ask({ spaceName: 'spaces/DM-5', isDirectMessage: true });
-  assert.ok(dm.sent[0][1].includes('in a direct message'));
+  assert.ok(textOf(dm.sent[0][1]).includes('in a direct message'));
   assert.deepStrictEqual(dm.qa, []);
   assert.strictEqual(Object.values(dm.data.questions)[0].dealId, null);
 
@@ -176,7 +177,7 @@ const askDm = (h, text) => h.ask({ spaceName: 'spaces/DM-5', threadName: 'spaces
 test('in a direct message, a question naming an open deal runs as if asked in its space', async () => {
   const h = await harness({ findDealSpace: lookup });
   assert.strictEqual(await askDm(h, 'Have we scheduled the PDI for 90001?'), SAY.routed('Parts Manager'));
-  const message = h.sent[0][1];
+  const message = textOf(h.sent[0][1]);
   assert.ok(message.includes('in the deal 90001 space: https://chat.google.com/room/DEAL'), message);
   assert.deepStrictEqual(h.qa, [['question', { contactId: '77', deliveryId: '888', topic: 'awning arm', question: 'Have we scheduled the PDI for 90001?', askedBy: 'Casey Coach', at: NOW }]]);
   const [q] = Object.values(h.data.questions);
@@ -190,7 +191,7 @@ test('in a direct message, a question naming an open deal runs as if asked in it
 test('a deal with no brief or space yet keeps the question on the Roamer alone', async () => {
   const h = await harness({ linked: false, findDealSpace: lookup });
   await askDm(h, 'Is 90002 ready for paperwork?');
-  assert.ok(h.sent[0][1].includes('Asked by Casey Coach (casey@example.com) in the deal 90002 space\n'), h.sent[0][1]);
+  assert.ok(textOf(h.sent[0][1]).includes('Asked by Casey Coach (casey@example.com) in the deal 90002 space\n'), h.sent[0][1]);
   assert.deepStrictEqual(h.qa[0][1].contactId, '78');
   assert.strictEqual(h.qa[0][1].deliveryId, null);
   assert.strictEqual(Object.values(h.data.questions)[0].dealId, '222');
@@ -199,7 +200,7 @@ test('a deal with no brief or space yet keeps the question on the Roamer alone',
 test('numbers that are not open deals are ignored, and two deals in one question are refused', async () => {
   const none = await harness({ findDealSpace: lookup });
   await askDm(none, 'Is the $12000 solar package on 90009 or a 12345 order?');
-  assert.ok(none.sent[0][1].includes('in a direct message'));
+  assert.ok(textOf(none.sent[0][1]).includes('in a direct message'));
   assert.deepStrictEqual(none.qa, []);
   assert.strictEqual(Object.values(none.data.questions)[0].dealId, null);
 

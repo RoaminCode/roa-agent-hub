@@ -94,7 +94,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -257,6 +257,14 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     // "Use this one" on a WOW idea: saved to the Delivery record, remembered in the library. No AI.
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'wowPick') {
       const said = await chooseWow({ params: event.parameters, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
+      return { status: 200, body: updateMessageFor(event, said) };
+    }
+
+    // A tap on the routed-question card in the reviewer's direct message: Send (the typed
+    // answer), Send this answer (the suggested one, counted Right), Not right (Wrong), or Not
+    // mine. No AI. The card is replaced by what happened.
+    if (event.type === 'CARD_CLICKED' && ['qaSend', 'qaUse', 'qaWrong', 'qaNotMine'].includes(event.parameters.action)) {
+      const said = await answerCard({ action: event.parameters.action, threadName: event.threadName, userEmail: event.userEmail, userDisplayName: event.userDisplayName, params: event.parameters, formInputs: event.formInputs });
       return { status: 200, body: updateMessageFor(event, said) };
     }
 

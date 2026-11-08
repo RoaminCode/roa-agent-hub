@@ -25,7 +25,8 @@
 //                           askedBy, role, model, inputTokens, outputTokens, costUsd,
 //                           status ("shadow", "answered", "failed"), answers, answeredBy,
 //                           answeredAt, reuse { decision, noteId, kind, stillGood },
-//                           reuseVerdict, reuseVerdictBy, reuseVerdictAt, at (never the
+//                           reuseVerdict, reuseVerdictBy, reuseVerdictAt, routeVerdict ("not_mine"),
+//                           routeVerdictBy, routeVerdictAt, at (never the
 //                           question or answer: those are in the HubSpot Q&A note)
 //   reminders/{auto}        userEmail, userName (Chat id, for the direct message), what,
 //                           dueAt, dealId, dealNumber, spaceUri, status ("pending",
@@ -206,6 +207,11 @@ function createDb({ firestore, now = () => new Date() }) {
     await firestore.collection('questions').doc(id).set({ reuseVerdict: verdict, reuseVerdictBy: by, reuseVerdictAt: stamp() }, { merge: true });
   }
 
+  // "Not mine" on a routed question: the routing was wrong, kept for the routing tally.
+  async function recordRouteVerdict({ id, verdict, by }) {
+    await firestore.collection('questions').doc(id).set({ routeVerdict: verdict, routeVerdictBy: by, routeVerdictAt: stamp() }, { merge: true });
+  }
+
   // What the reuse check proposed for a question (no text: the decision and which note).
   async function recordReuse({ id, reuse }) {
     await firestore.collection('questions').doc(id).set({ reuse }, { merge: true });
@@ -286,7 +292,7 @@ function createDb({ firestore, now = () => new Date() }) {
     await reminders.doc(String(id)).set({ status, what: null, sentAt: stamp() }, { merge: true });
   }
 
-  return { addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, listWowIdeas, useWowIdea, recordTextSend, textSentFromCard };
+  return { addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, recordTextSend, textSentFromCard };
 }
 
 module.exports = { createDb, CLAIM_MS };

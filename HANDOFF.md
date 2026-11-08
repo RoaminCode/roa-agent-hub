@@ -23,7 +23,7 @@ Snapshot 2026-11-08. Per-feature detail and decisions are under Next steps and C
   - Deploy: `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (env vars and secrets are kept). Check `node -e "require('./src/server')"` and `npm test` first: a revision that fails to start never takes traffic, but costs a round trip (`basecamp-00047-jvw`).
   - Logs never hold message text or Roamer details: counts, timing, ids, and event shapes only. `GET /health`, `GET /avatar.png`.
   - gcloud's default project on the laptop is `hs-ls-integration`; always pass `--project roa-agent-hub`.
-- **Tests:** 270 pass (`npm test`). Firestore is faked in `test/fakeFirestore.js`.
+- **Tests:** 275 pass (`npm test`). Firestore is faked in `test/fakeFirestore.js`.
 - **Chat app "Basecamp"**: visible only to Blake, App Home on. Commands registered: `/note` (1), `/ask` (2), `/wow` (3), Save to HubSpot message action (4), `/text` (5), WOW ideas quick command (6, the same as `/wow`; Blake may remove it), `/new` (7). `/remind` is built as command 8 and needs registering (Blake, 2026-11-07).
 - **What works today (live and verified unless noted):**
   - **Briefs:** `brief <deal#>` in a DM or the Brief button on Home. Saved as one note per deal on the Roamer and the Delivery record, reused when nothing changed, updated from only the new items when something did (about half the cost), fully reread after 10 updates, 30 days, or an edited older item.
@@ -142,7 +142,7 @@ Worked section by section with Blake (list set 2026-11-07). Sections A and B are
 - When the Service Advisor cannot keep a commitment to a Future Roamer, Basecamp hands it to the Sales Coach, who owns the relationship. This is a handoff, not escalation. If the Sales Coach cannot either, Basecamp gives the Service Advisor a draft to reschedule.
 - Sends (design, not built): Basecamp drafts; on a Team Member's approval of that exact draft it sends through Aloware's API, and Aloware logs the text to the HubSpot contact. Basecamp's own log records who approved each text, and its HubSpot note says "Sent by Basecamp, approved by [name]". The approval shows the recipient's name and number and the exact text, covers only that draft, and is logged.
 - The Sales Coach owns the deal and the Roamer relationship until delivery, including date changes in LightSpeed and telling the Roamer.
-- People outside the space get a direct message card (Answer / Not mine), one thread per question.
+- People outside the space get a direct message card, one per question (built 2026-11-07 for the shadow reviewer, `reviewCard` in `src/askJob.js`): the question, who asked and why that role; Basecamp's suggested answer when it has a good one, with "Send this answer" (relays it, counts Right) and "Not right" (counts Wrong, keeps the answer box); a box to type an answer and Send; "Not mine" (recorded as `routeVerdict: "not_mine"`); Open space. The card is replaced by what happened. A thread reply still works. The separate Right/Wrong card is no longer posted.
 - Role fallback: role at that Experience Center, then Service Advisor, then GM.
 
 | Experience Center | Service Advisor | Parts questions |
