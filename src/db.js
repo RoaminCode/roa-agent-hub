@@ -9,14 +9,17 @@
 // Collections:
 //   deals/{hubspotDealId}   dealNumber, store, contactId, briefNoteId, briefSignature,
 //                           briefWrittenAt, spaceName, spaceUri, spaceHow, spaceLinkedAt,
-//                           spaceLinkedBy, spaceClaim, deliveryId, briefUpdates, briefFullAt,
+//                           spaceLinkedBy, spaceBriefPosted, spaceClaim, deliveryId,
+//                           deliveryClaim, briefUpdates, briefFullAt,
 //                           deliveryCreatedByBasecamp, deliveryLinkedAt, updatedAt
 //   spaces/{spaceId}        spaceName, dealId, dealNumber, store, how, status, linkedAt,
 //                           linkedBy (status "ready" or "gone")
 //   accessRequests/{auto}   dealId, spaceName, user, at
 //   spaceNotes/{noteId}     dealId, spaceName, user, at, chars
 //   people/{email}          userName (Chat id), seenAt
-//   textSends/{auto}        dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card, at
+//   textSends/{card}        dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card, at,
+//                           status ("sending", "sent", "unknown"), claimedAt; keyed by the
+//                           draft card, so each draft is claimed once (older ones: {auto})
 //                           (the send log the rule for texts asks for; the one place a
 //                           text and a number are kept)
 //   wowIdeas/{auto}         idea (general, no Roamer details), category, tier, uses,
@@ -28,12 +31,19 @@
 //                           reuseVerdict, reuseVerdictBy, reuseVerdictAt, routeVerdict ("not_mine"),
 //                           routeVerdictBy, routeVerdictAt, at (never the
 //                           question or answer: those are in the HubSpot Q&A note)
+//   once/{kind_hash}        kind, at: a tap that counts once ("Send this answer", "Use this one")
+//   locks/{name}            token, at: held for seconds while a HubSpot note is read and rewritten
 //   reminders/{auto}        userEmail, userName (Chat id, for the direct message), what,
 //                           dueAt, dealId, dealNumber, spaceUri, status ("pending",
 //                           "sending", "sent", "failed"), sentAt, at. `what` is the person's
 //                           own words, kept only until the reminder is sent, then cleared
 
+const { createHash } = require('crypto');
 const { safeError } = require('./errors');
+
+// A lock older than this was left by a run that crashed, and may be taken.
+const LOCK_MS = 30 * 1000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A claim to create a deal's space stops a second tap from creating a second space. Past
 // this age it is treated as abandoned (the run crashed) and can be taken again.
@@ -44,6 +54,11 @@ const spaceId = (spaceName) => {
   if (!m) throw safeError('invalid space name');
   return m[1];
 };
+// A draft card's message name ("spaces/A/messages/B.C") as a document id, which cannot hold "/".
+const cardKey = (card) => {
+  if (!/^spaces\/[\w-]+\/messages\/[\w.-]+$/.test(String(card || ''))) throw safeError('invalid card');
+  return String(card).replace(/\//g, '__');
+};
 const dealDocId = (dealId) => {
   if (!/^\d+$/.test(String(dealId || ''))) throw safeError('invalid deal id');
   return String(dealId);
@@ -53,6 +68,7 @@ const dealDocId = (dealId) => {
 function createDb({ firestore, now = () => new Date() }) {
   const deals = firestore.collection('deals');
   const spaces = firestore.collection('spaces');
+  const textSends = firestore.collection('textSends');
   const stamp = () => now().toISOString();
 
   async function getDeal(dealId) {
@@ -67,19 +83,19 @@ function createDb({ firestore, now = () => new Date() }) {
 
   // The brief note just saved: its id, what the brief was built from, and when. `mode`
   // keeps the brief's history: a "full" read resets the update count and its date, an
-  // "update" adds one, and a "reuse" (saved again for its space) changes neither.
+  // "update" adds one, and a "reuse" (saved again for its space) changes neither, nor when
+  // the brief was written, so an item edited since still counts as an edit next time. In a
+  // transaction, so two updates at once count two.
   async function recordBrief({ dealId, dealNumber, store, contactId, noteId, signature, mode = 'full' }) {
     const ref = deals.doc(dealDocId(dealId));
-    const history = {};
-    if (mode === 'full') Object.assign(history, { briefUpdates: 0, briefFullAt: stamp() });
-    if (mode === 'update') {
-      const snap = await ref.get();
-      history.briefUpdates = ((snap.exists && snap.data().briefUpdates) || 0) + 1;
-    }
-    await ref.set(
-      { dealNumber: String(dealNumber), store, contactId: contactId ? String(contactId) : null, briefNoteId: String(noteId), briefSignature: signature, briefWrittenAt: stamp(), ...history, updatedAt: stamp() },
-      { merge: true },
-    );
+    await firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const history = {};
+      if (mode === 'full') Object.assign(history, { briefUpdates: 0, briefFullAt: stamp() });
+      if (mode === 'update') history.briefUpdates = ((snap.exists && snap.data().briefUpdates) || 0) + 1;
+      if (mode !== 'reuse') history.briefWrittenAt = stamp();
+      tx.set(ref, { dealNumber: String(dealNumber), store, contactId: contactId ? String(contactId) : null, briefNoteId: String(noteId), briefSignature: signature, ...history, updatedAt: stamp() }, { merge: true });
+    });
   }
 
   // Before Basecamp creates a space: { claimed: true }, or { busy: true } when another run
@@ -97,7 +113,26 @@ function createDb({ firestore, now = () => new Date() }) {
 
   // The deal's HubSpot Delivery record, and whether Basecamp created it.
   async function recordDelivery({ dealId, deliveryId, created }) {
-    await deals.doc(dealDocId(dealId)).set({ deliveryId: String(deliveryId), deliveryCreatedByBasecamp: Boolean(created), deliveryLinkedAt: stamp(), updatedAt: stamp() }, { merge: true });
+    await deals.doc(dealDocId(dealId)).set({ deliveryId: String(deliveryId), deliveryCreatedByBasecamp: Boolean(created), deliveryLinkedAt: stamp(), deliveryClaim: null, updatedAt: stamp() }, { merge: true });
+  }
+
+  // Before Basecamp looks for or creates a deal's Delivery record: { deliveryId } when it is
+  // already recorded, { busy: true } when another run is on it right now, else { claimed:
+  // true }. So two people opening the deal's space at once make one record, not two.
+  async function claimDelivery(dealId) {
+    const ref = deals.doc(dealDocId(dealId));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const d = snap.exists ? snap.data() : {};
+      if (d.deliveryId) return { deliveryId: d.deliveryId };
+      if (d.deliveryClaim && now() - new Date(d.deliveryClaim.at) < CLAIM_MS) return { busy: true };
+      tx.set(ref, { deliveryClaim: { at: stamp() }, updatedAt: stamp() }, { merge: true });
+      return { claimed: true };
+    });
+  }
+
+  async function releaseDeliveryClaim(dealId) {
+    await deals.doc(dealDocId(dealId)).set({ deliveryClaim: null, updatedAt: stamp() }, { merge: true });
   }
 
   async function releaseClaim(dealId) {
@@ -115,11 +150,17 @@ function createDb({ firestore, now = () => new Date() }) {
       if (earlier && earlier !== spaceName) tx.set(spaces.doc(spaceId(earlier)), { status: 'gone', updatedAt: stamp() }, { merge: true });
       tx.set(
         dealRef,
-        { dealNumber: String(dealNumber), store, spaceName, spaceUri: spaceUri || null, spaceHow: how, spaceLinkedAt: stamp(), spaceLinkedBy: by, spaceClaim: null, updatedAt: stamp() },
+        { dealNumber: String(dealNumber), store, spaceName, spaceUri: spaceUri || null, spaceHow: how, spaceLinkedAt: stamp(), spaceLinkedBy: by, spaceBriefPosted: false, spaceClaim: null, updatedAt: stamp() },
         { merge: true },
       );
       tx.set(spaceRef, { spaceName, dealId: dealDocId(dealId), dealNumber: String(dealNumber), store, how, status: 'ready', linkedAt: stamp(), linkedBy: by, updatedAt: stamp() });
     });
+  }
+
+  // The brief is posted in the deal's space, so a space whose opening stopped part way can be
+  // told from one that finished (spaceJob.js).
+  async function markBriefPosted(dealId) {
+    await deals.doc(dealDocId(dealId)).set({ spaceBriefPosted: true, updatedAt: stamp() }, { merge: true });
   }
 
   // A recorded space that no longer exists in Chat (deleted, or Basecamp removed).
@@ -248,16 +289,89 @@ function createDb({ firestore, now = () => new Date() }) {
   // An approved text and its send: line, recipient, time, approver, and the exact text (the
   // rule for sends asks for this log). In shadow mode `to` is the approver's own phone and
   // `wouldGoTo` the Roamer's number.
-  // `card` is the draft card the text was approved from, so it is sent only once.
+  // `card` is the draft card the text was approved from; its send is the record claimTextSend
+  // made, so a draft is sent only once.
   async function recordTextSend({ dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card = null }) {
-    const ref = await firestore.collection('textSends').add({ dealId: dealDocId(dealId), approvedBy, lineId: String(lineId), to, wouldGoTo: wouldGoTo || null, message, shadow: Boolean(shadow), card: card || null, at: stamp() });
+    const fields = { dealId: dealDocId(dealId), approvedBy, lineId: String(lineId), to, wouldGoTo: wouldGoTo || null, message, shadow: Boolean(shadow), card: card || null, at: stamp() };
+    if (card) {
+      await textSends.doc(cardKey(card)).set({ ...fields, status: 'sent' }, { merge: true });
+      return cardKey(card);
+    }
+    const ref = await textSends.add(fields);
     return ref.id;
   }
 
-  // Whether a text was already sent from this draft card.
+  // Claims a draft card before its text goes to Aloware: true for the one Approve that may
+  // send it, false when another already did or is sending it right now. Claimed in one
+  // transaction, so a double tap or two Teammates approving at once send one text, not two.
+  async function claimTextSend({ card, by }) {
+    if (await textSentFromCard(card)) return false;
+    const ref = textSends.doc(cardKey(card));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists) return false;
+      tx.set(ref, { card: String(card), status: 'sending', approvedBy: by, claimedAt: stamp() });
+      return true;
+    });
+  }
+
+  // Aloware refused the send outright, so nothing went: the draft may be approved again.
+  async function releaseTextSend(card) {
+    await textSends.doc(cardKey(card)).delete();
+  }
+
+  // Aloware gave no answer (a timeout or a dropped connection): the text may have gone. The
+  // claim stays, so the draft is not sent again blind.
+  async function markTextSendUnknown(card) {
+    await textSends.doc(cardKey(card)).set({ status: 'unknown', at: stamp() }, { merge: true });
+  }
+
+  // Whether a text was already sent from this draft card (records from before claims, which
+  // have their own ids).
   async function textSentFromCard(card) {
     if (!card) return false;
-    return (await firestore.collection('textSends').where('card', '==', String(card)).get()).docs.length > 0;
+    return (await textSends.where('card', '==', String(card)).get()).docs.length > 0;
+  }
+
+  // A tap that must count once (a double tap, or the same card tapped twice): true for the
+  // first, false after. `parts` name it; only their hash is kept. undoOnce lets it be tapped
+  // again when what it started failed.
+  const onceRef = (kind, parts) => firestore.collection('once').doc(`${kind}_${createHash('sha1').update(parts.map(String).join('|')).digest('hex').slice(0, 24)}`);
+  async function claimOnce(kind, parts) {
+    const ref = onceRef(kind, parts);
+    return firestore.runTransaction(async (tx) => {
+      if ((await tx.get(ref)).exists) return false;
+      tx.set(ref, { kind, at: stamp() });
+      return true;
+    });
+  }
+  async function undoOnce(kind, parts) {
+    await onceRef(kind, parts).delete();
+  }
+
+  // Runs `fn` while holding the named lock, so two runs that read then write the same thing
+  // (a HubSpot note) take turns instead of one overwriting the other. Waits up to `waitMs`
+  // for the lock, then fails rather than run unguarded.
+  async function withLock(name, fn, { waitMs = 8000, stepMs = 200 } = {}) {
+    const ref = firestore.collection('locks').doc(String(name).replace(/\//g, '_'));
+    const token = `${Date.now()}-${Math.random()}`;
+    const take = () =>
+      firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists && now() - new Date(snap.data().at) < LOCK_MS) return false;
+        tx.set(ref, { token, at: stamp() });
+        return true;
+      });
+    const until = Date.now() + waitMs;
+    while (!(await take())) {
+      if (Date.now() > until) throw safeError(`lock ${name} is busy`);
+      await sleep(stepMs);
+    }
+    try {
+      return await fn();
+    } finally {
+      await ref.delete().catch(() => {});
+    }
   }
 
   async function markAnswered({ id, answeredBy, answers }) {
@@ -292,7 +406,7 @@ function createDb({ firestore, now = () => new Date() }) {
     await reminders.doc(String(id)).set({ status, what: null, sentAt: stamp() }, { merge: true });
   }
 
-  return { addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, recordTextSend, textSentFromCard };
+  return { addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
 }
 
 module.exports = { createDb, CLAIM_MS };

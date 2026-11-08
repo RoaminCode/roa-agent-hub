@@ -231,7 +231,7 @@ test('unsure, failed, and unreachable routings say so and send nothing wrong', a
 test('Q&A notes: a topic note with the question, answers added only to a note that is still ours', async () => {
   assert.strictEqual(
     renderQaNote({ topic: 'awning arm', question: 'Has it <come> in?', askedBy: 'Casey Coach', at: NOW }),
-    '<p><strong>Basecamp Q&amp;A: awning arm</strong></p><p><strong>Q</strong> (Nov 7, 12:00 PM MT, Casey Coach): Has it &lt;come&gt; in?</p>',
+    '<p><strong>Basecamp Q&amp;A: awning arm</strong></p><p><strong>Q</strong> (Nov 7, 2026, 12:00 PM MT, Casey Coach): Has it &lt;come&gt; in?</p>',
   );
   const calls = [];
   const hubspot = {
@@ -244,7 +244,7 @@ test('Q&A notes: a topic note with the question, answers added only to a note th
   assert.deepStrictEqual([calls[0][1].contactId, calls[0][1].deliveryId, calls[0][1].dealId], ['77', '888', undefined]);
   await notes.addAnswer({ noteId: '555', answer: 'Tuesday', answeredBy: 'Blake Locke', at: NOW });
   const update = calls[1][1];
-  assert.ok(update.body.endsWith('<p><strong>A</strong> (Nov 7, 12:00 PM MT, Blake Locke): Tuesday</p>'));
+  assert.ok(update.body.endsWith('<p><strong>A</strong> (Nov 7, 2026, 12:00 PM MT, Blake Locke): Tuesday</p>'));
   assert.ok(update.isOurs('<p>Basecamp Q&amp;A: x</p>') && !update.isOurs('<p>Someone else</p>'));
   assert.ok(isQaNoteText('Basecamp Q&A: awning arm'));
   await assert.rejects(notes.addAnswer({ noteId: '5/../x', answer: 'a', answeredBy: 'b', at: NOW }));
@@ -345,4 +345,22 @@ test('the router takes Send on a clarify card and replaces the card with the res
   const res = await r({ headers: { authorization: 'x' }, body: click });
   assert.deepStrictEqual(res.body, { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text: 'routed' } } } } });
   assert.deepStrictEqual(calls[0], { spaceName: 'spaces/DEAL', threadName: 'spaces/DEAL/threads/T', isDirectMessage: false, userEmail: 'b@example.com', userDisplayName: null, question: 'anything new?', detail: 'since Monday', attempt: '1' });
+});
+
+test('two answers added to one Q&A note at once are both kept', async () => {
+  const { createDb } = require('../src/db');
+  const { createFakeFirestore } = require('./fakeFirestore');
+  const db = createDb({ firestore: createFakeFirestore() });
+  let body = renderQaNote({ topic: 'awning arm', question: 'q', askedBy: 'C', at: NOW });
+  const hubspot = {
+    get: async () => {
+      const read = body;
+      await new Promise((r) => setTimeout(r, 15));
+      return { properties: { hs_note_body: read } };
+    },
+    updateNote: async (u) => ((body = u.body), u.noteId),
+  };
+  const notes = createQaNotes({ hubspot, lock: (name, fn) => db.withLock(name, fn, { stepMs: 5 }) });
+  await Promise.all([notes.addAnswer({ noteId: '555', answer: 'Tuesday', answeredBy: 'A', at: NOW }), notes.addAnswer({ noteId: '555', answer: 'Wednesday', answeredBy: 'B', at: NOW })]);
+  assert.ok(body.includes('Tuesday') && body.includes('Wednesday'));
 });

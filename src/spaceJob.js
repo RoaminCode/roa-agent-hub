@@ -61,8 +61,9 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
   }
 
   // The deal's context when it may get a space, else the reply that says why not. A deal
-  // whose recorded space still exists (and is not `here`) gets that space's link; one
-  // whose space is gone from Chat has it marked gone, and may get a new one.
+  // whose recorded space still exists (and is not `here`) gets that space's link, with the
+  // space as `existing`; one whose space is gone from Chat has it marked gone, and may get
+  // a new one.
   async function check({ dealNumber, store, here = null }) {
     const context = await loadContext({ store, dealNumber, rememberPick: true });
     if (context.duplicate) return { say: SAY.duplicate(dealNumber, store) };
@@ -76,7 +77,7 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
     const recorded = context.spaceName;
     if (recorded && recorded !== here) {
       const existing = await spaces.findSpace(recorded);
-      if (existing) return { say: SAY.exists(dealNumber, existing.uri) };
+      if (existing) return { say: SAY.exists(dealNumber, existing.uri), existing, context };
       await db.markSpaceGone({ dealId: context.deal.id, spaceName: recorded });
       log('INFO', 'recorded deal space is gone', { dealNumber, space: recorded });
     }
@@ -91,6 +92,33 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
     await sendMessage(space, SAY.pinIt);
     setStep('save note');
     await keepNote({ context, brief: got.brief, dealNumber, spaceName: space, mode: saved || got.reused ? 'reuse' : got.mode });
+    await db.markBriefPosted(context.deal.id);
+  }
+
+  // A space Basecamp created for this person whose opening stopped part way (adding them or
+  // posting the brief failed): finishes it, so they are not left with a link to a space
+  // they can't open. Anyone else gets the link, and Request access from Home.
+  async function resume({ context, existing, dealNumber, userName, userEmail, started, setStep }) {
+    const record = (await db.getDeal(context.deal.id)) || {};
+    if (record.spaceHow !== 'created' || !userEmail || record.spaceLinkedBy !== userEmail) return SAY.exists(dealNumber, existing.uri);
+    let finished = false;
+    setStep('add member');
+    if (!(await spaces.isMember(existing.name, userName))) {
+      await spaces.addMember(existing.name, userName);
+      finished = true;
+    }
+    if (record.spaceBriefPosted === false) {
+      setStep('brief');
+      const got = await getBrief({ context, dealNumber, started });
+      if (!got) return SAY.failed(dealNumber);
+      setStep('delivery record');
+      const withRecord = await withDelivery(context, dealNumber);
+      await postBrief({ space: existing.name, context: withRecord, got, dealNumber, setStep });
+      finished = true;
+    }
+    if (!finished) return SAY.exists(dealNumber, existing.uri);
+    log('INFO', 'deal space finished opening', { dealNumber, space: existing.name, ms: Date.now() - started });
+    return SAY.opened(dealNumber, roamerName(context), existing.uri);
   }
 
   function failed(err, { dealNumber, step, started, reply }) {
@@ -111,6 +139,7 @@ function createSpaceJob({ loadContext, getBrief, keepNote, spaces, db, sendMessa
     const reply = (text) => sendMessage(spaceName, text);
     try {
       const checked = await check({ dealNumber, store });
+      if (checked.existing) return await reply(await resume({ ...checked, dealNumber, userName, userEmail, started, setStep: (s) => (step = s) }));
       if (checked.say) return await reply(checked.say);
       let context = checked.context;
 

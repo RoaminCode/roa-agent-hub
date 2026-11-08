@@ -79,6 +79,7 @@ test('"use this space": records the space, posts the brief and pin reminder ther
     spaceHow: 'adopted',
     spaceLinkedAt: NOW.toISOString(),
     spaceLinkedBy: 'blake@example.com',
+    spaceBriefPosted: true,
     spaceClaim: null,
   });
   assert.strictEqual(data.spaces.MINE.status, 'ready');
@@ -378,4 +379,52 @@ test('the Delivery record is found before the brief is posted, so the card can l
   });
   await job.useSpace({ spaceName: 'spaces/MINE', userEmail: 'b', dealNumber: '90001' });
   assert.deepStrictEqual(order, [['delivery'], ['send', 'card with Delivery'], ['send', 'text'], ['note', '888']]);
+});
+
+test('a space whose opening stopped after it was created is finished when the same person asks again', async () => {
+  const firestore = createFakeFirestore();
+  const db = createDb({ firestore, now: () => NOW });
+  const members = new Set();
+  const sent = [];
+  let memberFails = true;
+  const job = createSpaceJob({
+    // As in Basecamp: the deal's space comes from its record.
+    loadContext: async () => context({ spaceName: ((await db.getDeal('111')) || {}).spaceName || null }),
+    getBrief: async () => ({ brief, reused: true }),
+    keepNote: async () => null,
+    spaces: {
+      findSpace: async (n) => ({ name: n, uri: 'https://chat.google.com/room/NEW' }),
+      createSpace: async () => ({ name: 'spaces/NEW', uri: 'https://chat.google.com/room/NEW' }),
+      addMember: async (space, user) => {
+        if (memberFails) throw Object.assign(new Error('denied'), { status: 403 });
+        members.add(user);
+      },
+      isMember: async (space, user) => members.has(user),
+    },
+    db,
+    sendMessage: async (space, m) => sent.push([space, typeof m === 'string' ? m : m.cardsV2[0].cardId]),
+    log: () => {},
+    avatarUrl: 'a',
+  });
+  const open = (userName, userEmail) => job.openSpace({ spaceName: 'spaces/DM', userName, userEmail, dealNumber: '90001' });
+  await open('users/1', 'blake@example.com');
+  assert.strictEqual(firestore.data.deals['111'].spaceBriefPosted, false);
+  assert.deepStrictEqual(sent.at(-1), ['spaces/DM', SAY.notApproved]);
+
+  // Someone else gets the link, and Request access; Basecamp does not add them.
+  memberFails = false;
+  await open('users/2', 'casey@example.com');
+  assert.deepStrictEqual(sent.at(-1), ['spaces/DM', SAY.exists('90001', 'https://chat.google.com/room/NEW')]);
+  assert.ok(!members.has('users/2'));
+
+  // The person who asked is added and the brief is posted, in the space already made.
+  await open('users/1', 'blake@example.com');
+  assert.ok(members.has('users/1'));
+  assert.ok(sent.some(([space, what]) => space === 'spaces/NEW' && what === 'brief-90001'));
+  assert.deepStrictEqual(sent.at(-1), ['spaces/DM', SAY.opened('90001', 'Pat Sample', 'https://chat.google.com/room/NEW')]);
+  assert.strictEqual(firestore.data.deals['111'].spaceBriefPosted, true);
+
+  // Asked once more, it just has a space.
+  await open('users/1', 'blake@example.com');
+  assert.deepStrictEqual(sent.at(-1), ['spaces/DM', SAY.exists('90001', 'https://chat.google.com/room/NEW')]);
 });

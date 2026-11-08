@@ -7,6 +7,14 @@
 const { safeError } = require('../errors');
 const { isBriefNoteText, parseBriefNote } = require('../agents/briefNote');
 
+// The first lines of Basecamp's own notes: its Q&A topics, WOW plans, and texts sent
+// (hubspot/qaNotes.js, wowJob.js, textJob.js). Like the brief note, they are Basecamp's
+// output, not the conversation, so they are never part of the record a brief reads (Blake's
+// call, 2026-11-07). Reading them back made every answered question look like an edit and
+// forced a full reread. A Team Member's note saved from a space is their own words and stays.
+const BASECAMP_NOTE_MARKERS = ['Basecamp Q&A:', 'Basecamp WOW plan', 'Basecamp text sent'];
+const isBasecampNoteText = (text) => isBriefNoteText(text) || BASECAMP_NOTE_MARKERS.some((m) => String(text || '').trimStart().startsWith(m));
+
 // LightSpeed store CMF numbers as HubSpot stores them in `ls_cmf`.
 const STORE_CMF = { UT: '76218125' };
 
@@ -112,9 +120,9 @@ function toItem(type, record, ownerName) {
   } else if (type === 'notes') {
     who = ownerName(p.hubspot_owner_id);
     text = cleanText(p.hs_note_body);
-    // Basecamp's own brief note is never part of the record: a past AI summary is not a
+    // Basecamp's own notes are never part of the record: a past AI summary is not a
     // conversation, and reading it back would repeat its mistakes as fact.
-    if (isBriefNoteText(text)) return null;
+    if (isBasecampNoteText(text)) return null;
   }
 
   if (!text) return null;
@@ -209,15 +217,15 @@ function createDealContext({ hubspot, db = null }) {
   // rewritten, never trusted). The newest wins if there is ever more than one.
   // With Basecamp's record of the deal (`record`, from the database), the note is read
   // directly by its id, and what the brief was built from comes from the record, which
-  // no one edits by hand. Without one, or if that note is gone, the deal's notes are searched.
-  // Brief notes are on the Roamer (and the Delivery record), not the deal, since 2026-11-07;
-  // the deal's notes are searched too for brief notes written before then.
+  // no one edits by hand. Without one, or if that note is gone, the Roamer's notes are
+  // searched. Never the deal's: a brief note from before 2026-11-07 still on a deal is left
+  // alone, and a new one is written on the Roamer, since Basecamp never writes on a deal.
   async function findBriefNote(dealId, record = null, contactId = null) {
     if (record && record.briefNoteId) {
       const direct = await readBriefNote(record.briefNoteId);
       if (direct) return { ...direct, signature: record.briefSignature || direct.signature };
     }
-    const ids = [...new Set([...(await associatedIds('deals', dealId, 'notes')), ...(contactId ? await associatedIds('contacts', contactId, 'notes') : [])])];
+    const ids = contactId ? await associatedIds('contacts', contactId, 'notes') : [];
     if (!ids.length) return null;
     const { records } = await batchRead('notes', ids, ['hs_note_body', 'hs_timestamp']);
     const ours = records
@@ -229,18 +237,20 @@ function createDealContext({ hubspot, db = null }) {
     return { id: ours[0].id, brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null, spaceName: parsed ? parsed.spaceName : null };
   }
 
-  // One note by id, when it is Basecamp's brief note; null when it is gone or not ours.
+  // One note by id, when it is Basecamp's brief note; null when it is gone, not ours, or on a
+  // deal (from before 2026-11-07), so it is never updated there.
   async function readBriefNote(noteId) {
     if (!/^\d+$/.test(String(noteId))) return null;
     let note;
     try {
-      note = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body`);
+      note = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body&associations=deals`);
     } catch (err) {
       if (err.status === 404) return null;
       throw err;
     }
+    const onDeal = ((((note.associations || {}).deals || {}).results) || []).length > 0;
     const text = cleanText((note.properties || {}).hs_note_body);
-    if (!isBriefNoteText(text)) return null;
+    if (onDeal || !isBriefNoteText(text)) return null;
     const parsed = parseBriefNote(text);
     return { id: String(noteId), brief: parsed ? parsed.brief : null, signature: parsed ? parsed.signature : null, spaceName: parsed ? parsed.spaceName : null };
   }
@@ -253,7 +263,7 @@ function createDealContext({ hubspot, db = null }) {
   // The contact the deal's brief note was written for, if still on the deal; null otherwise.
   async function pickedBefore(dealId, contactIds) {
     const record = await recordOf(dealId);
-    const note = await findBriefNote(dealId, record);
+    const note = await findBriefNote(dealId, record, record && record.contactId);
     const id = note && note.signature ? note.signature.contactId : null;
     return id && contactIds.includes(id) ? id : null;
   }
@@ -350,4 +360,4 @@ function createDealContext({ hubspot, db = null }) {
   return load;
 }
 
-module.exports = { createDealContext, cleanText, parseAlowareText, stripQuotedReply, fitBudget, STORE_CMF, COMPANY_SENDER };
+module.exports = { isBasecampNoteText, BASECAMP_NOTE_MARKERS, createDealContext, cleanText, parseAlowareText, stripQuotedReply, fitBudget, STORE_CMF, COMPANY_SENDER };

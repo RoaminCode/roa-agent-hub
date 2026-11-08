@@ -6,7 +6,6 @@
 // Team Members' words, as written, each dated and attributed. Basecamp's database keeps
 // only the note's id and the topic.
 
-const { writtenAt } = require('../agents/roamerBrief');
 const { cleanText } = require('./dealContext');
 
 const MARKER = 'Basecamp Q&A:';
@@ -18,15 +17,19 @@ function isQaNoteText(text) {
   return String(text || '').trimStart().startsWith(MARKER);
 }
 
-// "Q (Nov 7, 11:43 AM MT, Casey Coach): Has the awning arm come in?"
-const entry = (kind, at, who, text) => `<p><strong>${kind}</strong> (${escapeHtml(writtenAt(at))} MT, ${escapeHtml(who)}): ${lines(text)}</p>`;
+// "Nov 7, 2026, 11:43 AM": with the year, so the reuse check never has to guess it.
+const stampOf = (at) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(at);
+
+// "Q (Nov 7, 2026, 11:43 AM MT, Casey Coach): Has the awning arm come in?"
+const entry = (kind, at, who, text) => `<p><strong>${kind}</strong> (${escapeHtml(stampOf(at))} MT, ${escapeHtml(who)}): ${lines(text)}</p>`;
 
 function renderQaNote({ topic, question, askedBy, at }) {
   return `<p><strong>${escapeHtml(`${MARKER} ${topic}`)}</strong></p>${entry('Q', at, askedBy, question)}`;
 }
 
-// `hubspot` is the client (get, createNote, updateNote).
-function createQaNotes({ hubspot }) {
+// `hubspot` is the client (get, createNote, updateNote). `lock(name, fn)` (db.withLock) makes
+// two answers added to one note at once take turns, so neither is lost.
+function createQaNotes({ hubspot, lock = (name, fn) => fn() }) {
   // A new topic note on the Roamer and the deal's Delivery record (never the deal). Returns its id.
   async function addQuestion({ contactId, deliveryId = null, topic, question, askedBy, at }) {
     return hubspot.createNote({ contactId: contactId || null, deliveryId: deliveryId || null, body: renderQaNote({ topic, question, askedBy, at }), timestamp: at.toISOString() });
@@ -35,9 +38,11 @@ function createQaNotes({ hubspot }) {
   // Adds a line ("Q" or "A") to the end of a topic note, which must still be Basecamp's Q&A note.
   async function append({ noteId, kind, text, who, at }) {
     if (!/^\d+$/.test(String(noteId))) throw new Error('addAnswer: invalid note id');
-    const current = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body`);
-    const body = `${(current.properties || {}).hs_note_body || ''}${entry(kind, at, who, text)}`;
-    return hubspot.updateNote({ noteId, body, timestamp: at.toISOString(), isOurs: (html) => isQaNoteText(cleanText(html)) });
+    return lock(`qa_${noteId}`, async () => {
+      const current = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body`);
+      const body = `${(current.properties || {}).hs_note_body || ''}${entry(kind, at, who, text)}`;
+      return hubspot.updateNote({ noteId, body, timestamp: at.toISOString(), isOurs: (html) => isQaNoteText(cleanText(html)) });
+    });
   }
 
   // Adds an answer to the end of a topic note.

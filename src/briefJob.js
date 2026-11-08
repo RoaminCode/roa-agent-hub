@@ -30,9 +30,11 @@ const FULL_EVERY_MS = 30 * 24 * 60 * 60 * 1000;
 function planBrief(context, now = Date.now()) {
   const saved = context.briefNote;
   if (!saved || !saved.brief || !saved.signature) return { mode: 'full', why: 'no saved brief' };
-  if (sameSignature(saved.signature, briefSignature(context))) return { mode: 'reuse' };
-  if (saved.signature.contactId !== briefSignature(context).contactId) return { mode: 'full', why: 'different Roamer' };
   const meta = context.briefMeta;
+  // An older item edited after the brief was written (a call summary filled in later).
+  const edited = meta && context.items.some((i) => i.modified && Date.parse(i.modified) > Date.parse(meta.writtenAt));
+  if (sameSignature(saved.signature, briefSignature(context)) && !edited) return { mode: 'reuse' };
+  if (saved.signature.contactId !== briefSignature(context).contactId) return { mode: 'full', why: 'different Roamer' };
   if (!meta) return { mode: 'full', why: 'no brief history' };
   if (meta.updates >= MAX_UPDATES) return { mode: 'full', why: `${MAX_UPDATES} updates since the last full read` };
   if (!meta.fullAt) return { mode: 'full', why: 'no full read on record yet' };
@@ -43,8 +45,7 @@ function planBrief(context, now = Date.now()) {
   // Something old was removed, or added with an old date: the saved brief no longer
   // matches its own record, so only a full read is safe.
   if (older.length !== saved.signature.itemCount) return { mode: 'full', why: 'older items changed' };
-  // An item edited after the brief was written (a call summary filled in later).
-  if (older.some((i) => i.modified && i.modified > meta.writtenAt)) return { mode: 'full', why: 'an older item was edited' };
+  if (older.some((i) => i.modified && Date.parse(i.modified) > Date.parse(meta.writtenAt))) return { mode: 'full', why: 'an older item was edited' };
   if (!newItems.length) return { mode: 'full', why: 'record changed with nothing new' };
   return { mode: 'update', newItems };
 }

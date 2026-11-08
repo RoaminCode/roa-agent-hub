@@ -17,14 +17,17 @@ function createBriefNoteSaver({ hubspot, db = null, now = () => new Date() }) {
     const space = spaceName || context.spaceName || (context.briefNote && context.briefNote.spaceName) || null;
     const body = renderBriefNote({ brief, context, now: at, spaceName: space });
     const timestamp = at.toISOString();
-    let saved;
-    if (context.briefNote) {
-      const id = await hubspot.updateNote({ noteId: context.briefNote.id, body, timestamp, isOurs: (html) => isBriefNoteText(cleanText(html)) });
-      saved = { id, updated: true };
-    } else {
+    const isOurs = (html) => isBriefNoteText(cleanText(html));
+    const write = async () => {
+      if (context.briefNote) return { id: await hubspot.updateNote({ noteId: context.briefNote.id, body, timestamp, isOurs }), updated: true };
+      // Another brief for this deal may have written the note since this one loaded.
+      const record = db ? await db.getDeal(context.deal.id) : null;
+      if (record && record.briefNoteId) return { id: await hubspot.updateNote({ noteId: record.briefNoteId, body, timestamp, isOurs }), updated: true };
       // On the Roamer, and on the deal's Delivery record once it has one (never the deal).
-      saved = { id: await hubspot.createNote({ contactId: context.contact ? context.contact.id : null, deliveryId: context.deliveryId || null, body, timestamp }), updated: false };
-    }
+      return { id: await hubspot.createNote({ contactId: context.contact ? context.contact.id : null, deliveryId: context.deliveryId || null, body, timestamp }), updated: false };
+    };
+    // One brief at a time per deal, so two finishing together make one note, not two.
+    const saved = db && db.withLock ? await db.withLock(`brief_${context.deal.id}`, write) : await write();
     if (db) {
       await db.recordBrief({
         dealId: context.deal.id,

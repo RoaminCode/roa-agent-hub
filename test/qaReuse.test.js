@@ -40,6 +40,19 @@ test('the 48-hour rule: a fact is reused at any age, a status only within 48 hou
   assert.ok(!stillGood({ kind: 'status', answeredOn: '' }, NOW.getTime()));
 });
 
+test('the 48-hour rule never takes a future date as fresh, and counts from the end of the day in Utah', () => {
+  // A wrong year guessed near New Year, or any date after today.
+  assert.ok(!stillGood({ kind: 'status', answeredOn: '2026-11-10' }, NOW.getTime()));
+  assert.ok(!stillGood({ kind: 'status', answeredOn: '2027-01-02' }, Date.parse('2027-01-01T18:00:00Z')));
+  // Nov 7 ends at 06:59:59Z on Nov 8 in Utah; 48 hours later is 06:59:59Z on Nov 10.
+  assert.ok(stillGood({ kind: 'status', answeredOn: '2026-11-07' }, Date.parse('2026-11-10T06:30:00Z')));
+  assert.ok(!stillGood({ kind: 'status', answeredOn: '2026-11-07' }, Date.parse('2026-11-10T07:30:00Z')));
+  // Daylight saving: Jul 4 ends at 05:59:59Z on Jul 5.
+  assert.ok(stillGood({ kind: 'status', answeredOn: '2026-07-04' }, Date.parse('2026-07-07T05:30:00Z')));
+  assert.ok(!stillGood({ kind: 'status', answeredOn: '2026-07-04' }, Date.parse('2026-07-07T06:30:00Z')));
+  assert.ok(!stillGood({ kind: 'status', answeredOn: 'Nov 7' }, NOW.getTime()));
+});
+
 async function harness(found, { answeredAt = '2026-11-09T10:00:00Z', inBrief = null } = {}) {
   const firestore = createFakeFirestore();
   const db = createDb({ firestore, now: () => NOW });
@@ -101,6 +114,13 @@ test('a status answer over 48 hours old is not reused, and needs no verdict', as
   assert.ok(textOf(h.sent[0][1]).includes('more than 48 hours old'));
   assert.strictEqual(h.sent.length, 1);
   assert.deepStrictEqual(h.qa, [['follow-up', '555']]);
+});
+
+test('a newer answer on the same topic does not make an old status answer fresh', async () => {
+  // The reused answer is from Nov 5; the topic's only answer through Basecamp is from Nov 9.
+  const h = await harness({ ...ANSWERED, answeredOn: '2026-11-05' }, { answeredAt: '2026-11-09T10:00:00Z' });
+  await h.ask();
+  assert.ok(textOf(h.sent[0][1]).includes('more than 48 hours old'));
 });
 
 test('a follow-up is filed in its topic note; a new question gets its own note', async () => {
@@ -235,4 +255,14 @@ test('the router hands the card taps to the question router and replaces the car
   const res = await r({ headers: { authorization: 'x' }, body: click });
   assert.deepStrictEqual([calls[0].action, calls[0].threadName, calls[0].formInputs.answer], ['qaSend', 'spaces/DM/threads/t1', 'Thursday']);
   assert.deepStrictEqual(res.body, { hostAppDataAction: { chatDataAction: { updateMessageAction: { message: { text: 'done' } } } } });
+});
+
+test('a double tap on Send this answer relays the answer once', async () => {
+  const h = await harness(ANSWERED);
+  await h.ask();
+  const before = h.sent.length;
+  const said = await Promise.all([tap(h, 'qaUse', { params: { m: 'Arrives Tuesday.' } }), tap(h, 'qaUse', { params: { m: 'Arrives Tuesday.' } })]);
+  assert.strictEqual(h.sent.length - before, 1);
+  assert.ok(said.some((s) => s.endsWith(SAY.alreadyAnswered)));
+  assert.strictEqual(h.qa.filter((x) => x[0] === 'answer').length, 1);
 });

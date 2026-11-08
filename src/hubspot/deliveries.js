@@ -24,18 +24,30 @@ function createDeliveries({ hubspot, db, log }) {
     return (page.results || []).map((r) => String(r.toObjectId)).sort((a, b) => Number(a) - Number(b));
   }
 
-  // Returns { id, created }. `contactId` is the Roamer; `dealname` names a new record.
+  // Returns { id, created }, or null while another run is finding or creating it (the next
+  // step that needs it tries again). `contactId` is the Roamer; `dealname` names a new record.
   return async function ensureDelivery({ dealId, dealNumber, dealname = '', contactId = null }) {
     const record = (await db.getDeal(dealId)) || {};
     if (record.deliveryId) return { id: record.deliveryId, created: false };
+    const claim = await db.claimDelivery(dealId);
+    if (claim.deliveryId) return { id: claim.deliveryId, created: false };
+    if (claim.busy) return null;
 
-    const existing = await linkedTo(dealId);
-    let id = existing[0];
-    // More than one is a mistake made elsewhere; use the oldest and say so, never guess further.
-    if (existing.length > 1) log('WARNING', 'deal has more than one Delivery record; using the oldest', { dealNumber, count: existing.length });
-    const created = !id;
-    if (created) id = await hubspot.createDelivery({ dealId, contactId, ...deliveryTitle(dealNumber, dealname) });
-    await db.recordDelivery({ dealId, deliveryId: id, created });
+    let id;
+    let created;
+    try {
+      // HubSpot is asked first, so a record created by a run that timed out is found, not made twice.
+      const existing = await linkedTo(dealId);
+      id = existing[0];
+      // More than one is a mistake made elsewhere; use the oldest and say so, never guess further.
+      if (existing.length > 1) log('WARNING', 'deal has more than one Delivery record; using the oldest', { dealNumber, count: existing.length });
+      created = !id;
+      if (created) id = await hubspot.createDelivery({ dealId, contactId, ...deliveryTitle(dealNumber, dealname) });
+      await db.recordDelivery({ dealId, deliveryId: id, created });
+    } catch (err) {
+      await db.releaseDeliveryClaim(dealId).catch(() => {});
+      throw err;
+    }
 
     // The brief note was written before the deal had a Delivery record.
     if (record.briefNoteId) {
@@ -48,4 +60,26 @@ function createDeliveries({ hubspot, db, log }) {
   };
 }
 
-module.exports = { createDeliveries, deliveryTitle };
+// For anything that finds a deal (`find`, returning { deal, spaceName, deliveryId, ... }): a
+// deal whose space is open but whose Delivery record was never found or made (HubSpot failed
+// as the space opened) gets it now, so its notes still land on the Delivery record. A deal
+// with no space is left alone: the record comes with the space. A failure is logged and the
+// deal is returned as found.
+function withDeliveryRecord(find, { ensureDelivery, log }) {
+  const wrapped = async (args) => {
+    const found = await find(args);
+    if (!found || !found.deal || !found.spaceName || found.deliveryId) return found;
+    const props = found.deal.properties || {};
+    const dealNumber = props.ls_deal_number || (args && args.dealNumber) || null;
+    try {
+      const d = await ensureDelivery({ dealId: found.deal.id, dealNumber, dealname: props.dealname || '', contactId: found.contactId || (found.contact && found.contact.id) || null });
+      return d ? { ...found, deliveryId: d.id } : found;
+    } catch (err) {
+      log('ERROR', 'could not find or create Delivery record', { dealNumber, error: { status: err.status } });
+      return found;
+    }
+  };
+  return Object.assign(wrapped, find);
+}
+
+module.exports = { createDeliveries, deliveryTitle, withDeliveryRecord };

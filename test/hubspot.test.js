@@ -217,14 +217,15 @@ test('refuses a store it has no CMF for', async () => {
   await assert.rejects(createDealContext({ hubspot })({ store: 'ZZ', dealNumber: '1' }), /unknown store/);
 });
 
-test("leaves Basecamp's own brief note out of the record and hands it over separately", async () => {
+test("leaves Basecamp's own brief note out of the record and hands it over separately; one on the deal is never used", async () => {
   const { renderBriefNote } = require('../src/agents/briefNote');
   const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, now: new Date('2026-11-07T03:14:00Z') });
   const note = (id, at) => ({ id, properties: { hs_timestamp: at, hs_note_body: body } });
   const hubspot = fakeHubSpot({
-    contactNotes: [note('b0', '2026-10-05T10:00:00Z'), { id: 'n2', properties: { hs_timestamp: '2026-10-06T10:00:00Z', hs_note_body: 'Loves dark chocolate' } }],
-    dealNotes: [note('b1', '2026-11-01T10:00:00Z'), note('b2', '2026-11-07T03:14:00Z')],
+    contactNotes: [note('b0', '2026-10-05T10:00:00Z'), note('b2', '2026-11-01T10:00:00Z'), { id: 'n2', properties: { hs_timestamp: '2026-10-06T10:00:00Z', hs_note_body: 'Loves dark chocolate' } }],
+    // A brief note left on the deal from before 2026-11-07, newer, is never read or updated.
+    dealNotes: [note('b9', '2026-11-07T03:14:00Z')],
   });
   const ctx = await createDealContext({ hubspot })({ store: 'UT', dealNumber: '90001' });
   assert.deepStrictEqual(ctx.items.filter((i) => i.channel === 'note').map((i) => i.text), ['Loves dark chocolate']);
@@ -242,8 +243,9 @@ test('opening a space remembers the Roamer picked for the brief; a brief still a
   const { renderBriefNote } = require('../src/agents/briefNote');
   const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 78 }, items: [] } });
-  const hubspot = fakeHubSpot({ contacts: [77, 78], dealNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
-  const load = createDealContext({ hubspot });
+  const hubspot = fakeHubSpot({ contacts: [77, 78], contactNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
+  // Basecamp's record names the Roamer the brief was written for.
+  const load = createDealContext({ hubspot, db: { getDeal: async () => ({ contactId: '78' }) } });
   const remembered = await load({ store: 'UT', dealNumber: '90001', rememberPick: true });
   assert.strictEqual(remembered.contact.properties.firstname, 'Chris');
   const asked = await load({ store: 'UT', dealNumber: '90001' });
@@ -256,10 +258,15 @@ test('finding a deal space reads only the deal and its brief note', async () => 
   const { renderBriefNote } = require('../src/agents/briefNote');
   const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, spaceName: 'spaces/DEAL' });
-  const hubspot = fakeHubSpot({ dealNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
-  const { findDealSpace } = createDealContext({ hubspot });
+  const hubspot = fakeHubSpot({ contactNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
+  // Basecamp's record names the Roamer, and the brief note on the Roamer is found.
+  const { findDealSpace } = createDealContext({ hubspot, db: { getDeal: async () => ({ contactId: '77', spaceName: 'spaces/DEAL' }) } });
   const found = await findDealSpace({ store: 'UT', dealNumber: '90001' });
   assert.strictEqual(found.spaceName, 'spaces/DEAL');
+  assert.strictEqual(found.contactId, '77');
+  // A brief note on the deal, from before 2026-11-07, is not read.
+  const onDeal = fakeHubSpot({ dealNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
+  assert.strictEqual((await createDealContext({ hubspot: onDeal }).findDealSpace({ dealNumber: '90001' })).spaceName, null);
   assert.ok(found.deal.id);
   assert.strictEqual((await createDealContext({ hubspot: fakeHubSpot() }).findDealSpace({ dealNumber: '90001' })).spaceName, null);
   assert.strictEqual(await createDealContext({ hubspot: fakeHubSpot({ deals: 2 }) }).findDealSpace({ dealNumber: '90001' }), null);
@@ -300,8 +307,40 @@ test("with Basecamp's record, the brief note is read by id and the space and sig
   assert.strictEqual(ctx.spaceName, 'spaces/REAL');
   assert.strictEqual(ctx.briefNote.id, '5');
   assert.strictEqual(ctx.briefNote.signature.itemCount, 99);
-  assert.ok(gets.includes('/crm/v3/objects/notes/5?properties=hs_note_body'));
+  assert.ok(gets.includes('/crm/v3/objects/notes/5?properties=hs_note_body&associations=deals'));
   assert.ok(!gets.some((p) => p.includes('/deals/d1/associations/notes')));
+});
+
+test("a recorded brief note that is on a deal is not used, so it is never updated there", async () => {
+  const { renderBriefNote } = require('../src/agents/briefNote');
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] };
+  const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] } });
+  const base = fakeHubSpot();
+  const hubspot = {
+    ...base,
+    get: async (path) => (path.startsWith('/crm/v3/objects/notes/5') ? { id: '5', properties: { hs_note_body: body }, associations: { deals: { results: [{ id: 'd1' }] } } } : base.get(path)),
+  };
+  const ctx = await createDealContext({ hubspot, db: { getDeal: async () => ({ briefNoteId: '5', contactId: '77' }) } })({ store: 'UT', dealNumber: '90001' });
+  assert.strictEqual(ctx.briefNote, null);
+});
+
+test("Basecamp's own Q&A, WOW plan, and text-sent notes are not part of the record; a Team Member's space note is", async () => {
+  const { renderQaNote } = require('../src/hubspot/qaNotes');
+  const { renderWowNote } = require('../src/wowJob');
+  const { renderTextNote } = require('../src/textJob');
+  const { renderSpaceNote } = require('../src/spaceNotes');
+  const at = new Date('2026-11-07T18:00:00Z');
+  const bodies = [
+    renderQaNote({ topic: 'awning arm', question: 'Is it in?', askedBy: 'Casey', at }),
+    renderWowNote({ title: 'Backing course', tailored: 'A backing course for Pat', category: 'skills', tier: 'low', who: 'Blake', now: at }),
+    renderTextNote({ message: 'Hi', name: 'Pat', number: '+14355550199', approver: 'Blake', line: { label: 'UT' }, now: at }),
+    renderSpaceNote({ text: 'Roamer wants Saturday', userEmail: 'c@example.com', now: at }),
+  ];
+  const hubspot = fakeHubSpot({ contactNotes: bodies.map((b, i) => ({ id: `q${i}`, properties: { hs_timestamp: '2026-11-07T18:00:00Z', hs_note_body: b } })) });
+  const ctx = await createDealContext({ hubspot })({ store: 'UT', dealNumber: '90001' });
+  const notes = ctx.items.filter((i) => i.channel === 'note');
+  assert.strictEqual(notes.length, 1);
+  assert.ok(notes[0].text.includes('Roamer wants Saturday'));
 });
 
 test('saving a brief note records its id and what it was built from', async () => {
@@ -315,7 +354,8 @@ test('saving a brief note records its id and what it was built from', async () =
   const rec = firestore.data.deals['111'];
   assert.strictEqual(rec.briefNoteId, '321');
   assert.strictEqual(rec.contactId, '77');
-  assert.deepStrictEqual(rec.briefSignature, { contactId: '77', itemCount: 1, newestAt: '2026-11-01T00:00:00Z' });
+  assert.deepStrictEqual({ ...rec.briefSignature, ids: undefined }, { contactId: '77', itemCount: 1, newestAt: '2026-11-01T00:00:00Z', ids: undefined });
+  assert.match(rec.briefSignature.ids, /^[0-9a-f]{16}$/);
   assert.strictEqual(rec.dealNumber, '90001');
 });
 
@@ -377,8 +417,70 @@ test('ensureDelivery uses the deal\'s Delivery record, or creates and links one,
   assert.ok(existing.logs.some((l) => l[1].includes('more than one Delivery record')));
 });
 
+test("two runs ensuring a deal's Delivery record at once create one record, not two", async () => {
+  const { createDeliveries } = require('../src/hubspot/deliveries');
+  const { createDb } = require('../src/db');
+  const { createFakeFirestore } = require('./fakeFirestore');
+  const db = createDb({ firestore: createFakeFirestore() });
+  let creates = 0;
+  const hubspot = { get: async () => ({ results: [] }), createDelivery: async () => (creates++, await new Promise((r) => setTimeout(r, 10)), '888'), linkNoteToDelivery: async () => {} };
+  const ensure = createDeliveries({ hubspot, db, log: () => {} });
+  const args = { dealId: '111', dealNumber: '90001', contactId: '77' };
+  const [a, b] = await Promise.all([ensure(args), ensure(args)]);
+  assert.strictEqual(creates, 1);
+  assert.deepStrictEqual([a, b].filter(Boolean), [{ id: '888', created: true }]);
+  // A failed try lets the next one through.
+  const failing = createDeliveries({ hubspot: { ...hubspot, createDelivery: async () => { throw new Error('down'); } }, db: createDb({ firestore: createFakeFirestore() }), log: () => {} });
+  await assert.rejects(failing(args));
+  await assert.rejects(failing(args), /down/);
+});
+
+test('a deal with an open space but no Delivery record gets one the next time it is found; one with no space does not', async () => {
+  const { withDeliveryRecord } = require('../src/hubspot/deliveries');
+  const ensured = [];
+  const ensureDelivery = async (a) => (ensured.push(a), { id: '888', created: true });
+  const deal = { id: '111', properties: { ls_deal_number: '90001', dealname: '90001 - Pat Sample' } };
+  const find = withDeliveryRecord(async ({ space }) => ({ deal, spaceName: space, contactId: '77', deliveryId: null }), { ensureDelivery, log: () => {} });
+  assert.strictEqual((await find({ space: 'spaces/A' })).deliveryId, '888');
+  assert.deepStrictEqual(ensured, [{ dealId: '111', dealNumber: '90001', dealname: '90001 - Pat Sample', contactId: '77' }]);
+  assert.strictEqual((await find({ space: null })).deliveryId, null);
+  assert.strictEqual(ensured.length, 1);
+  // A HubSpot failure is logged and the deal still comes back.
+  const logs = [];
+  const broken = withDeliveryRecord(async () => ({ deal, spaceName: 'spaces/A', deliveryId: null }), { ensureDelivery: async () => { throw new Error('down'); }, log: (...l) => logs.push(l) });
+  assert.strictEqual((await broken({})).deal, deal);
+  assert.strictEqual(logs[0][1], 'could not find or create Delivery record');
+});
+
 test('reads the "Name (Rvs of America):" text format; no name, or another name in brackets, stays unknown', () => {
   assert.deepStrictEqual(parseAlowareText('<b>Sam Sample (Rvs of America):</b><br>See you Tuesday!'), { sender: 'Sam Sample', message: 'See you Tuesday!' });
   assert.deepStrictEqual(parseAlowareText('<b>(Rvs of America):</b><br>Welcome to Rvs of America!'), { sender: null, message: 'Welcome to Rvs of America!' });
   assert.deepStrictEqual(parseAlowareText('<b>Pat Sample (Pat Sample):</b><br>Thanks'), { sender: null, message: 'Thanks' });
+});
+
+test('two briefs for a deal saved at once make one brief note, not two', async () => {
+  const { createBriefNoteSaver } = require('../src/hubspot/briefNotes');
+  const { createDb } = require('../src/db');
+  const { createFakeFirestore } = require('./fakeFirestore');
+  const { renderBriefNote } = require('../src/agents/briefNote');
+  const db = createDb({ firestore: createFakeFirestore() });
+  const real = db.withLock;
+  db.withLock = (name, fn) => real(name, fn, { stepMs: 5 });
+  const created = [];
+  const updated = [];
+  const hubspot = {
+    createNote: async (n) => (await new Promise((r) => setTimeout(r, 15)), created.push(n), '321'),
+    updateNote: async (u) => {
+      const body = renderBriefNote({ brief: { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] }, context: { contact: { id: 77 }, items: [] } });
+      if (!u.isOurs(body)) throw new Error('not ours');
+      updated.push(u.noteId);
+      return u.noteId;
+    },
+  };
+  const save = createBriefNoteSaver({ hubspot, db });
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] };
+  const context = { store: 'UT', deal: { id: '111', properties: { ls_deal_number: '90001' } }, contact: { id: '77' }, items: [], briefNote: null };
+  await Promise.all([save({ context, brief }), save({ context, brief })]);
+  assert.strictEqual(created.length, 1);
+  assert.deepStrictEqual(updated, ['321']);
 });

@@ -19,7 +19,7 @@ const { errorFields, isOutOfCredits } = require('./errors');
 const { routeQuestion, UNSURE } = require('./agents/askRouter');
 const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { checkBrief } = require('./agents/briefAnswer');
-const { noDashes } = require('./agents/roamerBrief');
+const { noDashes, recordDate } = require('./agents/roamerBrief');
 const { primary, secondary, label } = require('./chat/style');
 const { dealsNamedIn } = require('./hubspot/namedDeals');
 
@@ -47,6 +47,7 @@ const SAY = {
   noDetail: 'Type a bit more in the box, then tap Send.',
   verdict: (v) => (v === 'right' ? 'Marked right. Thanks.' : 'Marked wrong. Thanks; that one counts against reusing answers.'),
   verdictFailed: "I couldn't record that. Blake can see what happened in the logs.",
+  alreadyAnswered: 'That answer was already sent; it went once.',
   relayFailed: "I couldn't post that answer where the question was asked. Blake can see what happened in the logs.",
   cardGone: "I couldn't find the question this card belongs to. Reply in its thread instead.",
 };
@@ -238,11 +239,18 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
   }
 
   // The reuse check's finding, with the 48-hour rule applied to a reused answer. The answer's
-  // time comes from Basecamp's records when the note's question was answered through it.
+  // exact time comes from Basecamp's records when that answer (the one on the note, on the
+  // day the check named) was given through Basecamp; otherwise from its date. Another, newer
+  // answer on the same topic never makes an old one fresh.
   function judgeReuse(found, questions) {
     if (!found || !found.ok || found.decision === 'new') return null;
-    const answeredAt = questions.filter((q) => q.noteId === found.noteId && q.answeredAt).map((q) => q.answeredAt).sort().pop();
-    const fresh = answeredAt ? now() - Date.parse(answeredAt) <= 48 * 60 * 60 * 1000 : stillGood(found, now());
+    const answeredAt = questions
+      .filter((q) => q.noteId === found.noteId && q.answeredAt && recordDate(q.answeredAt) === found.answeredOn)
+      .map((q) => q.answeredAt)
+      .sort((a, b) => Date.parse(a) - Date.parse(b))
+      .pop();
+    const age = answeredAt ? now() - Date.parse(answeredAt) : NaN;
+    const fresh = answeredAt ? age >= 0 && age <= 48 * 60 * 60 * 1000 : stillGood(found, now());
     const good = found.decision === 'answered' && (found.kind === 'fact' || fresh);
     return { decision: found.decision, noteId: found.noteId, kind: found.kind, stillGood: Boolean(good), answer: found.answer, answeredBy: found.answeredBy, answeredOn: found.answeredOn, costUsd: found.costUsd ?? null };
   }
@@ -438,19 +446,27 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     const q = await db.findQuestionByReviewerThread(threadName);
     if (!q) return SAY.cardGone;
     const redraw = (note) => reviewCard(ctx, { endpoint, note });
+    // A double tap sends one answer: the same answer to the same question counts once, and
+    // is let through again only when relaying it failed.
+    const once = async (answer, run) => {
+      if (!(await db.claimOnce('answer', [q.id, answer]))) return `*Answered:* ${answer}\n${SAY.alreadyAnswered}`;
+      const said = await run();
+      if (said.endsWith(SAY.relayFailed)) await db.undoOnce('answer', [q.id, answer]).catch(() => {});
+      return said;
+    };
     if (action === 'qaSend') {
       const answer = String(formInputs.answer || '').trim();
       if (!answer) return redraw('Type an answer in the box, then tap Send.');
-      const said = await relayAnswer({ threadName, userEmail, userDisplayName, text: answer });
-      return `*Answered:* ${answer}\n${said}`;
+      return once(answer, async () => `*Answered:* ${answer}\n${await relayAnswer({ threadName, userEmail, userDisplayName, text: answer })}`);
     }
     if (action === 'qaUse') {
       const answer = String(params.m || '').trim();
       if (!answer) return redraw('Type an answer in the box, then tap Send.');
-      await db.recordReuseVerdict({ id: q.id, verdict: 'right', by: userEmail });
-      log('INFO', 'reuse verdict', { question: q.id, verdict: 'right', user: userEmail, from: 'card' });
-      const said = await relayAnswer({ threadName, userEmail, userDisplayName, text: answer });
-      return `*Sent the suggested answer* (marked right): ${answer}\n${said}`;
+      return once(answer, async () => {
+        await db.recordReuseVerdict({ id: q.id, verdict: 'right', by: userEmail });
+        log('INFO', 'reuse verdict', { question: q.id, verdict: 'right', user: userEmail, from: 'card' });
+        return `*Sent the suggested answer* (marked right): ${answer}\n${await relayAnswer({ threadName, userEmail, userDisplayName, text: answer })}`;
+      });
     }
     if (action === 'qaWrong') {
       await db.recordReuseVerdict({ id: q.id, verdict: 'wrong', by: userEmail });

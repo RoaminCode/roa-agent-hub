@@ -49,7 +49,9 @@ test("a Roamer's numbers: each with its field, the same number once", () => {
   assert.deepStrictEqual(numbersOf({ phone: 'none' }), []);
 });
 
-async function harness({ props = { mobilephone: MOBILE }, sendFails = false } = {}) {
+const CARD = 'spaces/DEAL/messages/draft.1';
+
+async function harness({ props = { mobilephone: MOBILE }, sendFails = false, sendWait = null } = {}) {
   const firestore = createFakeFirestore();
   const db = createDb({ firestore, now: () => NOW });
   await db.linkSpace({ dealId: '111', dealNumber: '90001', store: 'UT', spaceName: 'spaces/DEAL', spaceUri: 'u', how: 'adopted', by: 'b' });
@@ -65,7 +67,8 @@ async function harness({ props = { mobilephone: MOBILE }, sendFails = false } = 
     findDealSpace: async ({ dealNumber }) => (dealNumber === '90001' ? { deal: { id: '111' } } : null),
     aloware: {
       sendApproved: async (s) => {
-        if (sendFails) throw new Error('down');
+        if (sendFails) throw sendFails === true ? new Error('down') : sendFails;
+        if (sendWait) await sendWait;
         sends.push(s);
         return { to: s.to };
       },
@@ -76,8 +79,10 @@ async function harness({ props = { mobilephone: MOBILE }, sendFails = false } = 
     draft: async () => ({ ok: true, text: 'Hi Pat, your awning arm arrives Tuesday. ROA', usage: {} }),
     now: () => NOW,
   });
-  const approve = (formInputs) => texts.send({ params: { d: '111', n: '90001' }, formInputs, userEmail: 'blake@example.com', userDisplayName: 'Blake Locke' });
-  return { texts, approve, sends, notes, data: firestore.data };
+  // As from the dialog: its draft card, and the one number it showed (when it showed one).
+  const shown = props.mobilephone && !props.phone ? { t: toE164(props.mobilephone) } : {};
+  const approve = (formInputs, params = {}) => texts.send({ params: { d: '111', n: '90001', c: CARD, ...shown, ...params }, formInputs, userEmail: 'blake@example.com', userDisplayName: 'Blake Locke' });
+  return { texts, approve, sends, notes, data: firestore.data, setProps: (p) => Object.assign(props, p) };
 }
 
 test('/text drafts a card with Review and send; nothing is sent', async () => {
@@ -114,7 +119,7 @@ test('Approve and send: to the Roamer, only with the number checked, logged, not
   assert.strictEqual(said, SAY.sent({ approver: 'Blake Locke', name: 'Pat Sample', number: '(435) 555-0199', line: LINE.label }));
   assert.deepStrictEqual(h.sends, [{ lineId: '67519', to: '+14355550199', message: 'Hi Pat, it arrives Tuesday. ROA' }]);
   const [log] = Object.values(h.data.textSends);
-  assert.deepStrictEqual({ ...log, at: undefined }, { dealId: '111', approvedBy: 'blake@example.com', lineId: '67519', to: '+14355550199', wouldGoTo: null, message: 'Hi Pat, it arrives Tuesday. ROA', shadow: false, card: null, at: undefined });
+  assert.deepStrictEqual({ ...log, at: undefined, claimedAt: undefined }, { dealId: '111', approvedBy: 'blake@example.com', lineId: '67519', to: '+14355550199', wouldGoTo: null, message: 'Hi Pat, it arrives Tuesday. ROA', shadow: false, card: CARD, status: 'sent', at: undefined, claimedAt: undefined });
   assert.deepStrictEqual([h.notes[0].contactId, h.notes[0].deliveryId], ['77', '888']);
   assert.strictEqual(h.notes[0].body, renderTextNote({ message: 'Hi Pat, it arrives Tuesday. ROA', name: 'Pat Sample', number: '+14355550199', approver: 'Blake Locke', line: LINE, now: NOW }));
   assert.ok(h.notes[0].body.includes('approved by Blake Locke'));
@@ -131,12 +136,68 @@ test('with two numbers the picked one is sent to, and only a number still on the
 test('a send that is too long, malformed, or fails sends and logs nothing', async () => {
   const h = await harness();
   assert.strictEqual(await h.approve({ message: 'x'.repeat(MAX_CHARS + 1), confirm: 'yes' }), SAY.tooLong);
-  assert.strictEqual(await h.texts.send({ params: { d: 'x', n: '90001' }, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b' }), SAY.sendFailed);
+  assert.strictEqual(await h.texts.send({ params: { d: 'x', n: '90001', c: CARD }, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b' }), SAY.sendFailed);
   assert.deepStrictEqual(h.sends, []);
   const down = await harness({ sendFails: true });
   assert.strictEqual(await down.approve({ message: 'Hi', confirm: 'yes' }), SAY.sendFailed);
-  assert.strictEqual(down.data.textSends, undefined);
+  assert.deepStrictEqual(down.data.textSends || {}, {});
   assert.deepStrictEqual(down.notes, []);
+});
+
+test('two approvals of one draft at once send one text, not two', async () => {
+  let release;
+  const h = await harness({ sendWait: new Promise((r) => (release = r)) });
+  const both = Promise.all([h.approve({ message: 'Hi', confirm: 'yes' }), h.approve({ message: 'Hi', confirm: 'yes' })]);
+  await new Promise((r) => setTimeout(r, 20));
+  release();
+  const said = await both;
+  assert.strictEqual(h.sends.length, 1);
+  assert.ok(said.includes(SAY.alreadySent));
+});
+
+test('the text goes only to the number the approver checked, never one changed in HubSpot after the dialog opened', async () => {
+  const h = await harness();
+  h.setProps({ mobilephone: '801-555-0177' });
+  assert.strictEqual(await h.approve({ message: 'Hi', confirm: 'yes' }, { t: '+14355550199' }), SAY.wrongNumber);
+  // A dialog that showed no number can't send to one.
+  assert.strictEqual(await h.approve({ message: 'Hi', confirm: 'yes' }, { t: '' }), SAY.wrongNumber);
+  assert.deepStrictEqual(h.sends, []);
+});
+
+test('the text is sent exactly as approved: a long dash is refused, not rewritten', async () => {
+  const h = await harness();
+  assert.strictEqual(await h.approve({ message: 'Hi Pat \u2014 it arrives Tuesday', confirm: 'yes' }), SAY.hasDashes);
+  assert.deepStrictEqual(h.sends, []);
+});
+
+test('an approval with no draft card is refused, not sent unguarded', async () => {
+  const h = await harness();
+  assert.strictEqual(await h.approve({ message: 'Hi', confirm: 'yes' }, { c: '' }), SAY.noDraft);
+  assert.deepStrictEqual(h.sends, []);
+});
+
+test('no answer from Aloware: the approver is told it may have gone, and the draft cannot send again', async () => {
+  const lost = Object.assign(new Error('no answer'), { mayHaveSent: true });
+  const h = await harness({ sendFails: lost });
+  assert.strictEqual(await h.approve({ message: 'Hi', confirm: 'yes' }), SAY.mayHaveSent);
+  assert.strictEqual(Object.values(h.data.textSends)[0].status, 'unknown');
+  assert.strictEqual(await h.approve({ message: 'Hi', confirm: 'yes' }), SAY.alreadySent);
+});
+
+test('Aloware refusing a text releases the draft, so it can be approved again', async () => {
+  const refused = Object.assign(new Error('HTTP 422'), { status: 422, mayHaveSent: false });
+  const h = await harness({ sendFails: refused });
+  assert.strictEqual(await h.approve({ message: 'Hi', confirm: 'yes' }), SAY.sendFailed);
+  assert.deepStrictEqual(h.data.textSends, {});
+});
+
+test('Aloware marks a send it got no answer for, or a server error, as maybe sent; a refusal as not sent', async () => {
+  const timeout = createAloware({ token: 't', fetchImpl: async () => { throw new Error('aborted'); } });
+  await assert.rejects(timeout.sendApproved({ lineId: '1', to: MOBILE, message: 'Hi' }), (e) => e.mayHaveSent === true);
+  const server = createAloware({ token: 't', fetchImpl: async () => ({ status: 502, ok: false }) });
+  await assert.rejects(server.sendApproved({ lineId: '1', to: MOBILE, message: 'Hi' }), (e) => e.mayHaveSent === true);
+  const refused = createAloware({ token: 't', fetchImpl: async () => ({ status: 422, ok: false }) });
+  await assert.rejects(refused.sendApproved({ lineId: '1', to: MOBILE, message: 'Hi' }), (e) => e.mayHaveSent === false);
 });
 
 test('the router: /text drafts for people who may brief; Review opens the dialog; Approve sends and closes it; Cancel closes it', async () => {
@@ -205,8 +266,9 @@ test('test mode: the dialog says so, the text goes to the test phone, noted on t
   assert.ok(dialog.includes('<b>TESTING: this goes to your test phone, (801) 555-0100, not to Pat Sample at (435) 555-0199'));
   assert.ok(!dialog.includes('LIVE:'));
   // The number check still has to be ticked.
-  assert.strictEqual(await texts.send({ params: { d: '111', n: '90001' }, formInputs: { message: 'Hi' }, userEmail: 'b' }), SAY.notConfirmed);
-  const said = await texts.send({ params: { d: '111', n: '90001' }, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b', userDisplayName: 'Blake Locke' });
+  const params = { d: '111', n: '90001', c: CARD, t: '+14355550199' };
+  assert.strictEqual(await texts.send({ params, formInputs: { message: 'Hi' }, userEmail: 'b' }), SAY.notConfirmed);
+  const said = await texts.send({ params, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b', userDisplayName: 'Blake Locke' });
   assert.strictEqual(said, SAY.sentTest({ approver: 'Blake Locke', name: 'Pat Sample', number: '(435) 555-0199', line: LINE.label, testTo: '(801) 555-0100' }));
   assert.deepStrictEqual(sends, [{ lineId: '67519', to: '+18015550100', message: 'Hi' }]);
   assert.deepStrictEqual([notes[0].contactId, notes[0].deliveryId], [null, '888']);
@@ -241,12 +303,13 @@ test('after a send the draft card becomes a Sent card with no button, and the sa
     updateMessage: async (name, m) => updates.push([name, m]),
     now: () => NOW,
   });
-  const CARD = 'spaces/DEAL/messages/abc.123';
-  // The draft card's name rides from the review into the dialog's buttons.
+  // The draft card's name and the number shown ride from the review into the dialog's buttons.
   const dialog = await texts.review({ params: { d: '111', n: '90001', m: 'Hi' }, messageName: CARD });
   const approve = dialog.sections[0].widgets.at(-1).buttonList.buttons[0].onClick.action.parameters;
   assert.deepStrictEqual(approve.find((x) => x.key === 'c'), { key: 'c', value: CARD });
-  const send = () => texts.send({ params: { d: '111', n: '90001', c: CARD }, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b', userDisplayName: 'Blake Locke' });
+  assert.deepStrictEqual(approve.find((x) => x.key === 't'), { key: 't', value: '+14355550199' });
+  const params = Object.fromEntries(approve.filter((x) => x.key !== 'action').map((x) => [x.key, x.value]));
+  const send = () => texts.send({ params, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b', userDisplayName: 'Blake Locke' });
   await send();
   assert.deepStrictEqual(updates, [[CARD, sentCard({ dealNumber: '90001', name: 'Pat Sample', number: '+14355550199', message: 'Hi', approver: 'Blake Locke', line: LINE, now: NOW })]]);
   assert.ok(!JSON.stringify(updates[0][1]).includes('Review and send'));

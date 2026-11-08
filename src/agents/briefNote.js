@@ -1,6 +1,6 @@
 'use strict';
 
-// A Roamer brief kept in HubSpot as one note on the deal, which Basecamp updates in place
+// A Roamer brief kept in HubSpot as one note on the Roamer (and the Delivery record), which Basecamp updates in place
 // each time it writes a new brief (Blake's call, 2026-11-06). The note reads cleanly for
 // people in HubSpot, and it is written in a fixed layout so Basecamp can read the brief
 // back exactly and reuse it when nothing new is in the record, spending no credits.
@@ -8,6 +8,7 @@
 // Basecamp never reads this note as part of the Roamer's record: a past AI summary is not
 // a conversation. It is found by its first line, MARKER.
 
+const { createHash } = require('crypto');
 const { isBrief, stampLine, noDashes } = require('./roamerBrief');
 
 const MARKER = 'BASECAMP ROAMER BRIEF';
@@ -15,15 +16,19 @@ const HEADER = 'Written by AI from HubSpot; not checked against LightSpeed.';
 const NO_PRICE = 'no price stated';
 
 // What the brief was built from. A saved brief is reused only when the record still
-// matches: the same Roamer, the same number of items, and the same newest item.
+// matches: the same Roamer, the same number of items, the same newest item, and the same
+// items (`ids`, a short hash of their ids, kept in Basecamp's records), so an old item
+// removed and another added in its place is not mistaken for no change.
 function briefSignature(context) {
   const items = context.items || [];
   const newest = items.map((i) => String(i.at || '')).sort().pop() || '';
-  return { contactId: context.contact ? String(context.contact.id) : '', itemCount: items.length, newestAt: newest };
+  const ids = createHash('sha1').update(items.map((i) => String(i.id)).sort().join(',')).digest('hex').slice(0, 16);
+  return { contactId: context.contact ? String(context.contact.id) : '', itemCount: items.length, newestAt: newest, ids };
 }
 
+// `a` is the saved signature; one saved before `ids` existed is compared without it.
 function sameSignature(a, b) {
-  return Boolean(a && b) && a.contactId === b.contactId && a.itemCount === b.itemCount && a.newestAt === b.newestAt;
+  return Boolean(a && b) && a.contactId === b.contactId && a.itemCount === b.itemCount && a.newestAt === b.newestAt && (!a.ids || a.ids === b.ids);
 }
 
 // One line of the layout: no line breaks, and no "|" inside a mod's fields.

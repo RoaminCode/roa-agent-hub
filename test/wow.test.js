@@ -176,3 +176,11 @@ test('the WOW ideas quick command (6) starts /wow with nothing typed', async () 
   assert.strictEqual(res.body.hostAppDataAction.chatDataAction.createMessageAction.message.text, MESSAGES.wowWorking);
   assert.deepStrictEqual(started, ['']);
 });
+
+test('a double tap on Use this one saves and counts the plan once', async () => {
+  const h = await harness();
+  const params = { action: 'wowPick', d: '111', n: '90001', i: '', t: SUGGESTION.title, w: SUGGESTION.tailored, g: SUGGESTION.idea, c: 'Gift', r: '$$' };
+  const said = await Promise.all([h.w.choose({ params, userEmail: 'c' }), h.w.choose({ params, userEmail: 'c' })]);
+  assert.strictEqual(h.notes.length, 1);
+  assert.ok(said.includes(SAY.alreadyChosen(SUGGESTION.title, '90001')));
+});

@@ -18,7 +18,7 @@
 
 const { errorFields, isOutOfCredits } = require('./errors');
 const { draftText } = require('./agents/textDraft');
-const { writtenAt, noDashes } = require('./agents/roamerBrief');
+const { writtenAt } = require('./agents/roamerBrief');
 const { MAX_CHARS, toE164 } = require('./aloware');
 const { primary, secondary } = require('./chat/style');
 
@@ -37,6 +37,10 @@ const SAY = {
   alreadySent: 'Not sent: a text has already been sent from this draft. Start a new one with /text if you need another.',
   wrongNumber: "Not sent: that number isn't on the Roamer's HubSpot record anymore. Tap \"Review and send\" to reopen it with the current number.",
   sendFailed: "I couldn't send that text. Nothing was sent; Blake can see what happened in the logs.",
+  hasDashes: 'Not sent: the text has a long dash in it. Tap "Review and send", use a comma or period instead, then approve again.',
+  noDraft: "Not sent: I couldn't tie this approval to its draft. Start a new one with /text.",
+  mayHaveSent: "Aloware didn't answer, so this text may have gone out. Check the Roamer's texts in HubSpot before sending anything again. This draft won't send twice.",
+  sentNotRecorded: "The text was sent, but I couldn't finish recording it. Blake can see what happened in the logs.",
   tooLong: `Not sent: that text is over ${MAX_CHARS} characters. Tap "Review and send" to shorten it.`,
 };
 
@@ -95,8 +99,10 @@ function draftCard({ dealId, dealNumber, name, draft, endpoint }) {
 // words (editable), and the number check that must be ticked before it sends.
 // `card` is the draft card's message name, carried through so a send is tied to its draft.
 function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint, testTo = null, card = '' }) {
-  const action = (value) => ({ action: { function: endpoint, parameters: [{ key: 'action', value }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }, { key: 'c', value: String(card || '') }] } });
   const only = numbers.length === 1 ? numbers[0] : null;
+  // `t` is the one number shown, so Approve sends to the number the approver checked.
+  const shown = only ? [{ key: 't', value: only.number }] : [];
+  const action = (value) => ({ action: { function: endpoint, parameters: [{ key: 'action', value }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }, { key: 'c', value: String(card || '') }, ...shown] } });
   const at = only ? ` at ${escapeHtml(pretty(only.number))}` : '';
   // Bold in Chat's own text color, no warning color (Blake, 2026-11-07): it reads in light
   // and dark mode, and the icon marks it.
@@ -245,23 +251,38 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
     const p = params || {};
     const f = formInputs || {};
     const dealNumber = /^\d{3,8}$/.test(String(p.n || '')) ? String(p.n) : null;
-    const message = noDashes(String(f.message || '').trim());
+    // Sent exactly as approved: a long dash is refused, never rewritten after approval.
+    const message = String(f.message || '').trim();
     if (!message || !/^\d+$/.test(String(p.d || ''))) return SAY.sendFailed;
+    if (/[–—]/.test(message)) return SAY.hasDashes;
     if (message.length > MAX_CHARS) return SAY.tooLong;
     if (f.confirm !== 'yes') return SAY.notConfirmed;
     const approver = userDisplayName || userEmail;
-    // One send per draft card: a second Approve from the same draft is refused.
+    // One send per draft card. Without the card a send can't be tied to its draft, so it is
+    // refused rather than sent unguarded.
     const card = /^spaces\/[\w-]+\/messages\/[\w.-]+$/.test(String(p.c || '')) ? String(p.c) : null;
+    if (!card) {
+      log('ERROR', 'text not sent: no draft card on the approval', { dealNumber });
+      return SAY.noDraft;
+    }
+    let claimed = false;
+    let step = 'check';
     try {
-      if (card && (await db.textSentFromCard(card))) return SAY.alreadySent;
       const { record, contact } = await roamerOf(p.d);
       if (!contact || !contact.numbers.length) return SAY.sendFailed;
-      // The number must still be on the Roamer's record: the one shown, or the one picked.
-      const to = contact.numbers.length === 1 ? contact.numbers[0].number : toE164(f.to);
+      // The number the approver checked: the one the dialog showed (`t`), or the one they
+      // picked. It must still be on the Roamer's record, so a number changed in HubSpot after
+      // the dialog opened is never texted unchecked.
+      const to = toE164(f.to) || toE164(p.t);
       if (!to || !contact.numbers.some((n) => n.number === to)) return SAY.wrongNumber;
+      step = 'claim';
+      if (!(await db.claimTextSend({ card, by: userEmail }))) return SAY.alreadySent;
+      claimed = true;
       // Test mode: the checked number stays the one it would go to; the test phone gets it.
       const sendTo = test || to;
+      step = 'send';
       await aloware.sendApproved({ lineId: line.id, to: sendTo, message });
+      step = 'after send';
       const at = now();
       // The approval and send, logged in Basecamp's records (the rule for sends asks for the text).
       await db
@@ -275,17 +296,22 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
         );
       }
       // The draft card becomes a "Sent" card with no button.
-      if (card) {
-        await updateMessage(card, sentCard({ dealNumber, name: contact.name, number: to, message, approver, line, now: at, testTo: test })).catch((e) =>
-          log('ERROR', 'could not mark the draft sent', { dealNumber, error: errorFields(e) }),
-        );
-      }
+      await updateMessage(card, sentCard({ dealNumber, name: contact.name, number: to, message, approver, line, now: at, testTo: test })).catch((e) =>
+        log('ERROR', 'could not mark the draft sent', { dealNumber, error: errorFields(e) }),
+      );
       log('INFO', test ? 'text sent (test)' : 'text sent', { dealNumber, lineId: line.id, chars: message.length, approvedBy: userEmail });
       if (test) return SAY.sentTest({ approver, name: contact.name, number: pretty(to), line: line.label, testTo: pretty(test) });
       return SAY.sent({ approver, name: contact.name, number: pretty(to), line: line.label });
     } catch (err) {
-      log('ERROR', 'text send failed', { dealNumber, error: errorFields(err) });
-      return SAY.sendFailed;
+      log('ERROR', 'text send failed', { dealNumber, step, mayHaveSent: Boolean(err.mayHaveSent), error: errorFields(err) });
+      if (step === 'send' && err.mayHaveSent) {
+        // The claim stays, so this draft can't be sent again blind.
+        await db.markTextSendUnknown(card).catch((e) => log('ERROR', 'could not mark text send unknown', { dealNumber, error: errorFields(e) }));
+        return SAY.mayHaveSent;
+      }
+      // Nothing went out: the draft may be approved again.
+      if (claimed && step === 'send') await db.releaseTextSend(card).catch((e) => log('ERROR', 'could not release text claim', { dealNumber, error: errorFields(e) }));
+      return step === 'after send' ? SAY.sentNotRecorded : SAY.sendFailed;
     }
   }
 

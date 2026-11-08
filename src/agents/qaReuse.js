@@ -7,6 +7,7 @@
 // asker: Blake sees it and marks it right or wrong. Uses the same small model as routing.
 
 const { MODEL, PRICE_PER_MTOK, costOf } = require('./askRouter');
+const { recordDate } = require('./roamerBrief');
 
 const SYSTEM = `You help ROA OFF-ROAD's Team Members reuse answers they have already given about one deal. You receive a new question and the deal's earlier questions and answers, each filed under a topic note with its id, every line dated and attributed.
 
@@ -76,10 +77,24 @@ async function checkEarlier({ anthropic, question, notes }) {
 // The Deal Knowledge rule: a fact is reused at any age; a status answer only within 48 hours.
 const STATUS_TTL_MS = 48 * 60 * 60 * 1000;
 
+// The end of a day where the Experience Center is ("2026-11-07" ends 06:59:59Z on Nov 8
+// in winter), as a time; NaN for anything but a date.
+function endOfUtahDay(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return NaN;
+  const noon = new Date(`${date}T12:00:00Z`);
+  if (Number.isNaN(noon.getTime())) return NaN;
+  const offset = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', timeZoneName: 'longOffset' }).formatToParts(noon).find((p) => p.type === 'timeZoneName').value;
+  const m = /GMT([+-]\d{2}):(\d{2})/.exec(offset);
+  return Date.parse(`${date}T23:59:59.999${m ? `${m[1]}:${m[2]}` : 'Z'}`);
+}
+
+// A status answered on `answeredOn` (a Utah date) is good until 48 hours after that day
+// ends. A date after today is never good: it is a guessed year or a mistake, not fresh.
 function stillGood({ kind, answeredOn }, now = Date.now()) {
   if (kind === 'fact') return true;
-  const at = Date.parse(`${answeredOn}T23:59:59Z`);
-  return !Number.isNaN(at) && now - at <= STATUS_TTL_MS;
+  const end = endOfUtahDay(answeredOn);
+  if (Number.isNaN(end) || answeredOn > recordDate(new Date(now).toISOString())) return false;
+  return now - end <= STATUS_TTL_MS;
 }
 
 module.exports = { checkEarlier, formatEarlier, stillGood, SYSTEM, SCHEMA, STATUS_TTL_MS, PRICE_PER_MTOK };

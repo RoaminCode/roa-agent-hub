@@ -43,6 +43,17 @@ test('plan: nothing new reuses; only new items updates; anything else rereads ev
   assert.strictEqual(full(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z'), fresh] })).why, 'an older item was edited');
 });
 
+test('plan: a saved brief is not reused when an item was edited since, or one item was swapped for another', () => {
+  // A call summary filled in after the brief, with nothing new: count and newest unchanged.
+  const edited = planBrief(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z')] }), NOW);
+  assert.strictEqual(edited.mode, 'full');
+  // An old item removed and another with an older date added: same count, same newest.
+  const swapped = planBrief(context({ items: [item('9', '2026-11-01T10:00:00Z'), OLD[1]] }), NOW);
+  assert.notStrictEqual(swapped.mode, 'reuse');
+  // HubSpot dates with and without milliseconds compare as times, not as text.
+  assert.deepStrictEqual(planBrief(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-03T23:59:59.500Z')] }), NOW), { mode: 'reuse' });
+});
+
 test('the update sends the current brief and only the new items, and reads back the brief, what is new, and rebuild', async () => {
   const sent = [];
   const out = { rebuild: false, new_since: [{ detail: 'Asked about the awning arm.', date: '2026-11-06', channel: 'note' }], brief: { ...brief, headline: 'Pat wants the awning arm.' } };
@@ -106,6 +117,10 @@ test('the brief history: a full read resets the count, an update adds one, a reu
   await rec('update');
   await rec('reuse');
   assert.deepStrictEqual([firestore.data.deals['111'].briefUpdates, firestore.data.deals['111'].briefFullAt], [2, new Date(NOW).toISOString()]);
+  // A reuse does not move when the brief was written, so an edit since still counts.
+  const later = createDb({ firestore, now: () => new Date(NOW + 60000) });
+  await later.recordBrief({ dealId: '111', dealNumber: '90001', store: 'UT', contactId: '222', noteId: '9', signature: {}, mode: 'reuse' });
+  assert.strictEqual(firestore.data.deals['111'].briefWrittenAt, new Date(NOW).toISOString());
   await rec('full');
   assert.strictEqual(firestore.data.deals['111'].briefUpdates, 0);
 });

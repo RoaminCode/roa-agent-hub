@@ -23,6 +23,7 @@ const SAY = {
   failed: "I couldn't come up with WOW ideas just now. Blake can see what happened in the logs.",
   noCredits: "I couldn't come up with WOW ideas: Basecamp's AI credits have run out.",
   chosen: (title, n, who) => `${who} chose the WOW plan "${title}" for deal ${n}. Saved to the Delivery record in HubSpot.`,
+  alreadyChosen: (title, n) => `The WOW plan "${title}" is already saved for deal ${n}.`,
   chooseFailed: "I couldn't save that WOW plan. Nothing was saved; Blake can see what happened in the logs.",
   noIdeas: 'The WOW idea library is empty.',
 };
@@ -155,11 +156,17 @@ function createWow({ anthropic, db, library, readBriefNote, findDealSpace, creat
       const title = noDashes(p.t);
       const tailored = noDashes(p.w);
       const at = now();
+      // A double tap saves and counts the plan once.
+      const tap = [p.d, p.i || '', title, tailored];
+      if (!(await db.claimOnce('wow', tap))) return SAY.alreadyChosen(title, dealNumber || '');
       const noteId = await createNote({
         contactId: record.contactId || null,
         deliveryId: record.deliveryId || null,
         body: renderWowNote({ title, tailored, category: p.c || 'Gift', tier: p.r || '$', who, now: at }),
         timestamp: at.toISOString(),
+      }).catch(async (err) => {
+        await db.undoOnce('wow', tap).catch(() => {});
+        throw err;
       });
       // Remembered in the library: a library idea is counted, a new one is added in general form.
       const remembered = await (p.i

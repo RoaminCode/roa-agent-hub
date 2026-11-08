@@ -37,16 +37,26 @@ function createAloware({ token, allowedNumbers = null, fetchImpl = fetch }) {
     const text = String(message || '');
     if (!text.trim()) throw safeError('sendApproved: empty message');
     if (text.length > MAX_CHARS) throw safeError(`sendApproved: message over ${MAX_CHARS} characters`);
-    const res = await fetchImpl(SEND_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ line_id: Number(lineId), to: number, message: text, user_id: COMPANY }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
+    let res;
+    try {
+      res = await fetchImpl(SEND_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ line_id: Number(lineId), to: number, message: text, user_id: COMPANY }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    } catch {
+      // No answer (a timeout or a dropped connection): Aloware may have sent it anyway.
+      const err = safeError('Aloware send got no answer');
+      err.mayHaveSent = true;
+      throw err;
+    }
     if (res.status !== 202 && !res.ok) {
-      // The status is enough to debug; the body could echo the message.
+      // The status is enough to debug; the body could echo the message. A server error may
+      // come after the text went out; a refusal (4xx) means it did not.
       const err = safeError(`Aloware send failed: HTTP ${res.status}`);
       err.status = res.status;
+      err.mayHaveSent = res.status >= 500;
       throw err;
     }
     return { to: number, lineId: String(lineId) };

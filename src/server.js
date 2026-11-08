@@ -46,7 +46,7 @@ const { createWhatsNew } = require('./newJob');
 const { createReminders } = require('./remindJob');
 const { createAloware } = require('./aloware');
 const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
-const { createDeliveries } = require('./hubspot/deliveries');
+const { createDeliveries, withDeliveryRecord } = require('./hubspot/deliveries');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
 
@@ -101,7 +101,9 @@ function features(audience) {
   const spaces = createSpaces();
   // Basecamp's own records (IDs, timestamps, statuses) in the project's Firestore database.
   const db = createDb({ firestore: new Firestore({ ignoreUndefinedProperties: true }) });
-  const findDealSpace = hubspot ? createDealContext({ hubspot, db }).findDealSpace : null;
+  // A deal found with an open space but no Delivery record gets one (deliveries.js).
+  const ensureDelivery = hubspot ? createDeliveries({ hubspot, db, log }) : null;
+  const findDealSpace = hubspot ? withDeliveryRecord(createDealContext({ hubspot, db }).findDealSpace, { ensureDelivery, log }) : null;
   // Not awaited, like briefs: these outlive the request and report back when done.
   const later = (what, run) => (job) => {
     run(job).catch((err) => log('ERROR', `${what} crashed`, { dealNumber: job.dealNumber, error: errorFields(err) }));
@@ -133,7 +135,7 @@ function features(audience) {
     startSpace = startBrief;
     useSpace = later('use space', (job) => sendMessage(job.spaceName, "Briefs aren't switched on yet."));
   } else {
-    const loadContext = createDealContext({ hubspot, db });
+    const loadContext = withDeliveryRecord(createDealContext({ hubspot, db }), { ensureDelivery, log });
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const saveBriefNote = createBriefNoteSaver({ hubspot, db });
     // Bump v when the avatar image changes.
@@ -145,7 +147,7 @@ function features(audience) {
       keepNote: createNoteKeeper({ saveBriefNote, log }),
       spaces,
       db,
-      ensureDelivery: createDeliveries({ hubspot, db, log }),
+      ensureDelivery,
       sendMessage,
       log,
       avatarUrl,
@@ -154,7 +156,7 @@ function features(audience) {
     startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
     useSpace = later('use space', spaceJob.useSpace);
     if (process.env.SHADOW_REVIEWER) {
-      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot }), findDealSpace, readBriefNote: loadContext.readBriefNote });
+      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot, lock: db.withLock }), findDealSpace, readBriefNote: loadContext.readBriefNote });
       askQuestion = questions.ask;
       relayAnswer = questions.relayAnswer;
       clarifyQuestion = questions.clarify;
