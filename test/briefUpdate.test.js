@@ -124,3 +124,15 @@ test('the brief history: a full read resets the count, an update adds one, a reu
   await rec('full');
   assert.strictEqual(firestore.data.deals['111'].briefUpdates, 0);
 });
+
+test('a brief asked for while the same deal is still being written shares that run', async () => {
+  const s = source([brief, brief]);
+  const fresh = context({ saved: false });
+  const [first, second] = await Promise.all([s.getBrief({ context: fresh, dealNumber: '90001' }), s.getBrief({ context: fresh, dealNumber: '90001' })]);
+  assert.deepStrictEqual(s.calls, ['full']);
+  assert.deepStrictEqual([first.reused, second.reused, second.shared, second.brief.headline], [false, true, true, 'Pat is excited.']);
+  assert.ok(s.logs.some((l) => l[1] === 'brief shared with a run already going'));
+  // Once it is done, the next ask is its own run.
+  await s.getBrief({ context: fresh, dealNumber: '90001' });
+  assert.deepStrictEqual(s.calls, ['full', 'full']);
+});

@@ -57,9 +57,29 @@ const tokens = (result) => ({ inputTokens: result.usage ? result.usage.input_tok
 // only the new items when it can be; otherwise a fresh one from the whole record. Returns
 // { brief, reused, mode, newSince }, or null when the model gave no usable brief. `mode` is
 // "reuse", "update", or "full"; `newSince` lists what an update added. Shared by briefs and
-// deal spaces.
+// deal spaces, so they share one run per deal: a brief asked for while the same deal's brief
+// is still being written (a second tap, or a space opened during /brief) waits for that run
+// instead of paying for its own. It comes back marked reused, so only the first saves it.
 function createBriefSource({ anthropic, log }) {
-  return async function getBrief({ context, dealNumber, started = Date.now() }) {
+  const running = new Map();
+  return async function getBrief(args) {
+    const { context, dealNumber, started = Date.now() } = args;
+    const key = `${context.deal ? context.deal.id : dealNumber}|${context.contact ? context.contact.id : ''}`;
+    if (running.has(key)) {
+      const got = await running.get(key);
+      log('INFO', 'brief shared with a run already going', { dealNumber, ms: Date.now() - started });
+      return got && { ...got, reused: true, shared: true };
+    }
+    const run = makeBrief(args);
+    running.set(key, run);
+    try {
+      return await run;
+    } finally {
+      running.delete(key);
+    }
+  };
+
+  async function makeBrief({ context, dealNumber, started = Date.now() }) {
     const plan = planBrief(context);
     const base = { dealNumber, items: context.items.length, omitted: context.omitted, clipped: context.clipped, missing: context.missing };
     if (plan.mode === 'reuse') {
@@ -75,7 +95,7 @@ function createBriefSource({ anthropic, log }) {
     const result = await writeBrief({ anthropic, context });
     log('INFO', 'brief finished', { ...base, ok: result.ok, reason: result.reason || null, why: plan.why, ...tokens(result), ms: Date.now() - started });
     return result.ok ? { brief: result.brief, reused: false, mode: 'full', newSince: [] } : null;
-  };
+  }
 }
 
 // Saves a brief as the deal's brief note, if notes are on. A failure is logged, never
@@ -98,8 +118,8 @@ function createNoteKeeper({ saveBriefNote, log }) {
 
 // `endpoint` is Basecamp's own URL, which the contact picker's buttons call.
 // `saveBriefNote`, when given, keeps each new brief as the deal's brief note in HubSpot.
-function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, endpoint, saveBriefNote }) {
-  const getBrief = createBriefSource({ anthropic, log });
+// `getBrief`, when given, is the brief source deal spaces use too, so they share runs.
+function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, endpoint, saveBriefNote, getBrief = createBriefSource({ anthropic, log }) }) {
   const keepNote = createNoteKeeper({ saveBriefNote, log });
   // `announce`, when given, is posted before any work so the user knows the brief is coming.
   // `contactId` is the Roamer picked from the contact picker, when the deal has several.

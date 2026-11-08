@@ -140,10 +140,12 @@ function features(audience) {
     const saveBriefNote = createBriefNoteSaver({ hubspot, db });
     // Bump v when the avatar image changes.
     const avatarUrl = `${new URL(audience).origin}/avatar.png?v=2`;
-    const runBrief = createBriefJob({ loadContext, saveBriefNote, anthropic, sendMessage, log, avatarUrl, endpoint: audience });
+    // One brief source for /brief and deal spaces, so one deal's brief is written once at a time.
+    const getBrief = createBriefSource({ anthropic, log });
+    const runBrief = createBriefJob({ loadContext, saveBriefNote, anthropic, sendMessage, log, avatarUrl, endpoint: audience, getBrief });
     const spaceJob = createSpaceJob({
       loadContext,
-      getBrief: createBriefSource({ anthropic, log }),
+      getBrief,
       keepNote: createNoteKeeper({ saveBriefNote, log }),
       spaces,
       db,
