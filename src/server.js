@@ -43,6 +43,7 @@ const { createQaNotes } = require('./hubspot/qaNotes');
 const { createWow } = require('./wowJob');
 const { createTexts } = require('./textJob');
 const { createWhatsNew } = require('./newJob');
+const { createReminders } = require('./remindJob');
 const { createAloware } = require('./aloware');
 const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries } = require('./hubspot/deliveries');
@@ -120,6 +121,8 @@ function features(audience) {
   let sendText = async () => "Texts aren't switched on yet.";
   let chooseWow = async () => "WOW plans aren't switched on yet.";
   let listWowIdeas = async () => "WOW plans aren't switched on yet.";
+  let setReminder = async () => "Reminders aren't switched on yet.";
+  let dueReminders = async () => 0;
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -158,6 +161,11 @@ function features(audience) {
     } else {
       log('WARNING', 'questions are off: SHADOW_REVIEWER is not set');
     }
+
+    // "/remind": a person's own reminders, sent by Basecamp when Cloud Scheduler calls /tasks/tick.
+    const reminders = createReminders({ anthropic, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience });
+    setReminder = reminders.remind;
+    dueReminders = reminders.due;
     // The WOW idea library: the team's sheet when WOW_SHEET_ID is set, else the database.
     const sheetId = process.env.WOW_SHEET_ID;
     const library = sheetId ? createSheetLibrary({ sheetId }) : createDbLibrary({ db });
@@ -265,7 +273,7 @@ function features(audience) {
     sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {
@@ -282,8 +290,9 @@ function start() {
   const briefUsers = list(process.env.BRIEF_USERS);
   console.log(JSON.stringify({ severity: 'INFO', message: 'brief users', count: briefUsers.length }));
 
+  const featureSet = features(audience);
   const handle = createRouter({
-    ...features(audience),
+    ...featureSet,
     briefsPaused,
     briefUsers,
     verify: createVerifier({
@@ -295,7 +304,24 @@ function start() {
     allowedUsers: list(process.env.ALLOWED_USERS),
   });
 
+  // Cloud Scheduler calls POST /tasks/tick every few minutes, signed as Basecamp's own
+  // service account with this path as the audience, so nothing else can trigger sends.
+  const verifyTick = createVerifier({
+    audience: `${audience.replace(/\/+$/, '')}/tasks/tick`,
+    signers: [process.env.TICK_SIGNER || 'basecamp-router@roa-agent-hub.iam.gserviceaccount.com'],
+    onReject: (details) => console.log(JSON.stringify({ severity: 'WARNING', message: 'tick verification failed', ...details })),
+  });
+
   const server = http.createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url.split('?')[0] === '/tasks/tick') {
+      if (!(await verifyTick(req.headers.authorization))) return send(res, 401, { error: 'unauthorized' });
+      try {
+        return send(res, 200, { reminders: await featureSet.dueReminders() });
+      } catch (err) {
+        console.error(JSON.stringify({ severity: 'ERROR', message: 'tick failed', error: errorFields(err) }));
+        return send(res, 500, { error: 'tick failed' });
+      }
+    }
     // Not /healthz: Cloud Run reserves paths ending in "z" and never forwards them.
     if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });
     // A ?v= query is allowed so a new avatar can get past Chat's image cache.

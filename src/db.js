@@ -27,6 +27,10 @@
 //                           answeredAt, reuse { decision, noteId, kind, stillGood },
 //                           reuseVerdict, reuseVerdictBy, reuseVerdictAt, at (never the
 //                           question or answer: those are in the HubSpot Q&A note)
+//   reminders/{auto}        userEmail, userName (Chat id, for the direct message), what,
+//                           dueAt, dealId, dealNumber, spaceUri, status ("pending",
+//                           "sending", "sent", "failed"), sentAt, at. `what` is the person's
+//                           own words, kept only until the reminder is sent, then cleared
 
 const { safeError } = require('./errors');
 
@@ -254,7 +258,35 @@ function createDb({ firestore, now = () => new Date() }) {
     await firestore.collection('questions').doc(id).set({ status: 'answered', answeredBy, answeredAt: stamp(), answers }, { merge: true });
   }
 
-  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, listWowIdeas, useWowIdea, recordTextSend, textSentFromCard };
+  // Reminders a person set with /remind. Pending ones are few, so the due check reads all
+  // of them and compares times in code (one equality filter needs no extra index).
+  const reminders = firestore.collection('reminders');
+  async function addReminder({ userEmail, userName, what, dueAt, dealId = null, dealNumber = null, spaceUri = null }) {
+    const ref = await reminders.add({ userEmail, userName, what, dueAt: dueAt.toISOString(), dealId: dealId ? String(dealId) : null, dealNumber: dealNumber ? String(dealNumber) : null, spaceUri, status: 'pending', at: stamp() });
+    return ref.id;
+  }
+  async function dueReminders() {
+    const snap = await reminders.where('status', '==', 'pending').get();
+    const t = now().getTime();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((r) => Date.parse(r.dueAt) <= t);
+  }
+  // Claims one reminder for sending, so two timer runs never send it twice: true only for
+  // the run that moved it from pending.
+  async function claimReminder(id) {
+    const ref = reminders.doc(String(id));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.data().status !== 'pending') return false;
+      tx.set(ref, { status: 'sending', claimedAt: stamp() }, { merge: true });
+      return true;
+    });
+  }
+  // Sent or failed; the person's words are cleared either way.
+  async function finishReminder(id, status) {
+    await reminders.doc(String(id)).set({ status, what: null, sentAt: stamp() }, { merge: true });
+  }
+
+  return { addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, listWowIdeas, useWowIdea, recordTextSend, textSentFromCard };
 }
 
 module.exports = { createDb, CLAIM_MS };

@@ -36,9 +36,9 @@ const STORES = new Set(['UT']);
 // > Commands). 1, 2, 3, 5, and 7 are slash commands (/note, /ask, /wow, /text, /new); 4 is the "Save
 // to HubSpot" message action, chosen from any message's menu, which saves that whole
 // message; 6 is the "WOW ideas" quick command in the + menu, the same as /wow with nothing
-// typed (a quick command carries no text). A command registered ahead of its build would
-// say so here (none now).
-const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text', 6: 'wowQuick', 7: 'new' };
+// typed (a quick command carries no text); 8 is /remind. A command registered ahead of its
+// build would say so here (none now).
+const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text', 6: 'wowQuick', 7: 'new', 8: 'remind' };
 const NOT_BUILT = {};
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
@@ -56,6 +56,8 @@ function parseCommand(text) {
   if (wow) return { command: 'wow', text: wow[1].trim() };
   const ask = /^ask\b:?\s*([\s\S]*)$/i.exec(t);
   if (ask) return { command: 'ask', text: ask[1].trim() };
+  const remind = /^remind\b:?\s*([\s\S]*)$/i.exec(t);
+  if (remind) return { command: 'remind', text: remind[1].trim() };
   let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
   if (m) return { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
   m = /^open\s+(?:a\s+)?(?:deal\s+)?space\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
@@ -92,7 +94,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -238,6 +240,20 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       return { status: 200, body: closeDialog() };
     }
 
+    // "Draft a text" on a reminder about a deal: the reminder's words start a /text draft in
+    // this direct message (one short AI call, so it needs the brief permission).
+    if (event.type === 'CARD_CLICKED' && event.parameters.action === 'remindText') {
+      const off = briefsOffFor(event.userEmail);
+      if (off) {
+        logRefused(off, event.userEmail);
+        return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
+      const n = String(event.parameters.n || '');
+      if (!/^\d{3,8}$/.test(n)) return { status: 200, body: {} };
+      const said = await startText({ spaceName: event.spaceName, isDirectMessage: true, userEmail: event.userEmail, text: `${n} ${String(event.parameters.m || '')}` });
+      return { status: 200, body: replyFor(event, said) };
+    }
+
     // "Use this one" on a WOW idea: saved to the Delivery record, remembered in the library. No AI.
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'wowPick') {
       const said = await chooseWow({ params: event.parameters, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
@@ -308,7 +324,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       // "/note <text>" arrives with only the text; it is the same as "note <text>". "Save to
       // HubSpot" on a message saves the whole message, credited to whoever wrote it.
       let cmd;
-      if (['note', 'ask', 'wow', 'text', 'new'].includes(slash)) cmd = { command: slash, text: event.text };
+      if (['note', 'ask', 'wow', 'text', 'new', 'remind'].includes(slash)) cmd = { command: slash, text: event.text };
       else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
       else if (slash === 'wowQuick') cmd = { command: 'wow', text: '' };
       else cmd = parseCommand(event.text);
@@ -348,6 +364,11 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
         // Not awaited: ideas take a larger AI call and are posted in this thread when ready.
         startWow({ spaceName: event.spaceName, threadName: event.threadName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, text: cmd.text });
         return { status: 200, body: replyFor(event, MESSAGES.wowWorking) };
+      }
+      if (cmd.command === 'remind') {
+        // One short AI call reads the time; the reply confirms it.
+        const said = await setReminder({ spaceName: event.spaceName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, userName: event.userName, text: cmd.text });
+        return { status: 200, body: replyFor(event, said) };
       }
       if (cmd.command === 'ask') {
         // Answered in the request (one short AI call), so the reply lands in the question's thread.

@@ -21,7 +21,7 @@ const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { checkBrief } = require('./agents/briefAnswer');
 const { noDashes } = require('./agents/roamerBrief');
 const { primary } = require('./chat/style');
-const { OPEN_STAGE } = require('./hubspot/openDeals');
+const { dealsNamedIn } = require('./hubspot/namedDeals');
 
 // How many times Basecamp asks the asker to clarify before sending the question to Blake
 // as "Not sure", so nothing gets stuck.
@@ -172,18 +172,6 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     return { decision: 'answered', source: 'brief', noteId: null, part: found.part, kind: found.kind, stillGood: Boolean(good), answer: found.answer, answeredBy: 'the brief', answeredOn: found.sourceDate || '', costUsd: found.costUsd ?? null };
   }
 
-  // The open deals a direct-message question names: each 5-digit number in it that HubSpot
-  // knows as an open Utah deal (a price or a year is not one). Any other number is ignored.
-  async function dealsNamedIn(question, dealNumber) {
-    if (!findDealSpace) return [];
-    const numbers = [...new Set(question.match(/\b\d{5}\b/g) || [])].slice(0, 3);
-    const found = [];
-    for (const n of numbers) {
-      const hit = await findDealSpace({ dealNumber: n }).catch((e) => (log('WARNING', 'could not look up a deal named in a question', { dealNumber: dealNumber || n, error: errorFields(e) }), null));
-      if (hit && hit.deal && (hit.deal.properties || {}).dealstage === OPEN_STAGE) found.push({ dealNumber: n, ...hit });
-    }
-    return found;
-  }
 
   // The deal's earlier Q&A: its questions on record and their notes' text from HubSpot.
   // Empty when there are none or they can't be read (routing goes on without them).
@@ -238,7 +226,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       } else {
         // In a direct message, a question that names a deal runs as if asked in its space:
         // filed on the deal, checked against its earlier answers, and the deal named to Blake.
-        const named = await dealsNamedIn(question);
+        const named = await dealsNamedIn(question, { findDealSpace, log });
         if (named.length > 1) return SAY.whichDeal(named.map((d) => d.dealNumber));
         if (named.length === 1) {
           const [d] = named;

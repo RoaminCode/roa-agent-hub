@@ -26,13 +26,15 @@ function peekClaims(token) {
   }
 }
 
-function createVerifier({ audience, projectNumber, client = new OAuth2Client(), onReject = () => {} }) {
+// `signers`, when given, replaces Chat's own: the timer's endpoint accepts only Basecamp's
+// service account, which Cloud Scheduler signs as.
+function createVerifier({ audience, projectNumber, signers: only = null, client = new OAuth2Client(), onReject = () => {} }) {
   if (!audience) throw new Error('createVerifier: audience (the endpoint URL) is required');
   // The Chat console may save the endpoint with or without a trailing slash; accept either.
   const base = audience.replace(/\/+$/, '');
   const audiences = [base, `${base}/`];
-  const signers = new Set([CHAT_ISSUER_EMAIL]);
-  if (projectNumber) signers.add(addOnIssuerEmail(projectNumber));
+  const signers = new Set(only || [CHAT_ISSUER_EMAIL]);
+  if (projectNumber && !only) signers.add(addOnIssuerEmail(projectNumber));
 
   return async function verify(authorizationHeader) {
     const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader || '');
