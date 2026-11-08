@@ -227,6 +227,8 @@ Worked section by section with Blake (list set 2026-11-07). Sections A and B are
 
 - A social media checker that finds WOW details for the brief (Blake, 2026-11-07); the trigger for moving to Managed Agents. Not designed: which accounts, how a Roamer's profile is matched, and what the Roamer has agreed to need answers first.
 
+- Knowledge agent reading ROA reference material (Blake, 2026-11-07, for later): share one Shared Drive folder of SOPs, process docs, and checklists with `basecamp-router@roa-agent-hub.iam.gserviceaccount.com` as Viewer, enable the Drive API, and confirm with the super admin that a service account may join that Shared Drive. No Marketplace Drive scope: those act as each user and reach far past one folder.
+
 ## Retired, do not use
 
 (Nothing yet.)
