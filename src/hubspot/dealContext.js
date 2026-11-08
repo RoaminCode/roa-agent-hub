@@ -131,6 +131,23 @@ function toItem(type, record, ownerName) {
   return { id: record.id, channel, at, modified: p.hs_lastmodifieddate || null, who, ...clip(text, maxChars) };
 }
 
+// HubSpot often holds the same text twice under two ids: same words, same second, same
+// sender. The model would read and pay for it twice, so only the copy with the lowest id is
+// kept. Anything that differs at all (the time, a word, the sender) stays.
+function dropDuplicates(items) {
+  const seen = new Set();
+  const kept = [];
+  const byId = [...items].sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+  for (const item of byId) {
+    const key = JSON.stringify([item.channel, item.at, item.who, item.text.replace(/\s+/g, ' ').trim()]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(item);
+  }
+  const keep = new Set(kept);
+  return { items: items.filter((i) => keep.has(i)), duplicates: items.length - kept.length };
+}
+
 // Keep the newest items that fit the budget; report how many older ones were left out.
 function fitBudget(items, maxChars = MAX_TOTAL_CHARS) {
   const newestFirst = [...items].sort((a, b) => String(b.at).localeCompare(String(a.at)));
@@ -313,10 +330,12 @@ function createDealContext({ hubspot, db = null }) {
 
     const all = [];
     const counts = {};
+    let duplicates = 0;
     for (const [type, list] of Object.entries(records)) {
-      const items = list.map((r) => toItem(type, r, ownerName)).filter(Boolean);
-      counts[SOURCES[type].channel] = items.length;
-      all.push(...items);
+      const once = dropDuplicates(list.map((r) => toItem(type, r, ownerName)).filter(Boolean));
+      counts[SOURCES[type].channel] = once.items.length;
+      duplicates += once.duplicates;
+      all.push(...once.items);
     }
     const { items, omitted } = fitBudget(all);
     const record = await recordOf(deal.id);
@@ -341,6 +360,8 @@ function createDealContext({ hubspot, db = null }) {
       // Items kept but shortened to fit, and records HubSpot did not return.
       clipped: items.filter((i) => i.clipped).length,
       missing,
+      // Copies of an item HubSpot holds twice, left out (dropDuplicates).
+      duplicates,
       counts,
     };
   }
@@ -360,4 +381,4 @@ function createDealContext({ hubspot, db = null }) {
   return load;
 }
 
-module.exports = { isBasecampNoteText, BASECAMP_NOTE_MARKERS, createDealContext, cleanText, parseAlowareText, stripQuotedReply, fitBudget, STORE_CMF, COMPANY_SENDER };
+module.exports = { isBasecampNoteText, BASECAMP_NOTE_MARKERS, createDealContext, cleanText, parseAlowareText, stripQuotedReply, dropDuplicates, fitBudget, STORE_CMF, COMPANY_SENDER };

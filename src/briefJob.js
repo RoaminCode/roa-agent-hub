@@ -81,7 +81,7 @@ function createBriefSource({ anthropic, log }) {
 
   async function makeBrief({ context, dealNumber, started = Date.now() }) {
     const plan = planBrief(context);
-    const base = { dealNumber, items: context.items.length, omitted: context.omitted, clipped: context.clipped, missing: context.missing };
+    const base = { dealNumber, items: context.items.length, duplicates: context.duplicates, omitted: context.omitted, clipped: context.clipped, missing: context.missing };
     if (plan.mode === 'reuse') {
       log('INFO', 'brief reused from HubSpot note', { dealNumber, items: context.items.length, ms: Date.now() - started });
       return { brief: context.briefNote.brief, reused: true, mode: 'reuse', newSince: [] };

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createHubSpotClient } = require('../src/hubspot/client');
-const { createDealContext, parseAlowareText, stripQuotedReply, fitBudget, cleanText, COMPANY_SENDER } = require('../src/hubspot/dealContext');
+const { createDealContext, parseAlowareText, stripQuotedReply, dropDuplicates, fitBudget, cleanText, COMPANY_SENDER } = require('../src/hubspot/dealContext');
 
 const ok = (body) => ({ ok: true, json: async () => body });
 
@@ -483,4 +483,27 @@ test('two briefs for a deal saved at once make one brief note, not two', async (
   await Promise.all([save({ context, brief }), save({ context, brief })]);
   assert.strictEqual(created.length, 1);
   assert.deepStrictEqual(updated, ['321']);
+});
+
+test('an item HubSpot holds twice is read once; anything that differs stays', () => {
+  const text = (id, at, words, who = 'from the Roamer') => ({ id, channel: 'text', at, who, text: words });
+  const items = [
+    text('12', '2026-10-03T10:00:00Z', 'See you  Saturday'),
+    text('9', '2026-10-03T10:00:00Z', 'See you Saturday'),
+    text('13', '2026-10-03T10:00:01Z', 'See you Saturday'),
+    text('14', '2026-10-03T10:00:00Z', 'See you Saturday', 'Casey Coach'),
+    text('15', '2026-10-03T10:00:00Z', 'See you Sunday'),
+    { ...text('16', '2026-10-03T10:00:00Z', 'See you Saturday'), channel: 'note' },
+  ];
+  const { items: kept, duplicates } = dropDuplicates(items);
+  // The lowest id is the copy kept, and the order is left as it was.
+  assert.deepStrictEqual(kept.map((i) => i.id), ['9', '13', '14', '15', '16']);
+  assert.strictEqual(duplicates, 1);
+});
+
+test('a deal loads each item HubSpot holds twice once, and says how many copies it left out', async () => {
+  const note = (id) => ({ id, properties: { hs_timestamp: '2026-10-05T10:00:00Z', hs_note_body: 'Pat wants the awning.', hubspot_owner_id: '9' } });
+  const ctx = await createDealContext({ hubspot: fakeHubSpot({ contactNotes: [note('n8'), note('n7')] }) })({ store: 'UT', dealNumber: '90001' });
+  assert.deepStrictEqual(ctx.items.filter((i) => i.channel === 'note').map((i) => i.id), ['n7']);
+  assert.deepStrictEqual([ctx.counts.note, ctx.duplicates], [1, 1]);
 });
