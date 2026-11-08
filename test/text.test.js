@@ -32,11 +32,13 @@ test('Aloware: one method only, the approved send, always as the company; a test
   await assert.rejects(failing.sendApproved({ lineId: '67519', to: MOBILE, message: 'Hi' }), /HTTP 422/);
 });
 
-test('the draft comes from the small model, without dashes', async () => {
+test('the draft comes from the small model, without dashes or a signature', async () => {
   const sent = [];
   const anthropic = { messages: { create: async (b) => (sent.push(b), { stop_reason: 'end_turn', usage: { input_tokens: 300, output_tokens: 40 }, content: [{ type: 'text', text: JSON.stringify({ text: 'Hi Pat — your awning arm arrives Tuesday. ROA' }) }] }) } };
   const r = await draftText({ anthropic, instruction: 'awning arm arrives <Tuesday>', firstName: 'Pat' });
-  assert.strictEqual(r.text, 'Hi Pat, your awning arm arrives Tuesday. ROA');
+  // No signature: a trailing "ROA" is cut, and the sentence keeps its period.
+  assert.strictEqual(r.text, 'Hi Pat, your awning arm arrives Tuesday.');
+  assert.ok(sent[0].system.includes('No sign-off and no signature'));
   assert.ok(sent[0].messages[0].content.includes('&lt;Tuesday&gt;'));
   assert.strictEqual(sent[0].model, 'claude-haiku-4-5-20251001');
 });
@@ -211,4 +213,11 @@ test('test mode: the dialog says so, the text goes to the test phone, noted on t
   assert.ok(notes[0].body.startsWith('<p><strong>Basecamp text sent (test)</strong></p>'));
   const [log] = Object.values(firestore.data.textSends);
   assert.deepStrictEqual([log.to, log.wouldGoTo, log.shadow], ['+18015550100', '+14355550199', true]);
+});
+
+test('a signature the model adds anyway is cut, and nothing else', async () => {
+  const draft = async (t) => (await draftText({ anthropic: { messages: { create: async () => ({ stop_reason: 'end_turn', usage: {}, content: [{ type: 'text', text: JSON.stringify({ text: t }) }] }) } }, instruction: 'x' })).text;
+  assert.strictEqual(await draft('Hi Pat, it arrives Tuesday. - ROA'), 'Hi Pat, it arrives Tuesday.');
+  assert.strictEqual(await draft('See you Tuesday! The ROA team'), 'See you Tuesday!');
+  assert.strictEqual(await draft('Hi Pat, ROA has your arm in.'), 'Hi Pat, ROA has your arm in.');
 });
