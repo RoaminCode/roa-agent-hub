@@ -83,7 +83,7 @@ Worked section by section with Blake (list set 2026-11-07).
 16. Try the contact picker live on the first Utah deal with two contacts.
 17. A Cloud Monitoring alert on the WARNING "deal has no Roamer contact".
 18. Small fix: the third HubSpot text format ("Name (Rvs of America): ...") gives a blank sender on Home.
-19. Blake decides: Utah GM name; the Service Advisor's contact window (business days); what signals the trailer has arrived; whether deal spaces with real Team Members end shadow mode for Utah.
+19. Blake's answers (2026-11-08): the Utah GM is Jax De Souza; the Service Advisor's contact window is pending a possible process change and adoption; the trailer has arrived (on the lot, in inventory) when a real VIN is added to the deal in HubSpot (that is `ls_unit_vin`, from the LightSpeed sync: on 2026-11-08, 8 of 12 open Utah deals had a 17-character VIN and 4 were empty; `unit_vin_deal` ("LS_VIN") was empty on all 12); deal spaces with real Team Members stay in shadow mode for now, and testing decides later.
 20. **Integration project, on the other computer:** run `docs/handoff-to-hs-ls-integration.md`; bring back the `rjbDealLookup` URL, request format, a scrubbed sample response, and the repair order findings.
 21. When Team Members get access: Home switches from every Utah deal to "My deals".
 22. The Service Advisor contact check with a draft (rest of Slice 1).
@@ -167,6 +167,7 @@ Worked section by section with Blake (list set 2026-11-07).
 - A second Brief tap on the same deal within two minutes starts no second brief; the button reads "In Messages" for those two minutes, including when Home is reopened.
 
 **Data and dates**
+- Trailer arrival: a 17-character VIN in the deal's `ls_unit_vin` means the trailer is on the lot and in inventory (Blake, 2026-11-08); empty means not yet.
 - `projected_delivery_date` drives everything before delivery; `ls_delivery_date` marks the trailer leaving the lot and closes the record at Finalized.
 - Mods come from LightSpeed labor lines: Dealer Add, Customer Add, and "(Charge sales)" Prep lines (included at no charge). Prep lines are the PDI and its findings. Install status is per repair order only in the deal feed.
 - Parts quantity fields (Requested vs Qty, I vs S) are not understood yet; parts questions go to people.
@@ -213,7 +214,7 @@ Worked section by section with Blake (list set 2026-11-07).
 - Mods payment standing rule (team decision in the deal space for now).
 - Parts quantity field meanings.
 - Whether Google Calendar out-of-office is readable for vacation routing.
-- Utah GM name; the Service Advisor contact window (business days); the trailer arrival signal (LightSpeed field, HubSpot stage, or a person).
+- The Service Advisor contact window (business days): pending a possible process change and adoption (Blake, 2026-11-08).
 - Whether deal spaces with real Team Members end shadow mode for Utah, and the exact wording of nudges (helping, never reprimanding).
 - False nudges: work done off HubSpot (personal cell, in person on the lot) looks missing. A note in the space counts; early false nudges cost trust, so watch for them.
 - How wrong answers get caught in shadow mode: a set review of agent answers against LightSpeed, not noticing by chance.
