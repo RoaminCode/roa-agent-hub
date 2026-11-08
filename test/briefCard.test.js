@@ -11,7 +11,7 @@ const context = {
   omitted: 0,
   counts: { call: 2, text: 3, email: 0, note: 1 },
 };
-const base = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: [], journey_summary: '', open_questions: [] };
+const base = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: [], journey_summary: '', open_questions: [] };
 const card = (brief) => renderBriefCard({ dealNumber: '90001', context, brief: { ...base, ...brief }, avatarUrl: 'https://example.com/avatar.png' });
 const sections = (msg) => msg.cardsV2[0].card.sections;
 const mod = (name, status, price = '') => ({ name, status, price, date: '2026-10-22', channel: 'call' });

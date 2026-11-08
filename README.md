@@ -6,7 +6,7 @@ Start with `HANDOFF.md` for what is live, what is decided, and what is next. `CL
 
 ## What Basecamp does today
 
-- **Roamer brief.** `brief <deal#>` in Chat, or the Brief button on Home, reads every call, text, email, and note on the deal's Roamer in HubSpot and posts a brief card (WOW, MODS, JOURNEY) written by Claude Opus 5.5.
+- **Roamer brief.** `brief <deal#>` in Chat, or the Brief button on Home, reads every call, text, email, and note on the deal's Roamer in HubSpot and posts a brief card (Who they are, What excites them, Journey so far, Open questions, Mods) written by Claude Opus 5.5. The HubSpot brief note also keeps Wow and Commitments and next steps.
 - **App Home.** The Home tab lists open Utah deals as tiles: delivery, last contact and who made it, the Sales Coach, and a Brief button.
 - Read-only against HubSpot. Nothing is sent to a Roamer; sending is not built.
 

@@ -54,8 +54,8 @@ function noteLines({ brief, context, now, spaceName }) {
     'MODS',
     // HubSpot collapses the double space an empty price would leave, so it is spelled out.
     ...brief.mods.map((m) => `• ${field(m.name)} | ${field(m.price) || NO_PRICE} | ${m.status} (${m.date}, ${m.channel})`),
-    'JOURNEY',
-    ...brief.journey.map(item),
+    'COMMITMENTS AND NEXT STEPS',
+    ...brief.commitments.map(item),
     `Basecamp key: contact ${sig.contactId}, ${sig.itemCount} items, newest ${sig.newestAt || 'none'}${spaceName ? `, space ${spaceName}` : ''}`,
   ];
 }
@@ -72,6 +72,7 @@ function isBriefNoteText(text) {
   return String(text || '').trimStart().startsWith(MARKER);
 }
 
+const SECTIONS = { WOW: 'wow', MODS: 'mods', 'COMMITMENTS AND NEXT STEPS': 'commitments' };
 const ITEM_LINE = /^• (.*) \((\d{4}-\d{2}-\d{2}), (call|text|email|note)\)$/;
 
 // Reads a brief back from a note's plain text (HTML already cleaned). Null when the note
@@ -84,13 +85,15 @@ function parseBriefNote(text) {
   if (lines[0] !== MARKER) return null;
   // The card's pieces start unset, so a note written before they existed fails isBrief and
   // the deal gets a full read.
-  const brief = { headline: '', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: null, excites: [], journey_summary: null, open_questions: [] };
+  const brief = { headline: '', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: null, excites: [], journey_summary: null, open_questions: [] };
   let signature = null;
   let spaceName = null;
   let section = null;
   for (const line of lines.slice(1)) {
-    if (line === 'WOW' || line === 'MODS' || line === 'JOURNEY') {
-      section = line.toLowerCase();
+    // A note written when the last list was JOURNEY has no heading here, so it is not
+    // read back and the deal gets a full read under the current rules.
+    if (SECTIONS[line]) {
+      section = SECTIONS[line];
       continue;
     }
     let m;

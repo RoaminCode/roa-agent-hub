@@ -19,7 +19,7 @@ const brief = {
   key_facts: [{ label: 'Tow vehicle', value: 'Test truck' }],
   wow: [{ detail: 'Two kids, Sam and Lee.', date: '2026-10-01', channel: 'call' }],
   mods: [{ name: 'Awning', status: 'approved', price: '', date: '2026-10-02', channel: 'text' }],
-  journey: [],
+  commitments: [],
   who: 'Pat is a first-time owner with two kids.',
   excites: ['A family trip to Moab'],
   journey_summary: 'Deposit Oct 1. The awning is approved.',

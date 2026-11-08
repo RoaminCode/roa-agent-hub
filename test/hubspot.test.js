@@ -219,7 +219,7 @@ test('refuses a store it has no CMF for', async () => {
 
 test("leaves Basecamp's own brief note out of the record and hands it over separately; one on the deal is never used", async () => {
   const { renderBriefNote } = require('../src/agents/briefNote');
-  const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+  const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, now: new Date('2026-11-07T03:14:00Z') });
   const note = (id, at) => ({ id, properties: { hs_timestamp: at, hs_note_body: body } });
   const hubspot = fakeHubSpot({
@@ -241,7 +241,7 @@ test('a deal with no brief note has none', async () => {
 
 test('opening a space remembers the Roamer picked for the brief; a brief still asks', async () => {
   const { renderBriefNote } = require('../src/agents/briefNote');
-  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 78 }, items: [] } });
   const hubspot = fakeHubSpot({ contacts: [77, 78], contactNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
   // Basecamp's record names the Roamer the brief was written for.
@@ -256,7 +256,7 @@ test('opening a space remembers the Roamer picked for the brief; a brief still a
 
 test('finding a deal space reads only the deal and its brief note', async () => {
   const { renderBriefNote } = require('../src/agents/briefNote');
-  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, spaceName: 'spaces/DEAL' });
   const hubspot = fakeHubSpot({ contactNotes: [{ id: 'b1', properties: { hs_timestamp: '2026-11-01T10:00:00Z', hs_note_body: body } }] });
   // Basecamp's record names the Roamer, and the brief note on the Roamer is found.
@@ -288,7 +288,7 @@ test('createNote puts the note on the Roamer and the Delivery record, never the 
 test("with Basecamp's record, the brief note is read by id and the space and signature come from the record", async () => {
   const { renderBriefNote } = require('../src/agents/briefNote');
   const { createFakeFirestore } = require('./fakeFirestore');
-  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   // The note says one space; the record, which only Basecamp writes, says another and wins.
   const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] }, spaceName: 'spaces/EDITED' });
   const base = fakeHubSpot();
@@ -313,7 +313,7 @@ test("with Basecamp's record, the brief note is read by id and the space and sig
 
 test("a recorded brief note that is on a deal is not used, so it is never updated there", async () => {
   const { renderBriefNote } = require('../src/agents/briefNote');
-  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] };
   const body = renderBriefNote({ brief, context: { contact: { id: 77 }, items: [] } });
   const base = fakeHubSpot();
   const hubspot = {
@@ -349,7 +349,7 @@ test('saving a brief note records its id and what it was built from', async () =
   const { createFakeFirestore } = require('./fakeFirestore');
   const firestore = createFakeFirestore();
   const save = createBriefNoteSaver({ hubspot: { createNote: async () => '321' }, db: createDb({ firestore }) });
-  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   await save({ context: { store: 'UT', deal: { id: '111', properties: { ls_deal_number: '90001' } }, contact: { id: '77' }, items: [{ at: '2026-11-01T00:00:00Z' }], briefNote: null }, brief });
   const rec = firestore.data.deals['111'];
   assert.strictEqual(rec.briefNoteId, '321');
@@ -471,14 +471,14 @@ test('two briefs for a deal saved at once make one brief note, not two', async (
   const hubspot = {
     createNote: async (n) => (await new Promise((r) => setTimeout(r, 15)), created.push(n), '321'),
     updateNote: async (u) => {
-      const body = renderBriefNote({ brief: { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] }, context: { contact: { id: 77 }, items: [] } });
+      const body = renderBriefNote({ brief: { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] }, context: { contact: { id: 77 }, items: [] } });
       if (!u.isOurs(body)) throw new Error('not ours');
       updated.push(u.noteId);
       return u.noteId;
     },
   };
   const save = createBriefNoteSaver({ hubspot, db });
-  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] };
+  const brief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'w', excites: ['e'], journey_summary: 'j', open_questions: ['q'] };
   const context = { store: 'UT', deal: { id: '111', properties: { ls_deal_number: '90001' } }, contact: { id: '77' }, items: [], briefNote: null };
   await Promise.all([save({ context, brief }), save({ context, brief })]);
   assert.strictEqual(created.length, 1);

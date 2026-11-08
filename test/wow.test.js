@@ -10,7 +10,7 @@ const { createDbLibrary, createSheetLibrary } = require('../src/wowLibrary');
 const { createFakeFirestore } = require('./fakeFirestore');
 
 const NOW = new Date('2026-11-07T23:00:00Z');
-const brief = { headline: 'Pat loves dark chocolate.', tags: [], key_facts: [], wow: [{ detail: 'Loves dark chocolate', date: '2026-11-01', channel: 'call' }], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+const brief = { headline: 'Pat loves dark chocolate.', tags: [], key_facts: [], wow: [{ detail: 'Loves dark chocolate', date: '2026-11-01', channel: 'call' }], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
 const SUGGESTION = { ideaId: '', title: 'Dark chocolate basket', tailored: 'A basket of dark chocolate in the trailer for Pat.', why: 'Loves dark chocolate (2026-11-01, call)', idea: 'A gift basket built around a favorite treat', fitsWhen: 'The record names a favorite treat', category: 'Gift', tier: '$$', owner: 'Delivery Coach' };
 
 const fakeAnthropic = (out) => {

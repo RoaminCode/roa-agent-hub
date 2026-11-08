@@ -9,7 +9,7 @@ const { createDb } = require('../src/db');
 const { createFakeFirestore } = require('./fakeFirestore');
 
 const NOW = Date.parse('2026-11-07T20:00:00Z');
-const brief = { headline: 'Pat is excited.', tags: ['First trailer'], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+const brief = { headline: 'Pat is excited.', tags: ['First trailer'], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
 const item = (id, at, modified = at) => ({ id, channel: 'note', at, modified, who: 'Casey', text: `item ${id}` });
 const OLD = [item('1', '2026-11-01T10:00:00Z'), item('2', '2026-11-03T10:00:00Z')];
 

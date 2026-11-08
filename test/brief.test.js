@@ -18,19 +18,19 @@ const context = {
 
 const item = (detail) => ({ detail, date: '2026-10-03', channel: 'text' });
 // A brief with every field the schema requires.
-const fullBrief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+const fullBrief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
 
-test('renders a brief with Wow, Journey, and where it came from', () => {
-  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'Pat is excited.', wow: [item('First trailer.')], journey: [] } });
+test('renders a brief with Wow, Commitments and next steps, and where it came from', () => {
+  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'Pat is excited.', wow: [item('First trailer.')], commitments: [] } });
   assert.match(text, /^\*Deal 90001: Pat Sample\*\nPat is excited\./);
   assert.match(text, /\*Wow\*\n• First trailer\. \(Oct 3, text\)/);
-  assert.match(text, /\*Journey\*\n• Nothing yet in the record\./);
+  assert.match(text, /\*Commitments and next steps\*\n• Nothing yet in the record\./);
   assert.match(text, /From 0 calls, 1 texts, 0 emails, and 0 notes/);
 });
 
 test('trims whole items, never mid-line, to fit Chat', () => {
   const long = Array.from({ length: 12 }, (_, i) => item(`${i} ${'x'.repeat(300)}`));
-  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'h', wow: long, journey: long } });
+  const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'h', wow: long, commitments: long } });
   assert.ok(text.length <= 4000);
   assert.match(text, /lower-priority items did not fit in Chat/);
   assert.match(text, /full transcripts are not available yet\._/);
@@ -232,7 +232,7 @@ test('the stamp says when the brief was written and how far the record goes', ()
 
 test('/brief shows the stamp and sources; the Chat card shows neither', () => {
   const now = new Date('2026-11-07T03:14:00Z');
-  const text = renderBrief({ dealNumber: '90001', context, brief: { ...fullBrief, wow: [], journey: [] }, now });
+  const text = renderBrief({ dealNumber: '90001', context, brief: { ...fullBrief, wow: [], commitments: [] }, now });
   assert.match(text, /_Written Nov 6, 8:14 PM MT, from the record through Oct 3\. From 0 calls, 1 texts/);
   const card = JSON.stringify(renderBriefCard({ dealNumber: '90001', context, brief: fullBrief }));
   assert.doesNotMatch(card, /Written|through|From \d+ calls|transcripts/);

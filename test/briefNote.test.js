@@ -29,7 +29,7 @@ const brief = {
     { name: 'Corner jacks', status: 'approved', price: '$1,559 before tax', date: '2026-11-02', channel: 'text' },
     { name: 'Solar | 400W', status: 'interested', price: '', date: '2026-10-21', channel: 'call' },
   ],
-  journey: [
+  commitments: [
     { detail: 'Will to send the purchase order.', date: '2026-10-23', channel: 'call' },
     { detail: 'She asked: "you need anything else?"', date: '2026-10-20', channel: 'text' },
   ],
@@ -49,7 +49,7 @@ test('a brief note reads back as the same brief, with what it was built from', (
 });
 
 test('an empty brief and an empty record read back too', () => {
-  const empty = { headline: 'Nothing yet.', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
+  const empty = { headline: 'Nothing yet.', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const back = roundTrip(empty, { ...context, items: [] });
   assert.deepStrictEqual(back.brief, empty);
   assert.deepStrictEqual(back.signature, { contactId: '222', itemCount: 0, newestAt: '' });
@@ -99,4 +99,10 @@ test('the saver creates the brief note on the Roamer, or updates the one it has'
     ['create', '222', '2026-11-07T03:14:00.000Z'],
     ['update', '901', true, false],
   ]);
+});
+
+test('a note from when the last list was Journey is not read back, so the deal gets a full read', () => {
+  const text = cleanText(renderBriefNote({ brief, context, now }));
+  assert.ok(text.includes('COMMITMENTS AND NEXT STEPS'));
+  assert.strictEqual(parseBriefNote(text.replace('COMMITMENTS AND NEXT STEPS', 'JOURNEY')), null);
 });
