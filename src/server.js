@@ -11,6 +11,8 @@
 //                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
 //   ALOWARE_API_TOKEN from Secret Manager (aloware-api-token), for approved texts (/text)
 //   TEXTS_LIVE      "true" turns approved texts on, live to Roamers; anything else, off
+//   TEXT_TEST_TO    a phone number: test mode, every approved text goes there instead (and
+//                   only there) until it is removed
 //   WOW_SHEET_ID    the "ROA WOW Ideas" Google Sheet /wow reads and updates (shared with
 //                   basecamp-router as an editor); unset, the database library is used
 //   SHADOW_REVIEWER the email that gets every routed question in shadow mode (Blake); unset,
@@ -165,7 +167,9 @@ function features(audience) {
     listWowIdeas = wowPlans.listIdeas;
 
     // Approved texts, live to Roamers (Blake's call, 2026-11-07). Off unless TEXTS_LIVE=true.
-    const { ALOWARE_API_TOKEN, TEXTS_LIVE } = process.env;
+    // TEXT_TEST_TO (test mode): every approved text goes to that one phone, and Aloware is
+    // locked to it, until it is removed.
+    const { ALOWARE_API_TOKEN, TEXTS_LIVE, TEXT_TEST_TO } = process.env;
     if (ALOWARE_API_TOKEN && TEXTS_LIVE === 'true') {
       const texts = createTexts({
         anthropic,
@@ -173,7 +177,8 @@ function features(audience) {
         hubspot,
         createNote: hubspot.createNote,
         findDealSpace,
-        aloware: createAloware({ token: ALOWARE_API_TOKEN }),
+        aloware: createAloware({ token: ALOWARE_API_TOKEN, allowedNumbers: TEXT_TEST_TO ? [TEXT_TEST_TO] : null }),
+        testTo: TEXT_TEST_TO || null,
         line: { id: '67519', label: 'UT - Sales, (385) 378-8538' },
         log,
         endpoint: audience,

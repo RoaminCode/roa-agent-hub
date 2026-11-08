@@ -9,6 +9,12 @@
 // approver, text), and a note on the Delivery record and the Roamer names the approver
 // ("Sent by Basecamp, approved by ..."). The recipient is always read fresh from HubSpot,
 // never taken from the card. Logs steps, never the text or a number.
+//
+// Test mode (`testTo`, from TEXT_TEST_TO, Blake's call 2026-11-08): while testing, every
+// approved text goes to that one test phone instead of the Roamer. The whole flow still
+// runs (dialog, number check, Aloware, log, note), but the dialog says it is a test, the note
+// goes on the Delivery record only (never the Roamer's contact or history), and Aloware is
+// locked to the test number (server.js). Removing TEXT_TEST_TO makes texts live.
 
 const { errorFields, isOutOfCredits } = require('./errors');
 const { draftText } = require('./agents/textDraft');
@@ -25,6 +31,7 @@ const SAY = {
   failed: "I couldn't draft that text. Blake can see what happened in the logs.",
   noCredits: "I couldn't draft that text: Basecamp's AI credits have run out.",
   sent: ({ approver, name, number, line }) => `Sent to ${name} at ${number} from ${line}, approved by ${approver}. Noted on the Delivery record and the Roamer in HubSpot.`,
+  sentTest: ({ approver, name, number, line, testTo }) => `Test: sent to the test phone ${testTo} from ${line}, approved by ${approver}. Live, it would have gone to ${name} at ${number}. Noted on the Delivery record as a test.`,
   notConfirmed: 'Not sent: tick that you checked the number, then approve again. Tap "Review and send" on the draft to reopen it.',
   wrongNumber: "Not sent: that number isn't on the Roamer's HubSpot record anymore. Tap \"Review and send\" to reopen it with the current number.",
   sendFailed: "I couldn't send that text. Nothing was sent; Blake can see what happened in the logs.",
@@ -88,13 +95,16 @@ function draftCard({ dealId, dealNumber, name, draft, endpoint }) {
 
 // The approval dialog: a live warning, the recipient and which number, the line, the exact
 // words (editable), and the number check that must be ticked before it sends.
-function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint }) {
+function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint, testTo = null }) {
   const action = (value) => ({ action: { function: endpoint, parameters: [{ key: 'action', value }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }] } });
   const only = numbers.length === 1 ? numbers[0] : null;
+  const at = only ? ` at ${escapeHtml(pretty(only.number))}` : '';
   const widgets = [
     {
       textParagraph: {
-        text: `<font color="#C0392B"><b>LIVE:</b> this sends to ${escapeHtml(name)}${only ? ` at ${escapeHtml(pretty(only.number))}` : ''} as soon as you approve. It can't be unsent.</font>`,
+        text: testTo
+          ? `<font color="#C27C0E"><b>TESTING:</b> this goes to your test phone, ${escapeHtml(pretty(testTo))}, not to ${escapeHtml(name)}${at}.</font>`
+          : `<font color="#C0392B"><b>LIVE:</b> this sends to ${escapeHtml(name)}${at} as soon as you approve. It can't be unsent.</font>`,
       },
     },
   ];
@@ -125,7 +135,14 @@ function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint
 }
 
 // The note on the Delivery record and the Roamer for each send.
-function renderTextNote({ message, name, number, approver, line, now }) {
+function renderTextNote({ message, name, number, approver, line, now, testTo = null }) {
+  if (testTo) {
+    return [
+      '<p><strong>Basecamp text sent (test)</strong></p>',
+      `<p>${escapeHtml(message)}</p>`,
+      `<p>Test: sent by Basecamp to the test phone ${escapeHtml(pretty(testTo))}, approved by ${escapeHtml(approver)}, ${writtenAt(now)} MT, from ${escapeHtml(line.label)}. Live, it would have gone to ${escapeHtml(name)} at ${escapeHtml(pretty(number))}.</p>`,
+    ].join('');
+  }
   return [
     '<p><strong>Basecamp text sent</strong></p>',
     `<p>${escapeHtml(message)}</p>`,
@@ -133,8 +150,10 @@ function renderTextNote({ message, name, number, approver, line, now }) {
   ].join('');
 }
 
-// `aloware` sends (aloware.js); `line` is { id, label }, the Aloware line texts go out on.
-function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, aloware, line, log, endpoint = '', draft = draftText, now = () => new Date() }) {
+// `aloware` sends (aloware.js); `line` is { id, label }, the Aloware line texts go out on;
+// `testTo`, when set, is the one test phone every approved text goes to (test mode).
+function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, aloware, line, log, endpoint = '', testTo = null, draft = draftText, now = () => new Date() }) {
+  const test = toE164(testTo);
   // The deal and its Roamer's name and numbers, from Basecamp's record and, fresh, HubSpot.
   async function roamerOf(dealId) {
     const record = (await db.getDeal(String(dealId))) || {};
@@ -187,7 +206,7 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
     if (!/^\d+$/.test(String(p.d || ''))) return null;
     const { contact } = await roamerOf(p.d);
     if (!contact || !contact.numbers.length) return null;
-    return reviewDialog({ dealId: p.d, dealNumber: p.n, name: contact.name, numbers: contact.numbers, line, draft: String(p.m || ''), endpoint });
+    return reviewDialog({ dealId: p.d, dealNumber: p.n, name: contact.name, numbers: contact.numbers, line, draft: String(p.m || ''), endpoint, testTo: test });
   }
 
   // "Approve and send": the exact words from the dialog, to the checked number, sent once.
@@ -207,16 +226,23 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
       // The number must still be on the Roamer's record: the one shown, or the one picked.
       const to = contact.numbers.length === 1 ? contact.numbers[0].number : toE164(f.to);
       if (!to || !contact.numbers.some((n) => n.number === to)) return SAY.wrongNumber;
-      await aloware.sendApproved({ lineId: line.id, to, message });
+      // Test mode: the checked number stays the one it would go to; the test phone gets it.
+      const sendTo = test || to;
+      await aloware.sendApproved({ lineId: line.id, to: sendTo, message });
       const at = now();
       // The approval and send, logged in Basecamp's records (the rule for sends asks for the text).
       await db
-        .recordTextSend({ dealId: String(p.d), approvedBy: userEmail, lineId: line.id, to, wouldGoTo: null, message, shadow: false })
+        .recordTextSend({ dealId: String(p.d), approvedBy: userEmail, lineId: line.id, to: sendTo, wouldGoTo: test ? to : null, message, shadow: Boolean(test) })
         .catch((e) => log('ERROR', 'could not log text send', { dealNumber, error: errorFields(e) }));
-      await createNote({ contactId: record.contactId || null, deliveryId: record.deliveryId || null, body: renderTextNote({ message, name: contact.name, number: to, approver, line, now: at }), timestamp: at.toISOString() }).catch((e) =>
-        log('ERROR', 'could not note text send', { dealNumber, error: errorFields(e) }),
-      );
-      log('INFO', 'text sent', { dealNumber, lineId: line.id, chars: message.length, approvedBy: userEmail });
+      // A test is noted on the Delivery record only, never the Roamer's contact.
+      const noteOn = { contactId: test ? null : record.contactId || null, deliveryId: record.deliveryId || null };
+      if (noteOn.contactId || noteOn.deliveryId) {
+        await createNote({ ...noteOn, body: renderTextNote({ message, name: contact.name, number: to, approver, line, now: at, testTo: test }), timestamp: at.toISOString() }).catch((e) =>
+          log('ERROR', 'could not note text send', { dealNumber, error: errorFields(e) }),
+        );
+      }
+      log('INFO', test ? 'text sent (test)' : 'text sent', { dealNumber, lineId: line.id, chars: message.length, approvedBy: userEmail });
+      if (test) return SAY.sentTest({ approver, name: contact.name, number: pretty(to), line: line.label, testTo: pretty(test) });
       return SAY.sent({ approver, name: contact.name, number: pretty(to), line: line.label });
     } catch (err) {
       log('ERROR', 'text send failed', { dealNumber, error: errorFields(err) });

@@ -178,3 +178,37 @@ test('Aloware is reached from one file only, the one-method client', () => {
   const reaching = files.filter((f) => /aloware\.io/i.test(fs.readFileSync(f, 'utf8'))).map((f) => path.basename(f));
   assert.deepStrictEqual(reaching, ['aloware.js']);
 });
+
+test('test mode: the dialog says so, the text goes to the test phone, noted on the Delivery record only', async () => {
+  const sends = [];
+  const notes = [];
+  const firestore = createFakeFirestore();
+  const db = createDb({ firestore, now: () => NOW });
+  await db.recordBrief({ dealId: '111', dealNumber: '90001', store: 'UT', contactId: '77', noteId: '9', signature: {} });
+  await db.recordDelivery({ dealId: '111', deliveryId: '888', created: true });
+  const texts = createTexts({
+    anthropic: {},
+    db,
+    hubspot: { get: async () => ({ properties: { firstname: 'Pat', lastname: 'Sample', mobilephone: MOBILE } }) },
+    createNote: async (n) => (notes.push(n), '700'),
+    findDealSpace: async () => null,
+    aloware: { sendApproved: async (s) => (sends.push(s), { to: s.to }) },
+    line: LINE,
+    log: () => {},
+    endpoint: 'e',
+    testTo: '801-555-0100',
+    now: () => NOW,
+  });
+  const dialog = JSON.stringify(await texts.review({ params: { d: '111', n: '90001', m: 'Hi' } }));
+  assert.ok(dialog.includes('<b>TESTING:</b> this goes to your test phone, (801) 555-0100, not to Pat Sample at (435) 555-0199'));
+  assert.ok(!dialog.includes('LIVE:'));
+  // The number check still has to be ticked.
+  assert.strictEqual(await texts.send({ params: { d: '111', n: '90001' }, formInputs: { message: 'Hi' }, userEmail: 'b' }), SAY.notConfirmed);
+  const said = await texts.send({ params: { d: '111', n: '90001' }, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b', userDisplayName: 'Blake Locke' });
+  assert.strictEqual(said, SAY.sentTest({ approver: 'Blake Locke', name: 'Pat Sample', number: '(435) 555-0199', line: LINE.label, testTo: '(801) 555-0100' }));
+  assert.deepStrictEqual(sends, [{ lineId: '67519', to: '+18015550100', message: 'Hi' }]);
+  assert.deepStrictEqual([notes[0].contactId, notes[0].deliveryId], [null, '888']);
+  assert.ok(notes[0].body.startsWith('<p><strong>Basecamp text sent (test)</strong></p>'));
+  const [log] = Object.values(firestore.data.textSends);
+  assert.deepStrictEqual([log.to, log.wouldGoTo, log.shadow], ['+18015550100', '+14355550199', true]);
+});
