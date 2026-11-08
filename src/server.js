@@ -42,6 +42,7 @@ const { createQuestionRouter } = require('./askJob');
 const { createQaNotes } = require('./hubspot/qaNotes');
 const { createWow } = require('./wowJob');
 const { createTexts } = require('./textJob');
+const { createWhatsNew } = require('./newJob');
 const { createAloware } = require('./aloware');
 const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries } = require('./hubspot/deliveries');
@@ -114,6 +115,7 @@ function features(audience) {
   let reuseVerdict = async () => "Questions aren't switched on yet.";
   let startWow = () => {};
   let startText = async () => "Texts aren't switched on yet.";
+  let startNew = () => {};
   let reviewText = async () => null;
   let sendText = async () => "Texts aren't switched on yet.";
   let chooseWow = async () => "WOW plans aren't switched on yet.";
@@ -165,6 +167,10 @@ function features(audience) {
     startWow = later('wow', async (job) => sendMessage(job.spaceName, await wowPlans.wow(job), { threadName: job.threadName }));
     chooseWow = wowPlans.choose;
     listWowIdeas = wowPlans.listIdeas;
+
+    // "/new": what's new on a deal, posted in the thread it was asked in.
+    const whatsNew = createWhatsNew({ anthropic, db, loadContext, findDealSpace, log });
+    startNew = later('whats new', async (job) => sendMessage(job.spaceName, await whatsNew(job), { threadName: job.threadName }));
 
     // Approved texts, live to Roamers (Blake's call, 2026-11-07). Off unless TEXTS_LIVE=true.
     // TEXT_TEST_TO (test mode): every approved text goes to that one phone, and Aloware is
@@ -259,7 +265,7 @@ function features(audience) {
     sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, seenPerson, saveSpaceNote, buildHome };
 }
 
 function start() {

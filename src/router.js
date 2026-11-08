@@ -19,6 +19,7 @@ const MESSAGES = {
   opening: (n) => `Opening a space for deal ${n}. I'll post the link here when it's ready.`,
   spaceDirectOnly: (n) => `Ask me to open the space for deal ${n} in a direct message with me.`,
   adopting: (n) => `Setting this space up for deal ${n}. The brief will be here shortly.`,
+  newWorking: 'Checking what is new on this deal. It will be here in a moment.',
   wowWorking: 'Coming up with WOW ideas from the brief. They will be here in a moment.',
   useInSpace: (n) => `Say "use this space for ${n}" in the deal's space, after adding me to it.`,
   notAllowed: "Basecamp isn't available to you yet.",
@@ -32,12 +33,12 @@ const MESSAGES = {
 const STORES = new Set(['UT']);
 
 // App commands, by the id each has in the Chat app configuration (Chat API > Configuration
-// > Commands). 1, 2, 3, and 5 are slash commands (/note, /ask, /wow, /text); 4 is the "Save
+// > Commands). 1, 2, 3, 5, and 7 are slash commands (/note, /ask, /wow, /text, /new); 4 is the "Save
 // to HubSpot" message action, chosen from any message's menu, which saves that whole
 // message; 6 is the "WOW ideas" quick command in the + menu, the same as /wow with nothing
 // typed (a quick command carries no text). A command registered ahead of its build would
 // say so here (none now).
-const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text', 6: 'wowQuick' };
+const SLASH_COMMANDS = { 1: 'note', 2: 'ask', 3: 'wow', 4: 'saveMessage', 5: 'text', 6: 'wowQuick', 7: 'new' };
 const NOT_BUILT = {};
 
 // "brief 51431" or "brief 51431 UT"; "open a space for 51431" (also "open space 51431").
@@ -47,6 +48,8 @@ function parseCommand(text) {
   const t = text || '';
   const note = /^note\b:?\s*([\s\S]*)$/i.exec(t);
   if (note) return { command: 'note', text: note[1].trim() };
+  const whatsNew = /^(?:anything new|what'?s new|new)\b\??:?\s*([\s\S]*)$/i.exec(t);
+  if (whatsNew) return { command: 'new', text: whatsNew[1].trim() };
   const textCmd = /^text\b:?\s*([\s\S]*)$/i.exec(t);
   if (textCmd) return { command: 'text', text: textCmd[1].trim() };
   const wow = /^wow\b:?\s*([\s\S]*)$/i.exec(t);
@@ -89,7 +92,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
   function briefsOffFor(userEmail) {
@@ -305,7 +308,7 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       // "/note <text>" arrives with only the text; it is the same as "note <text>". "Save to
       // HubSpot" on a message saves the whole message, credited to whoever wrote it.
       let cmd;
-      if (slash === 'note' || slash === 'ask' || slash === 'wow' || slash === 'text') cmd = { command: slash, text: event.text };
+      if (['note', 'ask', 'wow', 'text', 'new'].includes(slash)) cmd = { command: slash, text: event.text };
       else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
       else if (slash === 'wowQuick') cmd = { command: 'wow', text: '' };
       else cmd = parseCommand(event.text);
@@ -330,6 +333,11 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       if (off) {
         logRefused(off, event.userEmail);
         return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
+      if (cmd.command === 'new') {
+        // Not awaited: it reads the deal's record, then posts in this thread.
+        startNew({ spaceName: event.spaceName, threadName: event.threadName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, text: cmd.text });
+        return { status: 200, body: replyFor(event, MESSAGES.newWorking) };
       }
       if (cmd.command === 'text') {
         // A draft for review (one short AI call); nothing is sent until someone approves it.

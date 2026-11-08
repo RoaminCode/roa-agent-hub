@@ -305,4 +305,4 @@ function renderBrief({ dealNumber, context, brief, now }) {
   return text;
 }
 
-module.exports = { writeBrief, updateBrief, formatUpdate, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };
+module.exports = { writeBrief, updateBrief, formatUpdate, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };
