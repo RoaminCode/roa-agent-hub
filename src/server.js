@@ -9,10 +9,8 @@
 //   BRIEF_USERS     comma-separated emails who may start a Roamer brief, the only thing that
 //                   spends AI credits. Unset or empty means nobody. Each must also be in
 //                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
-//   ALOWARE_API_TOKEN from Secret Manager (aloware-api-token); with TEXT_TEST_NUMBERS, turns on
-//                   approved texts (/text)
-//   TEXT_TEST_NUMBERS "email=phone,email=phone": in shadow mode the only numbers that can be
-//                   texted, each approver's own (Blake's and Shane's)
+//   ALOWARE_API_TOKEN from Secret Manager (aloware-api-token), for approved texts (/text)
+//   TEXTS_LIVE      "true" turns approved texts on, live to Roamers; anything else, off
 //   WOW_SHEET_ID    the "ROA WOW Ideas" Google Sheet /wow reads and updates (shared with
 //                   basecamp-router as an editor); unset, the database library is used
 //   SHADOW_REVIEWER the email that gets every routed question in shadow mode (Blake); unset,
@@ -166,20 +164,17 @@ function features(audience) {
     chooseWow = wowPlans.choose;
     listWowIdeas = wowPlans.listIdeas;
 
-    // Approved texts. Shadow mode: only the numbers in TEXT_TEST_NUMBERS can be texted.
-    const { ALOWARE_API_TOKEN, TEXT_TEST_NUMBERS } = process.env;
-    if (ALOWARE_API_TOKEN && TEXT_TEST_NUMBERS) {
-      const testNumbers = Object.fromEntries(list(TEXT_TEST_NUMBERS).map((pair) => pair.split('=').map((x) => x.trim())).filter((p) => p.length === 2));
+    // Approved texts, live to Roamers (Blake's call, 2026-11-07). Off unless TEXTS_LIVE=true.
+    const { ALOWARE_API_TOKEN, TEXTS_LIVE } = process.env;
+    if (ALOWARE_API_TOKEN && TEXTS_LIVE === 'true') {
       const texts = createTexts({
         anthropic,
         db,
         hubspot,
         createNote: hubspot.createNote,
         findDealSpace,
-        aloware: createAloware({ token: ALOWARE_API_TOKEN, allowedNumbers: Object.values(testNumbers) }),
-        testNumbers,
+        aloware: createAloware({ token: ALOWARE_API_TOKEN }),
         line: { id: '67519', label: 'UT - Sales, (385) 378-8538' },
-        sendMessage,
         log,
         endpoint: audience,
       });
@@ -187,7 +182,7 @@ function features(audience) {
       reviewText = texts.review;
       sendText = texts.send;
     } else {
-      log('WARNING', 'texts are off: ALOWARE_API_TOKEN or TEXT_TEST_NUMBERS is not set');
+      log('WARNING', 'texts are off: ALOWARE_API_TOKEN is not set or TEXTS_LIVE is not true');
     }
     startBrief = (job) => {
       spaceFor(job)

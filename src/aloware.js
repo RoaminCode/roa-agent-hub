@@ -4,8 +4,9 @@
 // (authorized by Blake 2026-10-28). Always as the company (`user_id: -1`), never as a
 // Team Member or the contact's owner. The token opens the whole Aloware account, so this
 // client has one method and no general request; a test fails if another appears.
-// While in shadow mode only the numbers on `allowedNumbers` (Blake's and Shane's) can be
-// texted; any other number is refused here, whatever the caller asks.
+// `allowedNumbers`, when given, limits it to those numbers (for a test); left out, texts are
+// live (TEXTS_LIVE) and the caller has already checked the number against the Roamer's
+// HubSpot record and the approver's tick.
 
 const { safeError } = require('./errors');
 
@@ -22,16 +23,16 @@ function toE164(number) {
   return null;
 }
 
-function createAloware({ token, allowedNumbers = [], fetchImpl = fetch }) {
+function createAloware({ token, allowedNumbers = null, fetchImpl = fetch }) {
   if (!token) throw new Error('createAloware: token is required');
-  const allowed = new Set(allowedNumbers.map(toE164).filter(Boolean));
+  const allowed = allowedNumbers ? new Set(allowedNumbers.map(toE164).filter(Boolean)) : null;
 
   // Sends one approved text. `lineId` is the Aloware line it goes out on. Returns when
   // Aloware has accepted it (202); Aloware then logs it to the HubSpot contact.
   async function sendApproved({ lineId, to, message }) {
     const number = toE164(to);
     if (!number) throw safeError('sendApproved: not a phone number');
-    if (!allowed.has(number)) throw safeError('sendApproved: refused, that number is not on the allowed list');
+    if (allowed && !allowed.has(number)) throw safeError('sendApproved: refused, that number is not on the allowed list');
     if (!/^\d+$/.test(String(lineId))) throw safeError('sendApproved: invalid line');
     const text = String(message || '');
     if (!text.trim()) throw safeError('sendApproved: empty message');
