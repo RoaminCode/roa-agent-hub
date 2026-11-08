@@ -149,10 +149,10 @@ async function writeBrief({ anthropic, context }) {
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    // Medium, not high: compared on three Utah deals (2026-10-29), quality held, briefs
-    // came 9 to 16 seconds sooner, and cost about 16% less. Set explicitly; it is also the
-    // model's default.
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCHEMA } },
+    // Low, Blake's call (2026-11-08): compared with medium on three Utah deals, low cost 20 to
+    // 30% less and came 2 to 3 times sooner, with nearly the same items; he read them and
+    // found low acceptable.
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
     system: SYSTEM,
     messages: [{ role: 'user', content: formatRecord(context) }],
   });
@@ -213,7 +213,8 @@ async function updateBrief({ anthropic, context, brief, newItems }) {
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: UPDATE_SCHEMA } },
+    // Low, the same as a full brief.
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: UPDATE_SCHEMA } },
     system: UPDATE_SYSTEM,
     messages: [{ role: 'user', content: formatUpdate({ context, brief, newItems }) }],
   });
