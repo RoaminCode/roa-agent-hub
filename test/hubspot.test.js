@@ -376,3 +376,9 @@ test('ensureDelivery uses the deal\'s Delivery record, or creates and links one,
   assert.ok(!existing.calls.some((c) => c[0] === 'create'));
   assert.ok(existing.logs.some((l) => l[1].includes('more than one Delivery record')));
 });
+
+test('reads the "Name (Rvs of America):" text format; no name, or another name in brackets, stays unknown', () => {
+  assert.deepStrictEqual(parseAlowareText('<b>Sam Sample (Rvs of America):</b><br>See you Tuesday!'), { sender: 'Sam Sample', message: 'See you Tuesday!' });
+  assert.deepStrictEqual(parseAlowareText('<b>(Rvs of America):</b><br>Welcome to Rvs of America!'), { sender: null, message: 'Welcome to Rvs of America!' });
+  assert.deepStrictEqual(parseAlowareText('<b>Pat Sample (Pat Sample):</b><br>Thanks'), { sender: null, message: 'Thanks' });
+});

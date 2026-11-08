@@ -63,8 +63,14 @@ function parseAlowareText(body) {
   const message = marker === -1 ? text : text.slice(marker).replace(/^Message:\s*/i, '').trim();
   // A company send has no name, so after cleaning its header starts at "has sent an SMS".
   const sentBy = header.match(/^(.*?)\s*has sent an SMS/i);
-  if (!sentBy) return { sender: null, message };
-  return { sender: sentBy[1].trim() || COMPANY_SENDER, message };
+  if (sentBy) return { sender: sentBy[1].trim() || COMPANY_SENDER, message };
+  // A third format: a "Name (Rvs of America):" line, then the message. Only a named sender
+  // from Rvs of America is read; no name, or another name in the brackets, is left unknown
+  // rather than guessed.
+  const named = text.match(/^\s*([^\n(]*?)\s*\(([^)\n]+)\):\s*\n?([\s\S]*)$/);
+  if (named && /^rvs of america$/i.test(named[2].trim()) && named[1].trim()) return { sender: named[1].trim(), message: named[3].trim() };
+  if (named) return { sender: null, message: named[3].trim() };
+  return { sender: null, message };
 }
 
 // Drop quoted earlier messages from an email reply so each email is counted once.
