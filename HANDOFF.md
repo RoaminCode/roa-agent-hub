@@ -18,7 +18,7 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
 Snapshot 2026-11-08. Per-feature detail and decisions are under Next steps and Current decisions; git holds the history.
 
 - **Basecamp** is live on Cloud Run (service `basecamp`, `us-central1`, service account `basecamp-router`, max 2 instances, CPU always allocated): https://basecamp-732941376364.us-central1.run.app
-  - Live revision `basecamp-00064-cb4` (2026-11-07, card redesign, Wow and Journey capped at 8, /ask in a DM by deal number). Shadow mode for everything except approved texts, which are on but in **test mode** (`TEXT_TEST_TO`, Blake's phone) until Shane approves.
+  - Live revision `basecamp-00065-bh7` (2026-11-07, card redesign, Wow and Journey capped at 8, /ask in a DM by deal number, /ask checks the brief). Shadow mode for everything except approved texts, which are on but in **test mode** (`TEXT_TEST_TO`, Blake's phone) until Shane approves.
   - Env vars: `CHAT_AUDIENCE`, `PROJECT_NUMBER` (732941376364), `ALLOWED_USERS` and `BRIEF_USERS` (blake@rvsofamerica.com), `BRIEFS_PAUSED` (unset), `SHADOW_REVIEWER` (blake@rvsofamerica.com), `WOW_SHEET_ID`, `TEXTS_LIVE=true`, `TEXT_TEST_TO` (Blake's phone; set in Cloud Run only, never in the repo). Secrets: `HUBSPOT_ACCESS_TOKEN`, `ANTHROPIC_API_KEY`, `ALOWARE_API_TOKEN`.
   - Deploy: `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (env vars and secrets are kept). Check `node -e "require('./src/server')"` and `npm test` first: a revision that fails to start never takes traffic, but costs a round trip (`basecamp-00047-jvw`).
   - Logs never hold message text or Roamer details: counts, timing, ids, and event shapes only. `GET /health`, `GET /avatar.png`.
