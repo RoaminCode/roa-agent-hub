@@ -3,7 +3,9 @@
 // "/ask <question>": Basecamp works out which role owns the answer and, in shadow mode,
 // sends the question to the shadow reviewer (Blake) labeled with that role, never to the
 // role itself. Basecamp never answers the question. On a deal, the question is also kept
-// in HubSpot as a "Basecamp Q&A" note on the deal and its Roamer, filed by topic.
+// in HubSpot as a "Basecamp Q&A" note on the Delivery record and the Roamer, filed by topic.
+// A question is on a deal when asked in its linked space, or in a direct message that names
+// one open deal by number ("/ask have we scheduled the PDI for 51455?").
 //
 // The answer loop: the reviewer replies in the thread under the routed question in their
 // direct message with Basecamp; Basecamp posts the answer back in the thread where the
@@ -18,6 +20,7 @@ const { routeQuestion, UNSURE } = require('./agents/askRouter');
 const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { noDashes } = require('./agents/roamerBrief');
 const { primary } = require('./chat/style');
+const { OPEN_STAGE } = require('./hubspot/openDeals');
 
 // How many times Basecamp asks the asker to clarify before sending the question to Blake
 // as "Not sure", so nothing gets stuck.
@@ -28,6 +31,7 @@ const MAX_CHARS = 2000;
 
 const SAY = {
   empty: 'Add the question after /ask, for example: /ask Has the title come in yet?',
+  whichDeal: (numbers) => `That question names more than one deal (${numbers.join(' and ')}). Ask about one deal at a time, so the answer is filed on the right one.`,
   tooLong: `That question is over ${MAX_CHARS} characters. Ask it in shorter parts.`,
   routed: (role) =>
     role === UNSURE
@@ -135,7 +139,22 @@ const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
 // only relayed, not kept.
 // `endpoint` is Basecamp's own URL, which a clarify card's Send button calls.
 // `reuseCheck` compares a question with the deal's earlier Q&A (agents/qaReuse.js).
-function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, route = routeQuestion, reuseCheck = checkEarlier, now = () => new Date() }) {
+// `findDealSpace({ dealNumber })` looks a deal up in HubSpot (hubspot/dealContext.js), so a
+// question asked in a direct message that names a deal is handled as if asked in its space.
+function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, route = routeQuestion, reuseCheck = checkEarlier, now = () => new Date() }) {
+  // The open deals a direct-message question names: each 5-digit number in it that HubSpot
+  // knows as an open Utah deal (a price or a year is not one). Any other number is ignored.
+  async function dealsNamedIn(question, dealNumber) {
+    if (!findDealSpace) return [];
+    const numbers = [...new Set(question.match(/\b\d{5}\b/g) || [])].slice(0, 3);
+    const found = [];
+    for (const n of numbers) {
+      const hit = await findDealSpace({ dealNumber: n }).catch((e) => (log('WARNING', 'could not look up a deal named in a question', { dealNumber: dealNumber || n, error: errorFields(e) }), null));
+      if (hit && hit.deal && (hit.deal.properties || {}).dealstage === OPEN_STAGE) found.push({ dealNumber: n, ...hit });
+    }
+    return found;
+  }
+
   // The deal's earlier Q&A: its questions on record and their notes' text from HubSpot.
   // Empty when there are none or they can't be read (routing goes on without them).
   async function earlierQa(dealId, dealNumber) {
@@ -185,6 +204,20 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
           spaceUri = deal.spaceUri || null;
           contactId = deal.contactId || null;
           deliveryId = deal.deliveryId || null;
+        }
+      } else {
+        // In a direct message, a question that names a deal runs as if asked in its space:
+        // filed on the deal, checked against its earlier answers, and the deal named to Blake.
+        const named = await dealsNamedIn(question);
+        if (named.length > 1) return SAY.whichDeal(named.map((d) => d.dealNumber));
+        if (named.length === 1) {
+          const [d] = named;
+          const record = (await db.getDeal(String(d.deal.id))) || {};
+          dealId = String(d.deal.id);
+          dealNumber = d.dealNumber;
+          spaceUri = record.spaceUri || null;
+          contactId = d.contactId || record.contactId || null;
+          deliveryId = d.deliveryId || record.deliveryId || null;
         }
       }
 

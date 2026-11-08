@@ -23,7 +23,7 @@ Snapshot 2026-11-08. Per-feature detail and decisions are under Next steps and C
   - Deploy: `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (env vars and secrets are kept). Check `node -e "require('./src/server')"` and `npm test` first: a revision that fails to start never takes traffic, but costs a round trip (`basecamp-00047-jvw`).
   - Logs never hold message text or Roamer details: counts, timing, ids, and event shapes only. `GET /health`, `GET /avatar.png`.
   - gcloud's default project on the laptop is `hs-ls-integration`; always pass `--project roa-agent-hub`.
-- **Tests:** 252 pass (`npm test`). Firestore is faked in `test/fakeFirestore.js`.
+- **Tests:** 255 pass (`npm test`). Firestore is faked in `test/fakeFirestore.js`.
 - **Chat app "Basecamp"**: visible only to Blake, App Home on. Commands registered: `/note` (1), `/ask` (2), `/wow` (3), Save to HubSpot message action (4), `/text` (5), WOW ideas quick command (6, the same as `/wow`; Blake may remove it), `/new` (7).
 - **What works today (live and verified unless noted):**
   - **Briefs:** `brief <deal#>` in a DM or the Brief button on Home. Saved as one note per deal on the Roamer and the Delivery record, reused when nothing changed, updated from only the new items when something did (about half the cost), fully reread after 10 updates, 30 days, or an edited older item.
@@ -31,7 +31,7 @@ Snapshot 2026-11-08. Per-feature detail and decisions are under Next steps and C
   - **Deal spaces:** "use this space for <deal#>" in a space a person made (works now); "open a space" and Create space need the Workspace admin install (Monday). Opening a space finds or creates the deal's Delivery record and posts the brief.
   - **Delivery records:** Basecamp finds or creates one per deal when its space opens (Deposit Received, named, trailer underneath), linked to the deal and the Roamer. The Delivery object was rebuilt to the spec 2026-11-08 (17 custom fields).
   - **Notes:** `/note`, `@Basecamp note`, Save to HubSpot on any message, and `note <deal#> ...` in a DM. Notes go on the Delivery record and the Roamer, never the Deal.
-  - **Questions:** `/ask` routes to a role in shadow mode (to Blake), with a clarify card when unclear, the answer loop back to the asker's thread, Q&A notes by topic, and reuse of earlier answers (shadow, Right/Wrong; bar: 10 verdicts, at most 1 Wrong; 2 so far, both Right).
+  - **Questions:** `/ask` routes to a role in shadow mode (to Blake), in a deal space or in a direct message that names one open deal by number (2026-11-07: then it runs the same as in the space, Q&A note, reuse check, and the deal named to Blake; two deals in one question are refused; a deal with no brief or space keeps the note on the Roamer alone), with a clarify card when unclear, the answer loop back to the asker's thread, Q&A notes by topic, and reuse of earlier answers (shadow, Right/Wrong; bar: 10 verdicts, at most 1 Wrong; 2 so far, both Right).
   - **`/new`:** what's new since the last brief or a date, straight into the space.
   - **`/wow`:** WOW ideas tailored from the brief and the team's "ROA WOW Ideas" Google Sheet; a pick is noted on the Delivery record and counted in the sheet.
   - **`/text`:** draft, review dialog with a live warning and a required number check, send through Aloware as the company, a Sent card, one send per draft. Test mode until Shane approves.

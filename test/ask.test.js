@@ -47,7 +47,7 @@ test('routing refuses anything but a known role with a topic', async () => {
 
 const ROUTED = { ok: true, role: 'Parts Manager', reason: 'Asks when a part arrives.', topic: 'awning arm', usage: { input_tokens: 600, output_tokens: 30 }, costUsd: 0.00075, model: MODEL };
 
-async function harness({ routed = ROUTED, reviewerKnown = true, linked = true, qaFails = false, relayFails = false } = {}) {
+async function harness({ routed = ROUTED, reviewerKnown = true, linked = true, qaFails = false, relayFails = false, findDealSpace = null } = {}) {
   const firestore = createFakeFirestore();
   const db = createDb({ firestore, now: () => NOW });
   if (linked) {
@@ -77,6 +77,7 @@ async function harness({ routed = ROUTED, reviewerKnown = true, linked = true, q
       },
       addAnswer: async (a) => (qa.push(['answer', a]), '555'),
     },
+    findDealSpace,
     route: async () => routed,
     now: () => NOW,
   });
@@ -157,6 +158,52 @@ test('a question outside a deal space routes without a HubSpot note; HubSpot fai
   const down = await harness({ qaFails: true });
   assert.strictEqual(await down.ask(), SAY.routed('Parts Manager'));
   assert.strictEqual(Object.values(down.data.questions)[0].noteId, null);
+});
+
+// HubSpot as the direct-message lookup sees it: 90001 open (with its space and Delivery
+// record), 90002 open with no brief or space yet, 90009 finalized. Anything else is not a deal.
+const OPEN = '85341732';
+const lookup = async ({ dealNumber }) =>
+  ({
+    90001: { deal: { id: '111', properties: { dealstage: OPEN } }, contactId: '77', deliveryId: '888' },
+    90002: { deal: { id: '222', properties: { dealstage: OPEN } }, contactId: '78', deliveryId: null },
+    90009: { deal: { id: '999', properties: { dealstage: 'closedwon' } }, contactId: '79', deliveryId: null },
+  })[dealNumber] || null;
+const askDm = (h, text) => h.ask({ spaceName: 'spaces/DM-5', threadName: 'spaces/DM-5/threads/Q1', isDirectMessage: true, text });
+
+test('in a direct message, a question naming an open deal runs as if asked in its space', async () => {
+  const h = await harness({ findDealSpace: lookup });
+  assert.strictEqual(await askDm(h, 'Have we scheduled the PDI for 90001?'), SAY.routed('Parts Manager'));
+  const message = h.sent[0][1];
+  assert.ok(message.includes('in the deal 90001 space: https://chat.google.com/room/DEAL'), message);
+  assert.deepStrictEqual(h.qa, [['question', { contactId: '77', deliveryId: '888', topic: 'awning arm', question: 'Have we scheduled the PDI for 90001?', askedBy: 'Casey Coach', at: NOW }]]);
+  const [q] = Object.values(h.data.questions);
+  assert.deepStrictEqual([q.dealId, q.spaceName, q.originThread, q.noteId], ['111', 'spaces/DM-5', 'spaces/DM-5/threads/Q1', '555']);
+
+  // The answer comes back to the asker's direct message, and onto the deal's Q&A note.
+  assert.strictEqual(await h.relay({ threadName: 'spaces/DM-9/threads/t1', userEmail: 'blake@example.com', userDisplayName: 'Blake Locke', text: 'Thursday.' }), SAY.relayed('90001', true));
+  assert.deepStrictEqual(h.sent.at(-1), ['spaces/DM-5', '*Answer from Blake Locke:* Thursday.', 'spaces/DM-5/threads/Q1']);
+});
+
+test('a deal with no brief or space yet keeps the question on the Roamer alone', async () => {
+  const h = await harness({ linked: false, findDealSpace: lookup });
+  await askDm(h, 'Is 90002 ready for paperwork?');
+  assert.ok(h.sent[0][1].includes('Asked by Casey Coach (casey@example.com) in the deal 90002 space\n'), h.sent[0][1]);
+  assert.deepStrictEqual(h.qa[0][1].contactId, '78');
+  assert.strictEqual(h.qa[0][1].deliveryId, null);
+  assert.strictEqual(Object.values(h.data.questions)[0].dealId, '222');
+});
+
+test('numbers that are not open deals are ignored, and two deals in one question are refused', async () => {
+  const none = await harness({ findDealSpace: lookup });
+  await askDm(none, 'Is the $12000 solar package on 90009 or a 12345 order?');
+  assert.ok(none.sent[0][1].includes('in a direct message'));
+  assert.deepStrictEqual(none.qa, []);
+  assert.strictEqual(Object.values(none.data.questions)[0].dealId, null);
+
+  const two = await harness({ findDealSpace: lookup });
+  assert.strictEqual(await askDm(two, 'Do 90001 and 90002 deliver the same day?'), SAY.whichDeal(['90001', '90002']));
+  assert.deepStrictEqual(two.sent, []);
 });
 
 test('unsure, failed, and unreachable routings say so and send nothing wrong', async () => {
