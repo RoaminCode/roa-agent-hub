@@ -314,20 +314,24 @@ const deal = (n, delivery, contacted, by = null, channel = null) => ({
 });
 const home = (deals, extra = {}) => renderHome({ deals, endpoint: 'https://example.com/', shadow: true, now: NOW, ...extra });
 
-// Reads one deal tile back into its parts.
+// Reads one deal tile back into its parts: the Roamer with deal, trailer, and Sales Coach
+// under the name, then delivery, then last contact, then a row of buttons.
 function tile(section) {
-  const [top, delivery, contact] = section.widgets;
-  const [left, right] = top.columns.columnItems;
+  const [roamer, delivery, contact, row] = section.widgets;
+  const buttons = row ? row.buttonList.buttons : [];
   return {
     header: section.header ? section.header.replace(/<[^>]+>/g, '') : null,
-    roamer: left.widgets[0].decoratedText,
-    coach: right.widgets[0].decoratedText,
+    roamer: roamer.decoratedText,
+    meta: roamer.decoratedText.bottomLabel,
     delivery: delivery.decoratedText.text,
+    deliveryIcon: delivery.decoratedText.startIcon.materialIcon,
     contact: contact.decoratedText.text,
-    button: contact.decoratedText.button,
+    contactIcon: contact.decoratedText.startIcon.materialIcon,
+    button: buttons.find((b) => b.text === 'Brief'),
+    buttons,
   };
 }
-const tiles = (card) => card.sections.filter((s) => s.widgets[0].columns).map(tile);
+const tiles = (card) => card.sections.filter((s) => s.widgets[0].decoratedText && s.widgets.length >= 3).map(tile);
 
 test('dates an evening contact in Utah on the day it happened, not the next UTC day', () => {
   const { localDate } = require('../src/chat/homeCard');
@@ -342,7 +346,7 @@ test('dates an evening contact in Utah on the day it happened, not the next UTC 
 
 test('keeps a deal with an unreadable delivery date on Home, as having none', () => {
   const card = home([deal('90001', 'garbage', '2026-10-28')]);
-  assert.deepStrictEqual(tiles(card).map((t) => [t.header, t.delivery]), [['NO DELIVERY DATE 1', 'No delivery date']]);
+  assert.deepStrictEqual(tiles(card).map((t) => [t.header, t.delivery]), [['No delivery date', 'No delivery date']]);
 });
 
 test('counts days in Mountain time', () => {
@@ -351,20 +355,23 @@ test('counts days in Mountain time', () => {
   assert.deepStrictEqual([0, 1, 5, -1, -3].map(whenLabel), ['today', 'tomorrow', 'in 5 days', '1 day past', '3 days past']);
 });
 
-test('groups deals by how soon they deliver, one tile per deal, skipping empty groups', () => {
+test('groups deals by how soon they deliver, one tile per deal, skipping empty groups, with no counts or dates in the labels', () => {
   const card = home([deal('90001', '2026-11-03', '2026-10-28'), deal('90002', '2026-11-04', '2026-10-28'), deal('90003', '2026-11-30', '2026-10-28'), deal('90004', null, '2026-10-28')]);
-  assert.deepStrictEqual(card.header, { title: 'Utah deals', subtitle: '4 open · Oct 29' });
-  assert.deepStrictEqual(tiles(card).map((t) => t.header), ['THIS WEEK 2', null, 'LATER 1', 'NO DELIVERY DATE 1']);
+  assert.deepStrictEqual(card.header, { title: 'Utah deals' });
+  assert.deepStrictEqual(tiles(card).map((t) => t.header), ['This week', null, 'Later', 'No delivery date']);
+  assert.strictEqual(card.sections[0].header, '<b>This week</b>');
 });
 
-test('lays out a tile: Roamer with Sales Coach at top right, delivery row, last contact row with Brief', () => {
+test('lays out a tile: Roamer, then deal, trailer, and Sales Coach, then delivery, last contact, and the buttons', () => {
   const [t] = tiles(home([deal('90001', '2026-11-03', '2026-10-28', 'Coby', 'call')], { shadow: false }));
-  assert.strictEqual(t.roamer.topLabel, '90001 · 2026 Test');
   assert.strictEqual(t.roamer.text, '<b>Roamer 90001</b>');
-  assert.deepStrictEqual(t.roamer.startIcon, { materialIcon: { name: 'rv_hookup' } });
-  assert.deepStrictEqual([t.coach.topLabel, t.coach.text], ['Sales Coach', 'Casey']);
+  assert.strictEqual(t.meta, '90001 · 2026 Test · Sales Coach Casey');
   assert.strictEqual(t.delivery, 'Delivery Nov 3 (in 5 days)');
+  assert.deepStrictEqual(t.deliveryIcon, { name: 'event' });
   assert.strictEqual(t.contact, 'Last contact Oct 28, Coby (call)');
+  assert.deepStrictEqual(t.contactIcon, { name: 'forum' });
+  assert.deepStrictEqual([t.button.text, t.button.type], ['Brief', 'FILLED']);
+  assert.deepStrictEqual(t.button.color, { red: 0, green: 0x79 / 255, blue: 0x9a / 255, alpha: 1 });
   assert.deepStrictEqual(t.button.onClick.action, {
     function: 'https://example.com/',
     parameters: [
@@ -375,19 +382,18 @@ test('lays out a tile: Roamer with Sales Coach at top right, delivery row, last 
   });
 });
 
-test('turns the last contact row amber when a deal inside six weeks has gone quiet', () => {
-  const [quiet, never] = tiles(home([deal('90001', '2026-11-03', '2026-10-15', 'Casey', 'email'), deal('90002', '2026-11-04', null)]));
-  assert.match(quiet.contact, /#C27C0E/);
-  assert.match(quiet.contact, /No contact in 14 days · last Oct 15, Casey \(email\)/);
-  assert.match(never.contact, /#C27C0E.*No contact logged yet/);
+test('marks a deal inside six weeks that has gone quiet with bold text and an icon, never a color', () => {
+  const card = home([deal('90001', '2026-11-03', '2026-10-15', 'Casey', 'email'), deal('90002', '2026-11-04', null)]);
+  const [quiet, never] = tiles(card);
+  assert.strictEqual(quiet.contact, '<b>No contact in 14 days</b> · last Oct 15, Casey (email)');
+  assert.deepStrictEqual(quiet.contactIcon, { name: 'error' });
+  assert.strictEqual(never.contact, '<b>No contact logged yet</b>');
+  assert.doesNotMatch(JSON.stringify(card), /font color/);
 });
 
 test('flags quiet deals only when delivery is within six weeks or past due', () => {
   const byNumber = Object.fromEntries(
-    tiles(home([deal('90001', '2026-12-10', '2026-10-01'), deal('90002', '2027-01-15', '2026-10-01'), deal('90003', '2026-10-20', '2026-10-01'), deal('90004', null, null)])).map((t) => [
-      t.roamer.topLabel.slice(0, 5),
-      t.contact,
-    ]),
+    tiles(home([deal('90001', '2026-12-10', '2026-10-01'), deal('90002', '2027-01-15', '2026-10-01'), deal('90003', '2026-10-20', '2026-10-01'), deal('90004', null, null)])).map((t) => [t.meta.slice(0, 5), t.contact]),
   );
   assert.match(byNumber['90001'], /No contact in 28 days/);
   assert.strictEqual(byNumber['90002'], 'Last contact Oct 1');
@@ -395,16 +401,16 @@ test('flags quiet deals only when delivery is within six weeks or past due', () 
   assert.strictEqual(byNumber['90004'], 'No contact logged yet');
 });
 
-test('puts deals delivering in under three days, or past due, in an orange On deck group', () => {
+test('puts deals delivering in under three days, or past due, in an On deck group, bold with a filled calendar', () => {
   const card = home([deal('90001', '2026-10-30', '2026-10-28'), deal('90002', '2026-10-27', '2026-10-28'), deal('90003', '2026-11-01', '2026-10-28')]);
   const [first, second, third] = tiles(card);
-  assert.deepStrictEqual([first.header, second.header, third.header], ['ON DECK 2', null, 'THIS WEEK 1']);
-  assert.match(card.sections[0].header, /#E2692E/);
-  assert.match(first.delivery, /#E2692E.*Delivers tomorrow.*· Oct 30/);
+  assert.deepStrictEqual([first.header, second.header, third.header], ['On deck', null, 'This week']);
+  assert.strictEqual(first.delivery, '<b>Delivers tomorrow · Oct 30</b>');
+  assert.deepStrictEqual(first.deliveryIcon, { name: 'event', fill: true });
   assert.match(second.delivery, /2 days past delivery date/);
-  assert.deepStrictEqual(first.roamer.startIcon, { materialIcon: { name: 'rv_hookup', fill: true } });
   assert.strictEqual(third.delivery, 'Delivery Nov 1 (in 3 days)');
-  assert.deepStrictEqual(third.roamer.startIcon, { materialIcon: { name: 'rv_hookup' } });
+  assert.deepStrictEqual(third.deliveryIcon, { name: 'event' });
+  assert.doesNotMatch(JSON.stringify(card), /font color|#E2692E|#C27C0E/);
 });
 
 test('words the urgent delivery line plainly', () => {
@@ -438,8 +444,8 @@ test('a second Brief tap on the same deal within two minutes does not start anot
 });
 test('a deal with more than one contact says so on its tile', () => {
   const [two, one] = tiles(home([{ ...deal('90001', '2026-11-03', '2026-10-28'), contacts: 2 }, { ...deal('90002', '2026-11-04', '2026-10-28'), contacts: 1 }]));
-  assert.strictEqual(two.roamer.topLabel, '90001 · 2026 Test · 2 contacts');
-  assert.strictEqual(one.roamer.topLabel, '90002 · 2026 Test');
+  assert.strictEqual(two.meta, '90001 · 2026 Test · 2 contacts · Sales Coach Casey');
+  assert.strictEqual(one.meta, '90002 · 2026 Test · Sales Coach Casey');
 });
 
 test('while briefs are paused, Home has no Brief buttons and says why', () => {
@@ -467,9 +473,10 @@ test('Home is told whether this user may start briefs', async () => {
 
 test('a sent deal shows a disabled In Messages button instead of Brief', () => {
   const [sentTile, other] = tiles(home([deal('90001', '2026-11-03', '2026-10-28'), deal('90002', '2026-11-04', '2026-10-28')], { sent: new Set(['90001']) }));
-  assert.deepStrictEqual([sentTile.button.text, sentTile.button.disabled], ['In Messages', true]);
-  assert.deepStrictEqual(sentTile.button.icon, { materialIcon: { name: 'check' } });
-  assert.deepStrictEqual([other.button.text, other.button.disabled], ['Brief', undefined]);
+  const sent = sentTile.buttons[0];
+  assert.deepStrictEqual([sent.text, sent.disabled, sent.type], ['In Messages', true, 'OUTLINED']);
+  assert.deepStrictEqual(sent.icon, { materialIcon: { name: 'check' } });
+  assert.deepStrictEqual([other.buttons[0].text, other.buttons[0].disabled], ['Brief', undefined]);
 });
 const spaceTap = (email, action, dealNumber) => {
   const e = clickEvent(email, dealNumber);
@@ -477,24 +484,25 @@ const spaceTap = (email, action, dealNumber) => {
   return e;
 };
 
-test('Home tiles show the deal space: a link, Request access, or Create space', () => {
+test('Home tiles show the deal space beside Brief: a link, Request access, or Create space, all outlined', () => {
   const deal = (n) => ({ id: n, dealNumber: n, roamer: 'Pat Sample', trailer: 'ROAMER', projectedDelivery: '2026-11-20', contacts: 1 });
   const spaces = new Map([
     ['90001', { uri: 'https://chat.google.com/room/A', member: true }],
     ['90002', { uri: 'https://chat.google.com/room/B', member: false }],
   ]);
   const card = renderHome({ deals: [deal('90001'), deal('90002'), deal('90003')], endpoint: 'https://example.com/', shadow: true, now: new Date('2026-11-07T17:00:00Z'), spaces });
-  const button = (n) => card.sections.find((s) => JSON.stringify(s).includes(`"topLabel":"${n}`)).widgets[1].decoratedText.button;
+  const button = (n) => tiles(card).find((t) => t.meta.startsWith(n)).buttons[1];
   assert.deepStrictEqual(button('90001').onClick, { openLink: { url: 'https://chat.google.com/room/A' } });
+  assert.deepStrictEqual([button('90001').text, button('90001').type], ['Space', 'OUTLINED']);
   assert.strictEqual(button('90002').text, 'Request access');
   assert.strictEqual(button('90003').text, 'Create space');
 
   const off = renderHome({ deals: [deal('90003')], endpoint: 'x', shadow: true, briefsOff: 'paused', spaces: new Map() });
-  assert.strictEqual(off.sections[0].widgets[1].decoratedText.button, undefined);
+  assert.strictEqual(off.sections[0].widgets.length, 3, 'paused: no Brief and no Create space, so no button row');
   const unread = renderHome({ deals: [deal('90003')], endpoint: 'x', shadow: true });
-  assert.strictEqual(unread.sections[0].widgets[1].decoratedText.button, undefined);
+  assert.deepStrictEqual(tiles(unread)[0].buttons.map((b) => b.text), ['Brief'], 'spaces unread: Brief only');
   const asked = renderHome({ deals: [deal('90002')], endpoint: 'x', shadow: true, spaces, sent: new Set(['join:90002']) });
-  assert.strictEqual(asked.sections[0].widgets[1].decoratedText.button.text, 'Asked');
+  assert.strictEqual(tiles(asked)[0].buttons[1].text, 'Asked');
 });
 
 test('Create space and Request access taps start their jobs once and redraw Home', async () => {

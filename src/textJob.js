@@ -20,6 +20,7 @@ const { errorFields, isOutOfCredits } = require('./errors');
 const { draftText } = require('./agents/textDraft');
 const { writtenAt, noDashes } = require('./agents/roamerBrief');
 const { MAX_CHARS, toE164 } = require('./aloware');
+const { primary, secondary } = require('./chat/style');
 
 const SAY = {
   empty: 'Say what the text should tell them, for example: /text let them know the awning arm arrives Tuesday',
@@ -73,15 +74,11 @@ function draftCard({ dealId, dealNumber, name, draft, endpoint }) {
             {
               widgets: [
                 { textParagraph: { text: escapeHtml(draft) } },
-                { textParagraph: { text: `<font color="#6B6B6B">${draft.length} of ${MAX_CHARS} characters. Nothing is sent until someone reviews and approves it.</font>` } },
+                { textParagraph: { text: `<i>${draft.length} of ${MAX_CHARS} characters. Nothing is sent until someone reviews and approves it.</i>` } },
                 {
                   buttonList: {
                     buttons: [
-                      {
-                        text: 'Review and send',
-                        type: 'FILLED_TONAL',
-                        onClick: { action: { function: endpoint, interaction: 'OPEN_DIALOG', parameters: [{ key: 'action', value: 'textReview' }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }, { key: 'm', value: draft }] } },
-                      },
+                      primary('Review and send', { action: { function: endpoint, interaction: 'OPEN_DIALOG', parameters: [{ key: 'action', value: 'textReview' }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }, { key: 'm', value: draft }] } }),
                     ],
                   },
                 },
@@ -101,12 +98,16 @@ function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint
   const action = (value) => ({ action: { function: endpoint, parameters: [{ key: 'action', value }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }, { key: 'c', value: String(card || '') }] } });
   const only = numbers.length === 1 ? numbers[0] : null;
   const at = only ? ` at ${escapeHtml(pretty(only.number))}` : '';
+  // Bold in Chat's own text color, no warning color (Blake, 2026-11-07): it reads in light
+  // and dark mode, and the icon marks it.
   const widgets = [
     {
-      textParagraph: {
+      decoratedText: {
+        startIcon: { materialIcon: { name: 'info' } },
         text: testTo
-          ? `<font color="#C27C0E"><b>TESTING:</b> this goes to your test phone, ${escapeHtml(pretty(testTo))}, not to ${escapeHtml(name)}${at}.</font>`
-          : `<font color="#C0392B"><b>LIVE:</b> this sends to ${escapeHtml(name)}${at} as soon as you approve. It can't be unsent.</font>`,
+          ? `<b>TESTING: this goes to your test phone, ${escapeHtml(pretty(testTo))}, not to ${escapeHtml(name)}${at}.</b>`
+          : `<b>LIVE: this sends to ${escapeHtml(name)}${at} as soon as you approve. It can't be unsent.</b>`,
+        wrapText: true,
       },
     },
   ];
@@ -132,7 +133,7 @@ function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint
       items: [{ text: `I checked this is the right number for ${name}`, value: 'yes', selected: false }],
     },
   });
-  widgets.push({ buttonList: { buttons: [{ text: 'Approve and send', type: 'FILLED', onClick: action('textSend') }, { text: 'Cancel', onClick: action('textCancel') }] } });
+  widgets.push({ buttonList: { buttons: [primary('Approve and send', action('textSend')), secondary('Cancel', action('textCancel'))] } });
   return { header: { title: `Text ${name}`, subtitle: `Deal ${dealNumber}. Approve the exact words before anything is sent.` }, sections: [{ widgets }] };
 }
 
@@ -152,7 +153,7 @@ function sentCard({ dealNumber, name, number, message, approver, line, now, test
               widgets: [
                 { textParagraph: { text: escapeHtml(message) } },
                 { decoratedText: { startIcon: { materialIcon: { name: 'check_circle' } }, text: `<b>Sent</b> to ${escapeHtml(to)}`, wrapText: true } },
-                { textParagraph: { text: `<font color="#6B6B6B">Approved by ${escapeHtml(approver)}, ${writtenAt(now)} MT, from ${escapeHtml(line.label)}.</font>` } },
+                { textParagraph: { text: `<i>Approved by ${escapeHtml(approver)}, ${writtenAt(now)} MT, from ${escapeHtml(line.label)}.</i>` } },
               ],
             },
           ],

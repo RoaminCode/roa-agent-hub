@@ -12,7 +12,7 @@ const { createDb } = require('../src/db');
 const { createFakeFirestore } = require('./fakeFirestore');
 
 const NOW = new Date('2026-11-07T17:00:00Z');
-const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+const brief = { headline: 'Pat is excited.', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
 const context = (over = {}) => ({
   found: true,
   store: 'UT',

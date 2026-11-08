@@ -17,6 +17,7 @@ const { errorFields, isOutOfCredits } = require('./errors');
 const { routeQuestion, UNSURE } = require('./agents/askRouter');
 const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { noDashes } = require('./agents/roamerBrief');
+const { primary } = require('./chat/style');
 
 // How many times Basecamp asks the asker to clarify before sending the question to Blake
 // as "Not sure", so nothing gets stuck.
@@ -65,20 +66,16 @@ function clarifyCard({ clarify, question, attempt, endpoint }) {
                 {
                   buttonList: {
                     buttons: [
-                      {
-                        text: 'Send',
-                        type: 'FILLED_TONAL',
-                        onClick: {
-                          action: {
-                            function: endpoint,
-                            parameters: [
-                              { key: 'action', value: 'clarify' },
-                              { key: 'q', value: question },
-                              { key: 'attempt', value: String(attempt) },
-                            ],
-                          },
+                      primary('Send', {
+                        action: {
+                          function: endpoint,
+                          parameters: [
+                            { key: 'action', value: 'clarify' },
+                            { key: 'q', value: question },
+                            { key: 'attempt', value: String(attempt) },
+                          ],
                         },
-                      },
+                      }),
                     ],
                   },
                 },

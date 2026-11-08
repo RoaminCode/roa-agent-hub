@@ -33,6 +33,10 @@ const brief = {
     { detail: 'Will to send the purchase order.', date: '2026-10-23', channel: 'call' },
     { detail: 'She asked: "you need anything else?"', date: '2026-10-20', channel: 'text' },
   ],
+  who: 'A first-time owner who tows with a Jeep | and brings <b>Dad</b>.',
+  excites: ['Towing for the first time', 'Open question: no, a dream trip'],
+  journey_summary: 'Deposit Oct 3. Corner jacks approved; pickup on the 14th.',
+  open_questions: ['Will the purchase order arrive in time?', 'Does Dad need a seat at the walkthrough?'],
 };
 
 // What HubSpot hands back: the HTML body, read the way Basecamp reads every note.
@@ -45,7 +49,7 @@ test('a brief note reads back as the same brief, with what it was built from', (
 });
 
 test('an empty brief and an empty record read back too', () => {
-  const empty = { headline: 'Nothing yet.', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  const empty = { headline: 'Nothing yet.', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
   const back = roundTrip(empty, { ...context, items: [] });
   assert.deepStrictEqual(back.brief, empty);
   assert.deepStrictEqual(back.signature, { contactId: '222', itemCount: 0, newestAt: '' });

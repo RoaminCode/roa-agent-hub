@@ -1,8 +1,10 @@
 'use strict';
 
 // The Roamer brief: reads a deal's whole communication record and pulls out what the
-// team should know, sorted into Wow (personal), Mods, and Journey (what is ahead). One model call,
-// no tools. The record is data the Roamer and Team Members wrote, never instructions.
+// team should know, sorted into Wow (personal), Mods, and Journey (what is ahead), each item
+// with its source, plus the four short pieces the card leads with: Who they are, What excites
+// them, Journey so far, and Open questions. One model call, no tools. The record is data the
+// Roamer and Team Members wrote, never instructions.
 
 const MODEL = 'claude-opus-5-5';
 
@@ -35,7 +37,17 @@ Tags: 3 to 5 labels of two to four words each that capture this Roamer at a glan
 
 Key facts: up to 4 logistics facts the team looks up most, each a short label and a value of at most 8 words, only when the record states them. Good labels: Tow vehicle, Pickup, Paperwork, Best contact. Not personal details (those are Wow), and not the projected delivery date or Sales Coach, which are shown already.
 
-Say each detail once. A detail in the key facts does not appear again in the lists, and nothing appears in more than one of Wow, Mods, and Journey. Tags are shorthand and may point at a detail stated below.`;
+Say each detail once. A detail in the key facts does not appear again in the lists, and nothing appears in more than one of Wow, Mods, and Journey. Tags are shorthand and may point at a detail stated below.
+
+The card the team sees leads with four short pieces, written from the same record. They summarize, so they may repeat details from the lists. No dates or channels in them unless a date is the point (a delivery or arrival date).
+
+Who they are: two or three sentences on who this Roamer is: household, experience with trailers, what they want from it, and the one worry or hope that matters most.
+
+What excites them: up to 5 short lines, at most 12 words each, on what this Roamer is looking forward to, in their own words where the record has them.
+
+Journey so far: two to four sentences on where the deal stands on the road to pickup: what has happened, what is due next, and when.
+
+Open questions: up to 5 questions still open in the record, one short question each: something the Roamer asked that the record does not show answered, or a decision still waiting on the Roamer or on ROA. Leave it empty when nothing is open; never invent one.`;
 
 const ITEM = {
   type: 'object',
@@ -71,7 +83,7 @@ const MOD = {
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['headline', 'tags', 'key_facts', 'wow', 'mods', 'journey'],
+  required: ['headline', 'tags', 'key_facts', 'wow', 'mods', 'journey', 'who', 'excites', 'journey_summary', 'open_questions'],
   properties: {
     headline: { type: 'string' },
     tags: { type: 'array', items: { type: 'string' } },
@@ -79,6 +91,10 @@ const SCHEMA = {
     wow: { type: 'array', items: ITEM },
     mods: { type: 'array', items: MOD },
     journey: { type: 'array', items: ITEM },
+    who: { type: 'string', description: 'Who they are' },
+    excites: { type: 'array', items: { type: 'string' }, description: 'What excites them' },
+    journey_summary: { type: 'string', description: 'Journey so far' },
+    open_questions: { type: 'array', items: { type: 'string' } },
   },
 };
 
@@ -168,6 +184,8 @@ Updating a brief: this time you receive the deal's current brief, written earlie
 - Keep every item that still holds, with its original date and channel.
 - Add what the new items bring, under the same rules and limits. When a new item changes something already in the brief (a mod's status, a date, a plan), replace that item with the newer one. When it contradicts it, say so in that item and give each version.
 - Rewrite the headline and tags only if the new items change what matters most.
+- Keep Who they are, What excites them, and Journey so far true with the new items, rewriting them where the new items change them.
+- Open questions: remove any the new items answer or settle, update any that changed, and add any new ones the new items raise.
 - In "new_since", list what the new items added or changed, one short sentence each with its date and channel, at most 8, most important first; empty if the new items hold nothing worth a Team Member's attention.
 - Set "rebuild" to true, with the rest as you best can, only if the new items change so much that patching the brief would mislead (for example, the Roamer changed trailers or the deal was restructured). Basecamp then rereads the whole record.`;
 
@@ -231,7 +249,15 @@ function isBrief(b) {
     listOf(b.key_facts, (f) => isText(f.label) && isText(f.value)) &&
     listOf(b.wow, isItem) &&
     listOf(b.journey, isItem) &&
-    listOf(b.mods, (m) => isText(m.name) && isText(m.price) && isText(m.date) && STATUSES.includes(m.status) && CHANNELS.includes(m.channel))
+    listOf(b.mods, (m) => isText(m.name) && isText(m.price) && isText(m.date) && STATUSES.includes(m.status) && CHANNELS.includes(m.channel)) &&
+    // The card's four pieces. A brief saved before they existed fails here, so Basecamp
+    // rereads the record instead of showing a card with empty sections.
+    isText(b.who) &&
+    Array.isArray(b.excites) &&
+    b.excites.every(isText) &&
+    isText(b.journey_summary) &&
+    Array.isArray(b.open_questions) &&
+    b.open_questions.every(isText)
   );
 }
 
@@ -290,10 +316,20 @@ function renderBrief({ dealNumber, context, brief, now }) {
   const mods = (brief.mods || [])
     .map((m) => `• ${noDashes(m.name)}${m.price ? `, ${m.price}` : ''} [${m.status}] (${shortDate(m.date)}, ${m.channel})`)
     .join('\n');
+  const bullets = (lines, none) => (lines && lines.length ? lines.map((l) => `• ${noDashes(l)}`).join('\n') : `• ${none}`);
+  const lead = [
+    brief.who ? `*Who they are*\n${noDashes(brief.who)}` : null,
+    brief.excites ? `*What excites them*\n${bullets(brief.excites, 'Nothing yet in the record.')}` : null,
+    brief.journey_summary ? `*Journey so far*\n${noDashes(brief.journey_summary)}` : null,
+    brief.open_questions ? `*Open questions*\n${bullets(brief.open_questions, 'None open in the record.')}` : null,
+  ]
+    .filter(Boolean)
+    .map((s) => `${s}\n\n`)
+    .join('');
   let dropped = 0;
   const compose = () => {
     const cut = dropped ? `\n_${dropped} lower-priority items did not fit in Chat._` : '';
-    return `*Deal ${dealNumber}: ${name}*\n${noDashes(brief.headline)}\n\n*Wow*\n${list(wow)}\n\n*Mods*\n${mods || '• No mods discussed yet.'}\n\n*Journey*\n${list(journey)}\n\n_${basis}_${cut}`;
+    return `*Deal ${dealNumber}: ${name}*\n${noDashes(brief.headline)}\n\n${lead}*Wow*\n${list(wow)}\n\n*Mods*\n${mods || '• No mods discussed yet.'}\n\n*Journey*\n${list(journey)}\n\n_${basis}_${cut}`;
   };
   // Lists come most useful first, so trim from the end of the longer list until it fits.
   let text = compose();

@@ -1,22 +1,19 @@
 'use strict';
 
-// Renders a Roamer brief as a Google Chat card (cards v2): a header with the Roamer and
-// deal, the headline, Wow, Mods, and Journey as collapsible sections with one row per item, and
-// buttons into HubSpot. Card text supports a small HTML subset, so all record text is
-// escaped first.
+// Renders a Roamer brief as a Google Chat card (cards v2), as Blake approved it
+// (2026-11-07): a header with the Roamer and deal, then five sections, Who they are, What
+// excites them, Journey so far, Open questions, and Mods, then outlined buttons into
+// HubSpot. No dates or channels on the card; the HubSpot note keeps each item's source.
+// Card text supports a small HTML subset, so all record text is escaped first.
 
 const { noDashes, shortDate } = require('../agents/roamerBrief');
+const { secondary, label } = require('./style');
 
 // HubSpot portal for rvsofamerica.com, used to build record links.
 const HUBSPOT_PORTAL_ID = '39605104';
 
-// Rows shown before "Show more" in each section.
+// Mods shown before "Show more".
 const VISIBLE_ROWS = 5;
-
-// Arctic palette. Chat may show a card on a light or a dark background and our colors
-// stay fixed, so these are mid-tones that read on both. Wow and Journey differ in
-// lightness as well as hue so they stay distinct for color-blind readers.
-const COLORS = { wow: '#2E9BD6', mods: '#23858A', journey: '#4A6F94', button: '#2E7DB8', muted: '#80868b' };
 
 const MOD_STATUS = {
   approved: { icon: 'check_circle', label: 'Approved' },
@@ -25,46 +22,36 @@ const MOD_STATUS = {
   declined: { icon: 'cancel', label: 'Declined' },
 };
 
-function rgb(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  return { red: ((n >> 16) & 255) / 255, green: ((n >> 8) & 255) / 255, blue: (n & 255) / 255, alpha: 1 };
-}
-
-const ICONS = { call: 'call', text: 'sms', email: 'mail', note: 'description' };
-
 function escape(text) {
   return noDashes(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function itemSection(title, color, items) {
-  const header = `<font color="${color}"><b>${title.toUpperCase()}</b></font>`;
-  if (!items.length) {
-    return { header, widgets: [{ textParagraph: { text: '<i>Nothing yet in the record.</i>' } }] };
-  }
-  const widgets = items.map((i) => ({
-    decoratedText: {
-      startIcon: { materialIcon: { name: ICONS[i.channel] || 'chat' } },
-      text: escape(i.detail),
-      bottomLabel: `${shortDate(i.date)}, ${i.channel}`,
-      wrapText: true,
-    },
-  }));
-  const section = { header, widgets };
-  if (widgets.length > VISIBLE_ROWS) {
-    section.collapsible = true;
-    section.uncollapsibleWidgetsCount = VISIBLE_ROWS;
-  }
-  return section;
+const paragraph = (text) => ({ textParagraph: { text } });
+const none = (text) => paragraph(`<i>${text}</i>`);
+const bullets = (lines) => paragraph(lines.map((l) => `• ${escape(l)}`).join('<br>'));
+
+// Who they are, with the tags under it as chips.
+function whoSection(brief) {
+  const widgets = [brief.who ? paragraph(escape(brief.who)) : none('Not enough in the record yet.')];
+  const tags = (brief.tags || []).slice(0, 5);
+  if (tags.length) widgets.push({ chipList: { chips: tags.map((t) => ({ label: noDashes(t) })) } });
+  return { header: label('Who they are'), widgets };
+}
+
+function listSection(title, lines, empty) {
+  return { header: label(title), widgets: [lines && lines.length ? bullets(lines) : none(empty)] };
+}
+
+function textSection(title, text, empty) {
+  return { header: label(title), widgets: [text ? paragraph(escape(text)) : none(empty)] };
 }
 
 // Mods heard in conversation, each with its status. They are not yet checked against
 // the deal in LightSpeed, and the section says so.
 function modsSection(mods) {
-  const header = `<font color="${COLORS.mods}"><b>MODS</b></font>`;
-  const caveat = { textParagraph: { text: `<font color="${COLORS.muted}"><i>From conversations; not yet checked against the deal in LightSpeed.</i></font>` } };
-  if (!mods.length) {
-    return { header, widgets: [{ textParagraph: { text: '<i>No mods discussed yet.</i>' } }] };
-  }
+  const header = label('Mods');
+  const caveat = none('From conversations; not yet checked against the deal in LightSpeed.');
+  if (!mods.length) return { header, widgets: [none('No mods discussed yet.')] };
   const widgets = mods.map((m) => {
     const status = MOD_STATUS[m.status] || MOD_STATUS.interested;
     const price = m.price && m.price.trim() ? ` · ${escape(m.price.trim())}` : '';
@@ -72,7 +59,7 @@ function modsSection(mods) {
       decoratedText: {
         startIcon: { materialIcon: { name: status.icon } },
         text: `${escape(m.name)}${price}`,
-        bottomLabel: `${status.label} · ${shortDate(m.date)}, ${m.channel}`,
+        bottomLabel: status.label,
         wrapText: true,
       },
     };
@@ -85,30 +72,7 @@ function modsSection(mods) {
   return section;
 }
 
-// Headline, then tags as chips, then key facts in two columns.
-function summarySection(brief) {
-  const widgets = [{ textParagraph: { text: `<b>${escape(brief.headline)}</b>` } }];
-  const tags = (brief.tags || []).slice(0, 5);
-  if (tags.length) widgets.push({ chipList: { chips: tags.map((t) => ({ label: noDashes(t) })) } });
-  const facts = (brief.key_facts || []).slice(0, 4);
-  if (facts.length) {
-    const fact = (f) => ({ decoratedText: { topLabel: noDashes(f.label), text: escape(f.value), wrapText: true } });
-    const column = (list) => ({
-      horizontalSizeStyle: 'FILL_AVAILABLE_SPACE',
-      horizontalAlignment: 'START',
-      verticalAlignment: 'TOP',
-      widgets: list.map(fact),
-    });
-    widgets.push({
-      columns: { columnItems: [column(facts.filter((_, i) => i % 2 === 0)), column(facts.filter((_, i) => i % 2 === 1))] },
-    });
-  }
-  return { widgets };
-}
-
-function link(text, url) {
-  return { text, type: 'FILLED', color: rgb(COLORS.button), onClick: { openLink: { url } } };
-}
+const link = (text, url) => secondary(text, { openLink: { url } });
 
 // Asked when a deal has more than one contact: one button per contact, and the tapped one
 // is read as the Roamer. The button carries the contact ID; Basecamp checks it is still on
@@ -117,7 +81,7 @@ function renderContactChoice({ dealNumber, store, choices, contactCount, endpoin
   const shown = contactCount > choices.length ? ` (the first ${choices.length} are shown)` : '';
   const buttons = choices.map((c) => ({
     text: noDashes(c.name).slice(0, 60),
-    type: 'FILLED_TONAL',
+    type: 'OUTLINED',
     onClick: {
       action: {
         function: endpoint,
@@ -165,10 +129,10 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
     .join(' · ');
 
   const record = `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record`;
-  const buttons = [link('Open deal in HubSpot', `${record}/0-3/${context.deal.id}`)];
-  if (context.contact) buttons.push(link('Open Roamer in HubSpot', `${record}/0-1/${context.contact.id}`));
+  const buttons = [link('Open deal', `${record}/0-3/${context.deal.id}`)];
+  if (context.contact) buttons.push(link('Open Roamer', `${record}/0-1/${context.contact.id}`));
   // The deal's Delivery record (the custom object 2-59426991), once the deal has one.
-  if (context.deliveryId) buttons.push(link('Open Delivery in HubSpot', `${record}/2-59426991/${context.deliveryId}`));
+  if (context.deliveryId) buttons.push(link('Open Delivery', `${record}/2-59426991/${context.deliveryId}`));
 
   const header = { title: name, subtitle };
   if (avatarUrl) Object.assign(header, { imageUrl: avatarUrl, imageType: 'CIRCLE', imageAltText: 'Basecamp' });
@@ -181,10 +145,11 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
         card: {
           header,
           sections: [
-            summarySection(brief),
-            itemSection('Wow', COLORS.wow, brief.wow),
+            whoSection(brief),
+            listSection('What excites them', brief.excites, 'Nothing yet in the record.'),
+            textSection('Journey so far', brief.journey_summary, 'Nothing yet in the record.'),
+            listSection('Open questions', brief.open_questions, 'None open in the record.'),
             modsSection(brief.mods || []),
-            itemSection('Journey', COLORS.journey, brief.journey),
             // No source counts or timestamps here: Blake keeps the card to what the team acts on.
             { widgets: [{ buttonList: { buttons } }] },
           ],
@@ -194,4 +159,4 @@ function renderBriefCard({ dealNumber, context, brief, avatarUrl }) {
   };
 }
 
-module.exports = { renderBriefCard, renderContactChoice, HUBSPOT_PORTAL_ID, VISIBLE_ROWS, COLORS };
+module.exports = { renderBriefCard, renderContactChoice, HUBSPOT_PORTAL_ID, VISIBLE_ROWS };

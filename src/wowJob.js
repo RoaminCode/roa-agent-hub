@@ -11,6 +11,7 @@
 const { errorFields, isOutOfCredits } = require('./errors');
 const { suggestWow } = require('./agents/wowPlan');
 const { writtenAt, noDashes } = require('./agents/roamerBrief');
+const { primary, secondary, label } = require('./chat/style');
 
 const MARKER = 'Basecamp WOW plan';
 
@@ -31,34 +32,30 @@ const escapeHtml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '
 // The ideas as a card: one section per idea with "Use this one", carrying what to save.
 function wowCard({ dealId, dealNumber, suggestions, endpoint }) {
   const sections = suggestions.map((s, i) => ({
-    header: `${i + 1}. ${escapeHtml(s.title)} <font color="#6B6B6B">${escapeHtml(s.tier)}</font>`,
+    header: `${label(`${i + 1}. ${escapeHtml(s.title)}`)} ${escapeHtml(s.tier)}`,
     widgets: [
       { textParagraph: { text: escapeHtml(s.tailored) } },
-      { textParagraph: { text: `<font color="#6B6B6B">Why: ${escapeHtml(s.why)} · ${escapeHtml(s.owner)}${s.ideaId ? '' : ' · New idea'}</font>` } },
+      { textParagraph: { text: `<i>Why: ${escapeHtml(s.why)} · ${escapeHtml(s.owner)}${s.ideaId ? '' : ' · New idea'}</i>` } },
       {
         buttonList: {
           buttons: [
-            {
-              text: 'Use this one',
-              type: 'FILLED_TONAL',
-              onClick: {
-                action: {
-                  function: endpoint,
-                  parameters: [
-                    { key: 'action', value: 'wowPick' },
-                    { key: 'd', value: String(dealId) },
-                    { key: 'n', value: String(dealNumber) },
-                    { key: 'i', value: s.ideaId || '' },
-                    { key: 't', value: s.title },
-                    { key: 'w', value: s.tailored },
-                    { key: 'g', value: s.idea },
-                    { key: 'f', value: s.fitsWhen || '' },
-                    { key: 'c', value: s.category },
-                    { key: 'r', value: s.tier },
-                  ],
-                },
+            primary('Use this one', {
+              action: {
+                function: endpoint,
+                parameters: [
+                  { key: 'action', value: 'wowPick' },
+                  { key: 'd', value: String(dealId) },
+                  { key: 'n', value: String(dealNumber) },
+                  { key: 'i', value: s.ideaId || '' },
+                  { key: 't', value: s.title },
+                  { key: 'w', value: s.tailored },
+                  { key: 'g', value: s.idea },
+                  { key: 'f', value: s.fitsWhen || '' },
+                  { key: 'c', value: s.category },
+                  { key: 'r', value: s.tier },
+                ],
               },
-            },
+            }),
           ],
         },
       },
@@ -87,11 +84,15 @@ function createWow({ anthropic, db, library, readBriefNote, findDealSpace, creat
   async function listIdeas() {
     const ideas = await library.listIdeas();
     if (!ideas.length) return SAY.noIdeas;
-    return [
-      '*WOW idea library* (most used first)',
-      ...ideas.map((i) => `• ${i.idea} (${i.category}, ${i.tier}${i.uses ? `, used ${i.uses}` : ''})`),
-      ...(sheetUrl ? ['', `Edit the list: ${sheetUrl}`] : []),
-    ].join('\n');
+    const rows = ideas.map((i) => ({ decoratedText: { text: escapeHtml(noDashes(i.idea)), bottomLabel: i.uses ? `Used ${i.uses} ${i.uses === 1 ? 'time' : 'times'}` : 'Not used yet', wrapText: true } }));
+    const section = { widgets: rows };
+    if (rows.length > 8) Object.assign(section, { collapsible: true, uncollapsibleWidgetsCount: 8 });
+    const sections = [section];
+    if (sheetUrl) sections.push({ widgets: [{ buttonList: { buttons: [secondary('Open the idea sheet', { openLink: { url: sheetUrl } })] } }] });
+    return {
+      fallbackText: 'ROA WOW ideas',
+      cardsV2: [{ cardId: 'wow-ideas', card: { header: { title: 'ROA WOW ideas', subtitle: 'Most used first' }, sections } }],
+    };
   }
 
   // Returns the reply: a card of ideas, or text.

@@ -1,30 +1,29 @@
 'use strict';
 
 // Basecamp's App Home: "Utah deals" in shadow mode, "My deals" once Team Members have
-// access. Open deals grouped by how soon they deliver, each with
-// the Roamer, trailer, delivery, last contact, Sales Coach, a Brief button, and the deal
-// space button. Built from one HubSpot search on every open; no AI until someone taps Brief.
+// access. Open deals grouped by how soon they deliver, one tile each with the Roamer,
+// deal number, trailer, Sales Coach, delivery, and last contact, then the Brief and deal
+// space buttons. Built from one HubSpot search on every open; no AI until someone taps
+// Brief. No counts or dates in the header (Blake keeps cards to what the team acts on), and
+// no orange: urgency and quiet deals are bold text and an icon.
 
 const { noDashes, shortDate } = require('../agents/roamerBrief');
-const { COLORS } = require('./briefCard');
+const { primary, secondary, label } = require('./style');
 
-// Past this many days without contact, a deal gets a quiet amber heads-up, but only
-// when delivery is within FLAG_WITHIN_DAYS (or past due). Further out, a quiet week is
-// normal and a flag would be noise.
+// Past this many days without contact, a deal gets a heads-up, but only when delivery is
+// within FLAG_WITHIN_DAYS (or past due). Further out, a quiet week is normal and a flag
+// would be noise.
 const QUIET_DAYS = 7;
 const FLAG_WITHIN_DAYS = 42;
-const AMBER = '#C27C0E';
-// Deals delivering in under URGENT_DAYS (or past due) get their own group in the
-// orange of Basecamp's mic. Chat cards cannot color a tile's background, so the group
-// title, a delivery line, and a filled icon carry it instead.
+// Deals delivering in under URGENT_DAYS (or past due) get their own group, with a bold
+// delivery line and a filled calendar icon.
 const URGENT_DAYS = 3;
-const URGENT = '#E2692E';
 const TIME_ZONE = 'America/Denver';
 
 const isUrgent = (days) => days !== null && days < URGENT_DAYS;
 
 const GROUPS = [
-  { key: 'now', title: 'On deck', color: URGENT, test: isUrgent },
+  { key: 'now', title: 'On deck', test: isUrgent },
   { key: 'soon', title: 'This week', test: (days) => days !== null && days >= URGENT_DAYS && days <= 7 },
   { key: 'next', title: 'Next two weeks', test: (days) => days !== null && days > 7 && days <= 21 },
   { key: 'later', title: 'Later', test: (days) => days !== null && days > 21 },
@@ -62,7 +61,7 @@ function localDate(value, timeZone) {
   return Number.isNaN(at.getTime()) ? null : todayIn(timeZone, at);
 }
 
-// The orange line on an urgent tile.
+// The bold delivery line on an urgent tile.
 function deliversLabel(days) {
   if (days === 0) return 'Delivers today';
   if (days === 1) return 'Delivers tomorrow';
@@ -82,21 +81,17 @@ function whenLabel(days) {
 // the brief lands, so the label has to stay true until Home is reopened.
 function briefButton(deal, endpoint, sent) {
   if (sent) return { text: 'In Messages', type: 'OUTLINED', disabled: true, icon: { materialIcon: { name: 'check' } }, onClick: { action: { function: endpoint } } };
-  return {
-    text: 'Brief',
-    type: 'FILLED_TONAL',
-    onClick: {
-      action: {
-        function: endpoint,
-        // The name rides along so the "read up on" message can say whose brief is coming.
-        parameters: [
-          { key: 'action', value: 'brief' },
-          { key: 'dealNumber', value: String(deal.dealNumber) },
-          { key: 'roamer', value: noDashes(deal.roamer || '').slice(0, 60) },
-        ],
-      },
+  return primary('Brief', {
+    action: {
+      function: endpoint,
+      // The name rides along so the "read up on" message can say whose brief is coming.
+      parameters: [
+        { key: 'action', value: 'brief' },
+        { key: 'dealNumber', value: String(deal.dealNumber) },
+        { key: 'roamer', value: noDashes(deal.roamer || '').slice(0, 60) },
+      ],
     },
-  };
+  });
 }
 
 // The deal space button on a tile. `space` is null when the deal has no space yet, else
@@ -109,69 +104,64 @@ function spaceButton(deal, endpoint, space, sent, briefsPaused) {
   const done = (text) => ({ text, type: 'OUTLINED', disabled: true, icon: { materialIcon: { name: 'check' } }, onClick: { action: { function: endpoint } } });
   if (space && space.member) {
     if (!space.uri) return null;
-    return { text: 'Space', type: 'OUTLINED', icon: { materialIcon: { name: 'forum' } }, onClick: { openLink: { url: space.uri } } };
+    return { ...secondary('Space', { openLink: { url: space.uri } }), icon: { materialIcon: { name: 'forum' } } };
   }
-  if (space) return sent.has(`join:${n}`) ? done('Asked') : { text: 'Request access', type: 'OUTLINED', onClick: tap('join') };
+  if (space) return sent.has(`join:${n}`) ? done('Asked') : secondary('Request access', tap('join'));
   if (briefsPaused) return null;
-  return sent.has(`space:${n}`) ? done('In Messages') : { text: 'Create space', type: 'OUTLINED', onClick: tap('space') };
+  return sent.has(`space:${n}`) ? done('In Messages') : secondary('Create space', tap('space'));
 }
 
-// One deal's tile: the Roamer with the Sales Coach at top right, then delivery on its own
-// row with the deal space button, then last contact on its own row with the Brief button.
+// One deal's tile: the Roamer, then deal number, trailer, and Sales Coach under the name;
+// then delivery; then last contact; then the Brief and deal space buttons in a row.
 function dealWidgets(deal, today, endpoint, sent, briefsPaused, spaces) {
   const days = deal.projectedDelivery ? daysBetween(today, deal.projectedDelivery) : null;
   const contacted = deal.lastContacted ? localDate(deal.lastContacted, TIME_ZONE) : null;
   const quietFor = contacted ? daysBetween(contacted, today) : null;
   const urgent = isUrgent(days);
 
+  // The Sales Coach is the deal owner, not whoever made the last contact.
   const roamer = {
     decoratedText: {
-      startIcon: { materialIcon: urgent ? { name: 'rv_hookup', fill: true } : { name: 'rv_hookup' } },
-      topLabel: [deal.dealNumber, deal.trailer, deal.contacts > 1 ? `${deal.contacts} contacts` : null].filter(Boolean).map(noDashes).join(' · '),
       text: `<b>${escape(deal.roamer || 'Roamer')}</b>`,
+      bottomLabel: [deal.dealNumber, deal.trailer, deal.contacts > 1 ? `${deal.contacts} contacts` : null, `Sales Coach ${deal.salesCoach || 'not set'}`]
+        .filter(Boolean)
+        .map(noDashes)
+        .join(' · '),
       wrapText: true,
-    },
-  };
-  // The deal owner, not whoever made the last contact.
-  const coach = {
-    decoratedText: { topLabel: 'Sales Coach', text: escape(deal.salesCoach || 'Not set'), wrapText: true },
-  };
-  const top = {
-    columns: {
-      columnItems: [
-        { horizontalSizeStyle: 'FILL_AVAILABLE_SPACE', horizontalAlignment: 'START', verticalAlignment: 'CENTER', widgets: [roamer] },
-        { horizontalSizeStyle: 'FILL_MINIMUM_SPACE', horizontalAlignment: 'END', verticalAlignment: 'CENTER', widgets: [coach] },
-      ],
     },
   };
 
   let deliveryText = 'No delivery date';
   if (days !== null) {
-    deliveryText = urgent
-      ? `<font color="${URGENT}"><b>${deliversLabel(days)}</b></font> · ${shortDate(deal.projectedDelivery)}`
-      : `Delivery ${shortDate(deal.projectedDelivery)} (${whenLabel(days)})`;
+    deliveryText = urgent ? `<b>${deliversLabel(days)} · ${shortDate(deal.projectedDelivery)}</b>` : `Delivery ${shortDate(deal.projectedDelivery)} (${whenLabel(days)})`;
   }
-  const delivery = { decoratedText: { startIcon: { materialIcon: { name: 'event' } }, text: deliveryText, wrapText: true } };
-  // Without `spaces` (deal spaces could not be read), tiles show no space button.
-  if (deal.dealNumber && spaces) {
-    const button = spaceButton(deal, endpoint, spaces.get(String(deal.dealNumber)) || null, sent, briefsPaused);
-    if (button) delivery.decoratedText.button = button;
-  }
+  const delivery = { decoratedText: { startIcon: { materialIcon: urgent ? { name: 'event', fill: true } : { name: 'event' } }, text: deliveryText, wrapText: true } };
 
   const by = deal.lastContactBy ? `, ${escape(deal.lastContactBy)} (${deal.lastContactChannel})` : '';
   const flagged = days !== null && days <= FLAG_WITHIN_DAYS;
   let contactText;
+  let quiet = false;
   if (!contacted) {
-    contactText = flagged ? `<font color="${AMBER}">No contact logged yet</font>` : 'No contact logged yet';
+    quiet = flagged;
+    contactText = flagged ? '<b>No contact logged yet</b>' : 'No contact logged yet';
   } else if (flagged && quietFor > QUIET_DAYS) {
-    contactText = `<font color="${AMBER}">No contact in ${quietFor} days · last ${shortDate(contacted)}${by}</font>`;
+    quiet = true;
+    contactText = `<b>No contact in ${quietFor} days</b> · last ${shortDate(contacted)}${by}`;
   } else {
     contactText = `Last contact ${shortDate(contacted)}${by}`;
   }
-  const contact = { decoratedText: { startIcon: { materialIcon: { name: 'forum' } }, text: contactText, wrapText: true } };
-  if (deal.dealNumber && !briefsPaused) contact.decoratedText.button = briefButton(deal, endpoint, sent.has(String(deal.dealNumber)));
+  const contact = { decoratedText: { startIcon: { materialIcon: { name: quiet ? 'error' : 'forum' } }, text: contactText, wrapText: true } };
 
-  return { days, widgets: [top, delivery, contact] };
+  const widgets = [roamer, delivery, contact];
+  const buttons = [];
+  if (deal.dealNumber && !briefsPaused) buttons.push(briefButton(deal, endpoint, sent.has(String(deal.dealNumber))));
+  // Without `spaces` (deal spaces could not be read), tiles show no space button.
+  if (deal.dealNumber && spaces) {
+    const button = spaceButton(deal, endpoint, spaces.get(String(deal.dealNumber)) || null, sent, briefsPaused);
+    if (button) buttons.push(button);
+  }
+  if (buttons.length) widgets.push({ buttonList: { buttons } });
+  return { days, widgets };
 }
 // Why briefs are off, as the Home footer says it.
 const BRIEFS_OFF = {
@@ -194,7 +184,7 @@ function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(
   for (const group of GROUPS) {
     const deals = rows.filter((r) => group.test(r.days)).map((r) => r.widgets);
     if (!deals.length) continue;
-    const header = `<font color="${group.color || COLORS.wow}"><b>${group.title.toUpperCase()}</b></font> <font color="${COLORS.muted}">${deals.length}</font>`;
+    const header = label(group.title);
     deals.forEach((widgets, i) => sections.push(i === 0 ? { header, widgets } : { widgets }));
   }
 
@@ -204,22 +194,15 @@ function renderHome({ deals, endpoint, shadow, sent = new Set(), now = new Date(
     widgets: [
       {
         textParagraph: {
-          text: `<font color="${COLORS.muted}">${
-            shadow ? 'Shadow mode: showing every open Utah deal. ' : ''
-          }${
-            briefsPaused
-              ? BRIEFS_OFF[briefsOff] || BRIEFS_OFF.paused
-              : 'Tap Brief and the Roamer brief arrives in the Messages tab in about a minute.'
-          }</font>`,
+          text: `${shadow ? 'Shadow mode: showing every open Utah deal. ' : ''}${
+            briefsPaused ? BRIEFS_OFF[briefsOff] || BRIEFS_OFF.paused : 'Tap Brief and the Roamer brief arrives in the Messages tab in about a minute.'
+          }`,
         },
       },
     ],
   });
 
-  return {
-    header: { title: shadow ? 'Utah deals' : 'My deals', subtitle: `${deals.length} open · ${shortDate(today)}` },
-    sections,
-  };
+  return { header: { title: shadow ? 'Utah deals' : 'My deals' }, sections };
 }
 
 // Shown on Home to anyone not yet allowed to use Basecamp.

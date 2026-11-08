@@ -97,7 +97,7 @@ test('the dialog says it is live, shows the number and where it came from, the l
   const dialog = await h.texts.review({ params: { d: '111', n: '90001', m: 'Hi Pat' } });
   assert.deepStrictEqual(dialog, reviewDialog({ dealId: '111', dealNumber: '90001', name: 'Pat Sample', numbers: [{ field: 'Mobile', number: '+14355550199' }], line: LINE, draft: 'Hi Pat', endpoint: 'https://example.com/' }));
   const text = JSON.stringify(dialog);
-  assert.ok(text.includes('<b>LIVE:</b> this sends to Pat Sample at (435) 555-0199 as soon as you approve'));
+  assert.ok(text.includes('<b>LIVE: this sends to Pat Sample at (435) 555-0199 as soon as you approve'));
   assert.ok(text.includes('To (Mobile in HubSpot)') && text.includes('UT - Sales') && text.includes('"value":"Hi Pat"'));
   assert.ok(text.includes('I checked this is the right number for Pat Sample') && text.includes('"selected":false'));
   // Two different numbers: the approver picks one; neither is chosen for them.
@@ -202,7 +202,7 @@ test('test mode: the dialog says so, the text goes to the test phone, noted on t
     now: () => NOW,
   });
   const dialog = JSON.stringify(await texts.review({ params: { d: '111', n: '90001', m: 'Hi' } }));
-  assert.ok(dialog.includes('<b>TESTING:</b> this goes to your test phone, (801) 555-0100, not to Pat Sample at (435) 555-0199'));
+  assert.ok(dialog.includes('<b>TESTING: this goes to your test phone, (801) 555-0100, not to Pat Sample at (435) 555-0199'));
   assert.ok(!dialog.includes('LIVE:'));
   // The number check still has to be ticked.
   assert.strictEqual(await texts.send({ params: { d: '111', n: '90001' }, formInputs: { message: 'Hi' }, userEmail: 'b' }), SAY.notConfirmed);

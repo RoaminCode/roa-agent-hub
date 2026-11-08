@@ -18,7 +18,7 @@ const context = {
 
 const item = (detail) => ({ detail, date: '2026-10-03', channel: 'text' });
 // A brief with every field the schema requires.
-const fullBrief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+const fullBrief = { headline: 'h', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
 
 test('renders a brief with Wow, Journey, and where it came from', () => {
   const text = renderBrief({ dealNumber: '90001', context, brief: { headline: 'Pat is excited.', wow: [item('First trailer.')], journey: [] } });
@@ -295,7 +295,7 @@ const withIds = { ...context, deal: { id: '111', properties: context.deal.proper
 test('a saved brief is reused, with no AI call, when the record has not changed', async () => {
   const sent = [];
   const logs = [];
-  const saved = { ...fullBrief, headline: 'Saved headline.' };
+  const saved = { ...fullBrief, who: 'Saved who.' };
   const run = createBriefJob({
     loadContext: async () => ({ ...withIds, briefNote: { id: '901', brief: saved, signature: briefSignature(withIds) } }),
     anthropic: { beta: { messages: { stream: () => assert.fail('no AI call when a saved brief fits') } } },
@@ -304,7 +304,7 @@ test('a saved brief is reused, with no AI call, when the record has not changed'
     saveBriefNote: async () => assert.fail('nothing to save when reusing'),
   });
   await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
-  assert.match(JSON.stringify(sent[0]), /Saved headline\./);
+  assert.match(JSON.stringify(sent[0]), /Saved who\./);
   assert.strictEqual(logs[0][1], 'brief reused from HubSpot note');
 });
 
@@ -314,13 +314,13 @@ test('a new item in the record means a fresh brief, saved over the old note', as
   const stale = { contactId: '222', itemCount: 0, newestAt: '' };
   const run = createBriefJob({
     loadContext: async () => ({ ...withIds, briefNote: { id: '901', brief: fullBrief, signature: stale } }),
-    anthropic: reply('end_turn', { ...fullBrief, headline: 'Fresh headline.' }),
+    anthropic: reply('end_turn', { ...fullBrief, headline: 'Fresh headline.', who: 'Fresh who.' }),
     sendMessage: async (space, message) => sent.push(message),
     log: () => {},
     saveBriefNote: async ({ context: c, brief }) => (saves.push([c.briefNote.id, brief.headline]), { id: '901', updated: true }),
   });
   await run({ spaceName: 'spaces/AAA', dealNumber: '90001', store: 'UT' });
-  assert.match(JSON.stringify(sent[0]), /Fresh headline\./);
+  assert.match(JSON.stringify(sent[0]), /Fresh who\./);
   assert.deepStrictEqual(saves, [['901', 'Fresh headline.']]);
 });
 

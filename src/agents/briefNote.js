@@ -38,6 +38,10 @@ function noteLines({ brief, context, now, spaceName }) {
     MARKER,
     `${HEADER} ${stampLine(context, now)}`,
     `Headline: ${flat(brief.headline)}`,
+    `Who they are: ${flat(brief.who)}`,
+    ...brief.excites.map((e) => `Excites: ${flat(e)}`),
+    `Journey so far: ${flat(brief.journey_summary)}`,
+    ...brief.open_questions.map((q) => `Open question: ${flat(q)}`),
     `Tags: ${brief.tags.map(field).join(' | ')}`,
     ...brief.key_facts.map((f) => `Fact: ${field(f.label)} | ${field(f.value)}`),
     'WOW',
@@ -73,7 +77,9 @@ function parseBriefNote(text) {
     .map((l) => l.trim())
     .filter(Boolean);
   if (lines[0] !== MARKER) return null;
-  const brief = { headline: '', tags: [], key_facts: [], wow: [], mods: [], journey: [] };
+  // The card's pieces start unset, so a note written before they existed fails isBrief and
+  // the deal gets a full read.
+  const brief = { headline: '', tags: [], key_facts: [], wow: [], mods: [], journey: [], who: null, excites: [], journey_summary: null, open_questions: [] };
   let signature = null;
   let spaceName = null;
   let section = null;
@@ -84,6 +90,10 @@ function parseBriefNote(text) {
     }
     let m;
     if ((m = /^Headline: (.*)$/.exec(line))) brief.headline = m[1];
+    else if ((m = /^Who they are: ?(.*)$/.exec(line))) brief.who = m[1];
+    else if ((m = /^Excites: (.*)$/.exec(line))) brief.excites.push(m[1]);
+    else if ((m = /^Journey so far: ?(.*)$/.exec(line))) brief.journey_summary = m[1];
+    else if ((m = /^Open question: (.*)$/.exec(line))) brief.open_questions.push(m[1]);
     else if ((m = /^Tags: ?(.*)$/.exec(line))) brief.tags = m[1] ? m[1].split(' | ') : [];
     else if ((m = /^Fact: (.*?) \| (.*)$/.exec(line))) brief.key_facts.push({ label: m[1], value: m[2] });
     else if ((m = /^Basecamp key: contact (\d*), (\d+) items, newest (.*?)(?:, space (spaces\/[\w-]+))?$/.exec(line))) {
