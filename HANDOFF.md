@@ -79,7 +79,7 @@ Worked section by section with Blake (list set 2026-11-07).
 14. **Add Shane:** `ALLOWED_USERS` and `BRIEF_USERS` (flags file), make the Chat app visible to him, pause briefs when not in use.
 
 **E. Older items**
-15. More `/brief` comparisons on deals Basecamp briefed 2026-10-29, about five.
+15. Dropped 2026-11-08 (Blake): no more brief audits or comparisons. Blake has run and approved many briefs and won't pay for audit runs.
 16. Try the contact picker live on the first Utah deal with two contacts.
 17. Done 2026-11-08: Cloud Monitoring alert policy "Basecamp: deal has no Roamer contact" (log match on that WARNING from the basecamp service, at most one email an hour, closes after a day) emails blake@rvsofamerica.com through the "Blake (email)" channel. Not yet seen firing: no deal has hit it since.
 18. Done 2026-11-08: the third HubSpot text format, a "Name (Rvs of America):" line then the message, now gives the sender on Home and in briefs. No name ("(Rvs of America):") or another name in the brackets stays unknown rather than guessed. Checked on real texts: 13 of the 500 most recent texts mentioning Rvs use this format; 6 now read a sender, 7 stay unknown, and every message is read.
