@@ -16,7 +16,7 @@
 //   accessRequests/{auto}   dealId, spaceName, user, at
 //   spaceNotes/{noteId}     dealId, spaceName, user, at, chars
 //   people/{email}          userName (Chat id), seenAt
-//   textSends/{auto}        dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, at
+//   textSends/{auto}        dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card, at
 //                           (the send log the rule for texts asks for; the one place a
 //                           text and a number are kept)
 //   wowIdeas/{auto}         idea (general, no Roamer details), category, tier, uses,
@@ -238,16 +238,23 @@ function createDb({ firestore, now = () => new Date() }) {
   // An approved text and its send: line, recipient, time, approver, and the exact text (the
   // rule for sends asks for this log). In shadow mode `to` is the approver's own phone and
   // `wouldGoTo` the Roamer's number.
-  async function recordTextSend({ dealId, approvedBy, lineId, to, wouldGoTo, message, shadow }) {
-    const ref = await firestore.collection('textSends').add({ dealId: dealDocId(dealId), approvedBy, lineId: String(lineId), to, wouldGoTo: wouldGoTo || null, message, shadow: Boolean(shadow), at: stamp() });
+  // `card` is the draft card the text was approved from, so it is sent only once.
+  async function recordTextSend({ dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card = null }) {
+    const ref = await firestore.collection('textSends').add({ dealId: dealDocId(dealId), approvedBy, lineId: String(lineId), to, wouldGoTo: wouldGoTo || null, message, shadow: Boolean(shadow), card: card || null, at: stamp() });
     return ref.id;
+  }
+
+  // Whether a text was already sent from this draft card.
+  async function textSentFromCard(card) {
+    if (!card) return false;
+    return (await firestore.collection('textSends').where('card', '==', String(card)).get()).docs.length > 0;
   }
 
   async function markAnswered({ id, answeredBy, answers }) {
     await firestore.collection('questions').doc(id).set({ status: 'answered', answeredBy, answeredAt: stamp(), answers }, { merge: true });
   }
 
-  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, listWowIdeas, useWowIdea, recordTextSend };
+  return { getDeal, getSpace, recordBrief, recordDelivery, claimSpace, releaseClaim, linkSpace, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, listWowIdeas, useWowIdea, recordTextSend, textSentFromCard };
 }
 
 module.exports = { createDb, CLAIM_MS };

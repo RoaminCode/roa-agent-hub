@@ -33,6 +33,7 @@ const SAY = {
   sent: ({ approver, name, number, line }) => `Sent to ${name} at ${number} from ${line}, approved by ${approver}. Noted on the Delivery record and the Roamer in HubSpot.`,
   sentTest: ({ approver, name, number, line, testTo }) => `Test: sent to the test phone ${testTo} from ${line}, approved by ${approver}. Live, it would have gone to ${name} at ${number}. Noted on the Delivery record as a test.`,
   notConfirmed: 'Not sent: tick that you checked the number, then approve again. Tap "Review and send" on the draft to reopen it.',
+  alreadySent: 'Not sent: a text has already been sent from this draft. Start a new one with /text if you need another.',
   wrongNumber: "Not sent: that number isn't on the Roamer's HubSpot record anymore. Tap \"Review and send\" to reopen it with the current number.",
   sendFailed: "I couldn't send that text. Nothing was sent; Blake can see what happened in the logs.",
   tooLong: `Not sent: that text is over ${MAX_CHARS} characters. Tap "Review and send" to shorten it.`,
@@ -95,8 +96,9 @@ function draftCard({ dealId, dealNumber, name, draft, endpoint }) {
 
 // The approval dialog: a live warning, the recipient and which number, the line, the exact
 // words (editable), and the number check that must be ticked before it sends.
-function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint, testTo = null }) {
-  const action = (value) => ({ action: { function: endpoint, parameters: [{ key: 'action', value }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }] } });
+// `card` is the draft card's message name, carried through so a send is tied to its draft.
+function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint, testTo = null, card = '' }) {
+  const action = (value) => ({ action: { function: endpoint, parameters: [{ key: 'action', value }, { key: 'd', value: String(dealId) }, { key: 'n', value: String(dealNumber) }, { key: 'c', value: String(card || '') }] } });
   const only = numbers.length === 1 ? numbers[0] : null;
   const at = only ? ` at ${escapeHtml(pretty(only.number))}` : '';
   const widgets = [
@@ -134,6 +136,32 @@ function reviewDialog({ dealId, dealNumber, name, numbers, line, draft, endpoint
   return { header: { title: `Text ${name}`, subtitle: `Deal ${dealNumber}. Approve the exact words before anything is sent.` }, sections: [{ widgets }] };
 }
 
+// The draft card once its text is sent: what went, to whom, who approved it, and no button,
+// so it can't be sent again.
+function sentCard({ dealNumber, name, number, message, approver, line, now, testTo = null }) {
+  const to = testTo ? `the test phone ${pretty(testTo)} (live: ${name}, ${pretty(number)})` : `${name}, ${pretty(number)}`;
+  return {
+    fallbackText: `Text sent to ${name}`,
+    cardsV2: [
+      {
+        cardId: `text-sent-${dealNumber}`,
+        card: {
+          header: { title: testTo ? `Test text sent` : `Text sent to ${name}`, subtitle: `Deal ${dealNumber}` },
+          sections: [
+            {
+              widgets: [
+                { textParagraph: { text: escapeHtml(message) } },
+                { decoratedText: { startIcon: { materialIcon: { name: 'check_circle' } }, text: `<b>Sent</b> to ${escapeHtml(to)}`, wrapText: true } },
+                { textParagraph: { text: `<font color="#6B6B6B">Approved by ${escapeHtml(approver)}, ${writtenAt(now)} MT, from ${escapeHtml(line.label)}.</font>` } },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 // The note on the Delivery record and the Roamer for each send.
 function renderTextNote({ message, name, number, approver, line, now, testTo = null }) {
   if (testTo) {
@@ -152,7 +180,8 @@ function renderTextNote({ message, name, number, approver, line, now, testTo = n
 
 // `aloware` sends (aloware.js); `line` is { id, label }, the Aloware line texts go out on;
 // `testTo`, when set, is the one test phone every approved text goes to (test mode).
-function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, aloware, line, log, endpoint = '', testTo = null, draft = draftText, now = () => new Date() }) {
+// `updateMessage(name, message)` replaces the draft card once its text is sent.
+function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, aloware, line, log, endpoint = '', testTo = null, updateMessage = async () => {}, draft = draftText, now = () => new Date() }) {
   const test = toE164(testTo);
   // The deal and its Roamer's name and numbers, from Basecamp's record and, fresh, HubSpot.
   async function roamerOf(dealId) {
@@ -201,12 +230,12 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
   }
 
   // "Review and send": the approval dialog, with the recipient read fresh from HubSpot.
-  async function review({ params }) {
+  async function review({ params, messageName = '' }) {
     const p = params || {};
     if (!/^\d+$/.test(String(p.d || ''))) return null;
     const { contact } = await roamerOf(p.d);
     if (!contact || !contact.numbers.length) return null;
-    return reviewDialog({ dealId: p.d, dealNumber: p.n, name: contact.name, numbers: contact.numbers, line, draft: String(p.m || ''), endpoint, testTo: test });
+    return reviewDialog({ dealId: p.d, dealNumber: p.n, name: contact.name, numbers: contact.numbers, line, draft: String(p.m || ''), endpoint, testTo: test, card: messageName });
   }
 
   // "Approve and send": the exact words from the dialog, to the checked number, sent once.
@@ -220,7 +249,10 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
     if (message.length > MAX_CHARS) return SAY.tooLong;
     if (f.confirm !== 'yes') return SAY.notConfirmed;
     const approver = userDisplayName || userEmail;
+    // One send per draft card: a second Approve from the same draft is refused.
+    const card = /^spaces\/[\w-]+\/messages\/[\w.-]+$/.test(String(p.c || '')) ? String(p.c) : null;
     try {
+      if (card && (await db.textSentFromCard(card))) return SAY.alreadySent;
       const { record, contact } = await roamerOf(p.d);
       if (!contact || !contact.numbers.length) return SAY.sendFailed;
       // The number must still be on the Roamer's record: the one shown, or the one picked.
@@ -232,13 +264,19 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
       const at = now();
       // The approval and send, logged in Basecamp's records (the rule for sends asks for the text).
       await db
-        .recordTextSend({ dealId: String(p.d), approvedBy: userEmail, lineId: line.id, to: sendTo, wouldGoTo: test ? to : null, message, shadow: Boolean(test) })
+        .recordTextSend({ dealId: String(p.d), approvedBy: userEmail, lineId: line.id, to: sendTo, wouldGoTo: test ? to : null, message, shadow: Boolean(test), card })
         .catch((e) => log('ERROR', 'could not log text send', { dealNumber, error: errorFields(e) }));
       // A test is noted on the Delivery record only, never the Roamer's contact.
       const noteOn = { contactId: test ? null : record.contactId || null, deliveryId: record.deliveryId || null };
       if (noteOn.contactId || noteOn.deliveryId) {
         await createNote({ ...noteOn, body: renderTextNote({ message, name: contact.name, number: to, approver, line, now: at, testTo: test }), timestamp: at.toISOString() }).catch((e) =>
           log('ERROR', 'could not note text send', { dealNumber, error: errorFields(e) }),
+        );
+      }
+      // The draft card becomes a "Sent" card with no button.
+      if (card) {
+        await updateMessage(card, sentCard({ dealNumber, name: contact.name, number: to, message, approver, line, now: at, testTo: test })).catch((e) =>
+          log('ERROR', 'could not mark the draft sent', { dealNumber, error: errorFields(e) }),
         );
       }
       log('INFO', test ? 'text sent (test)' : 'text sent', { dealNumber, lineId: line.id, chars: message.length, approvedBy: userEmail });
@@ -253,4 +291,4 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
   return { start, review, send };
 }
 
-module.exports = { createTexts, draftCard, reviewDialog, renderTextNote, numbersOf, pretty, SAY };
+module.exports = { createTexts, draftCard, reviewDialog, sentCard, renderTextNote, numbersOf, pretty, SAY };

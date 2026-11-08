@@ -40,4 +40,15 @@ function createDirectMessageFinder({ auth = defaultAuth() } = {}) {
   };
 }
 
-module.exports = { createChatSender, createDirectMessageFinder };
+// Replaces one of Basecamp's own messages (text and cards), such as a draft card once its
+// text is sent, so its button can't be used again.
+function createMessageUpdater({ auth = defaultAuth() } = {}) {
+  return async function updateMessage(messageName, message) {
+    if (!/^spaces\/[\w-]+\/messages\/[\w.-]+$/.test(messageName || '')) throw safeError('updateMessage: invalid message name');
+    const client = await auth.getClient();
+    const data = typeof message === 'string' ? { text: message, cardsV2: [] } : { text: '', cardsV2: [], ...message };
+    await client.request({ url: `https://chat.googleapis.com/v1/${messageName}?updateMask=text,cardsV2`, method: 'PATCH', data });
+  };
+}
+
+module.exports = { createChatSender, createDirectMessageFinder, createMessageUpdater };

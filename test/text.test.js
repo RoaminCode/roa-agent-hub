@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createAloware, toE164, MAX_CHARS } = require('../src/aloware');
 const { draftText } = require('../src/agents/textDraft');
-const { createTexts, draftCard, reviewDialog, renderTextNote, numbersOf, SAY } = require('../src/textJob');
+const { createTexts, draftCard, reviewDialog, sentCard, renderTextNote, numbersOf, SAY } = require('../src/textJob');
 const { createRouter, parseCommand } = require('../src/router');
 const { createDb } = require('../src/db');
 const { createFakeFirestore } = require('./fakeFirestore');
@@ -114,7 +114,7 @@ test('Approve and send: to the Roamer, only with the number checked, logged, not
   assert.strictEqual(said, SAY.sent({ approver: 'Blake Locke', name: 'Pat Sample', number: '(435) 555-0199', line: LINE.label }));
   assert.deepStrictEqual(h.sends, [{ lineId: '67519', to: '+14355550199', message: 'Hi Pat, it arrives Tuesday. ROA' }]);
   const [log] = Object.values(h.data.textSends);
-  assert.deepStrictEqual({ ...log, at: undefined }, { dealId: '111', approvedBy: 'blake@example.com', lineId: '67519', to: '+14355550199', wouldGoTo: null, message: 'Hi Pat, it arrives Tuesday. ROA', shadow: false, at: undefined });
+  assert.deepStrictEqual({ ...log, at: undefined }, { dealId: '111', approvedBy: 'blake@example.com', lineId: '67519', to: '+14355550199', wouldGoTo: null, message: 'Hi Pat, it arrives Tuesday. ROA', shadow: false, card: null, at: undefined });
   assert.deepStrictEqual([h.notes[0].contactId, h.notes[0].deliveryId], ['77', '888']);
   assert.strictEqual(h.notes[0].body, renderTextNote({ message: 'Hi Pat, it arrives Tuesday. ROA', name: 'Pat Sample', number: '+14355550199', approver: 'Blake Locke', line: LINE, now: NOW }));
   assert.ok(h.notes[0].body.includes('approved by Blake Locke'));
@@ -220,4 +220,45 @@ test('a signature the model adds anyway is cut, and nothing else', async () => {
   assert.strictEqual(await draft('Hi Pat, it arrives Tuesday. - ROA'), 'Hi Pat, it arrives Tuesday.');
   assert.strictEqual(await draft('See you Tuesday! The ROA team'), 'See you Tuesday!');
   assert.strictEqual(await draft('Hi Pat, ROA has your arm in.'), 'Hi Pat, ROA has your arm in.');
+});
+
+test('after a send the draft card becomes a Sent card with no button, and the same draft cannot send again', async () => {
+  const sends = [];
+  const updates = [];
+  const firestore = createFakeFirestore();
+  const db = createDb({ firestore, now: () => NOW });
+  await db.recordBrief({ dealId: '111', dealNumber: '90001', store: 'UT', contactId: '77', noteId: '9', signature: {} });
+  const texts = createTexts({
+    anthropic: {},
+    db,
+    hubspot: { get: async () => ({ properties: { firstname: 'Pat', lastname: 'Sample', mobilephone: MOBILE } }) },
+    createNote: async () => '700',
+    findDealSpace: async () => null,
+    aloware: { sendApproved: async (s) => (sends.push(s), { to: s.to }) },
+    line: LINE,
+    log: () => {},
+    endpoint: 'e',
+    updateMessage: async (name, m) => updates.push([name, m]),
+    now: () => NOW,
+  });
+  const CARD = 'spaces/DEAL/messages/abc.123';
+  // The draft card's name rides from the review into the dialog's buttons.
+  const dialog = await texts.review({ params: { d: '111', n: '90001', m: 'Hi' }, messageName: CARD });
+  const approve = dialog.sections[0].widgets.at(-1).buttonList.buttons[0].onClick.action.parameters;
+  assert.deepStrictEqual(approve.find((x) => x.key === 'c'), { key: 'c', value: CARD });
+  const send = () => texts.send({ params: { d: '111', n: '90001', c: CARD }, formInputs: { message: 'Hi', confirm: 'yes' }, userEmail: 'b', userDisplayName: 'Blake Locke' });
+  await send();
+  assert.deepStrictEqual(updates, [[CARD, sentCard({ dealNumber: '90001', name: 'Pat Sample', number: '+14355550199', message: 'Hi', approver: 'Blake Locke', line: LINE, now: NOW })]]);
+  assert.ok(!JSON.stringify(updates[0][1]).includes('Review and send'));
+  assert.strictEqual(await send(), SAY.alreadySent);
+  assert.strictEqual(sends.length, 1);
+});
+
+test('updateMessage replaces only one of Basecamp messages by name', async () => {
+  const { createMessageUpdater } = require('../src/chat/send');
+  const requests = [];
+  const update = createMessageUpdater({ auth: { getClient: async () => ({ request: async (r) => requests.push(r) }) } });
+  await update('spaces/A/messages/m.1', { cardsV2: [{ cardId: 'x' }] });
+  assert.deepStrictEqual([requests[0].method, requests[0].url, requests[0].data], ['PATCH', 'https://chat.googleapis.com/v1/spaces/A/messages/m.1?updateMask=text,cardsV2', { text: '', cardsV2: [{ cardId: 'x' }] }]);
+  await assert.rejects(update('spaces/A/../B', 'x'), /invalid message name/);
 });

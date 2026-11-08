@@ -226,7 +226,8 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
         return { status: 200, body: closeDialog() };
       }
       if (action === 'textReview') {
-        const dialog = await reviewText({ params: event.parameters, userEmail: event.userEmail });
+        // The draft card's own message name rides into the dialog, tying the send to its draft.
+        const dialog = await reviewText({ params: event.parameters, userEmail: event.userEmail, messageName: event.messageName });
         return { status: 200, body: dialog ? dialogFor(dialog) : closeDialog() };
       }
       const said = await sendText({ params: event.parameters, formInputs: event.formInputs, userEmail: event.userEmail, userDisplayName: event.userDisplayName });

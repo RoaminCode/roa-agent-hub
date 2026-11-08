@@ -27,7 +27,7 @@ const http = require('http');
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const { createVerifier } = require('./chat/verify');
-const { createChatSender, createDirectMessageFinder } = require('./chat/send');
+const { createChatSender, createDirectMessageFinder, createMessageUpdater } = require('./chat/send');
 const { renderHome } = require('./chat/homeCard');
 const { createHubSpotClient } = require('./hubspot/client');
 const { createDealContext } = require('./hubspot/dealContext');
@@ -179,6 +179,7 @@ function features(audience) {
         findDealSpace,
         aloware: createAloware({ token: ALOWARE_API_TOKEN, allowedNumbers: TEXT_TEST_TO ? [TEXT_TEST_TO] : null }),
         testTo: TEXT_TEST_TO || null,
+        updateMessage: createMessageUpdater(),
         line: { id: '67519', label: 'UT - Sales, (385) 378-8538' },
         log,
         endpoint: audience,
