@@ -143,6 +143,32 @@ test('Home reads deal spaces from the database and checks membership per viewer'
   ]);
 });
 
+test('one deal space that cannot be read does not hide the others on Home', async () => {
+  const db = { listDealSpaces: async () => [
+    { dealNumber: '90001', spaceName: 'spaces/A', uri: 'u/A' },
+    { dealNumber: '90002', spaceName: 'spaces/GONE', uri: 'u/G' },
+    { dealNumber: '90003', spaceName: 'spaces/DOWN', uri: 'u/D' },
+  ] };
+  const fail = (status) => Object.assign(new Error('chat'), { status });
+  const logs = [];
+  const spacesFor = createDealSpaceIndex({
+    db,
+    log: (level, message, fields) => logs.push([level, fields.dealNumber]),
+    spaces: { isMember: async (space) => {
+      if (space === 'spaces/GONE') throw fail(403);
+      if (space === 'spaces/DOWN') throw fail(500);
+      return true;
+    } },
+  });
+  // Deleted (or Basecamp removed): left out, so the tile offers "Create space". A passing
+  // failure: that one tile shows no space button.
+  assert.deepStrictEqual([...(await spacesFor('users/1'))], [
+    ['90001', { uri: 'u/A', member: true }],
+    ['90003', { uri: null, member: true }],
+  ]);
+  assert.deepStrictEqual(logs, [['INFO', '90002'], ['WARNING', '90003']]);
+});
+
 test('opens a space: claim, brief, create and record at once, member, brief and pin, note, link back', async () => {
   const { calls, logs, run, data } = harness();
   await run();

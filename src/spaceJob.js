@@ -253,11 +253,29 @@ function createAccessRequests({ findDealSpace, spaces, db, sendMessage, findDire
 // Which open deals have a deal space, for Home, from Basecamp's records; whether the
 // viewer is in each space is checked with Chat on each Home open.
 // Returns spacesFor(userName): Map(dealNumber -> { uri, member }).
-function createDealSpaceIndex({ spaces, db, store = 'UT' }) {
+// One space that cannot be read never hides the others. Chat answers 403 for a space that
+// was deleted or that Basecamp was removed from: that deal is left out, so its tile offers
+// "Create space" (which opens or adopts one). Any other failure leaves that one deal with
+// no space button for this open of Home.
+function createDealSpaceIndex({ spaces, db, store = 'UT', log = () => {} }) {
   return async function spacesFor(userName) {
     const list = await db.listDealSpaces(store);
-    const members = await Promise.all(list.map((sp) => spaces.isMember(sp.spaceName, userName)));
-    return new Map(list.map((sp, i) => [sp.dealNumber, { uri: sp.uri, member: members[i] }]));
+    const entries = await Promise.all(
+      list.map(async (sp) => {
+        try {
+          return [sp.dealNumber, { uri: sp.uri, member: await spaces.isMember(sp.spaceName, userName) }];
+        } catch (err) {
+          const status = err.status || (err.response && err.response.status);
+          if (status === 403) {
+            log('INFO', 'recorded deal space cannot be read; home offers a new one', { dealNumber: sp.dealNumber });
+            return null;
+          }
+          log('WARNING', 'deal space membership unavailable for home', { dealNumber: sp.dealNumber, status: status || null });
+          return [sp.dealNumber, { uri: null, member: true }];
+        }
+      }),
+    );
+    return new Map(entries.filter(Boolean));
   };
 }
 

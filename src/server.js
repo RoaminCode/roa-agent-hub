@@ -259,7 +259,7 @@ function features(audience) {
     'access request',
     hubspot ? createAccessRequests({ findDealSpace, spaces, db, sendMessage, findDirectMessage, log }) : async () => {},
   );
-  const spacesFor = hubspot ? createDealSpaceIndex({ spaces, db }) : null;
+  const spacesFor = hubspot ? createDealSpaceIndex({ spaces, db, log }) : null;
 
   const listOpenDeals = hubspot ? createOpenDeals({ hubspot }) : null;
   // Loading deals takes about 4 seconds; a Brief tap redraws Home and should answer at
