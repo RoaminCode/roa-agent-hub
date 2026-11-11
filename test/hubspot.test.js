@@ -270,6 +270,11 @@ test('finding a deal space reads only the deal and its brief note', async () => 
   assert.ok(found.deal.id);
   assert.strictEqual((await createDealContext({ hubspot: fakeHubSpot() }).findDealSpace({ dealNumber: '90001' })).spaceName, null);
   assert.strictEqual(await createDealContext({ hubspot: fakeHubSpot({ deals: 2 }) }).findDealSpace({ dealNumber: '90001' }), null);
+  // A deal Basecamp has no record of: its one contact is the Roamer; with several, none is guessed.
+  const fresh = await createDealContext({ hubspot: fakeHubSpot(), db: { getDeal: async () => null } }).findDealSpace({ dealNumber: '90001' });
+  assert.deepStrictEqual([fresh.contactId, fresh.contactCount], ['77', 1]);
+  const several = await createDealContext({ hubspot: fakeHubSpot({ contacts: [77, 78] }), db: { getDeal: async () => null } }).findDealSpace({ dealNumber: '90001' });
+  assert.deepStrictEqual([several.contactId, several.contactCount], [null, 2]);
 });
 
 test('createNote puts the note on the Roamer and the Delivery record, never the deal', async () => {
@@ -354,7 +359,8 @@ test('saving a brief note records its id and what it was built from', async () =
   const rec = firestore.data.deals['111'];
   assert.strictEqual(rec.briefNoteId, '321');
   assert.strictEqual(rec.contactId, '77');
-  assert.deepStrictEqual({ ...rec.briefSignature, ids: undefined }, { contactId: '77', itemCount: 1, newestAt: '2026-11-01T00:00:00Z', ids: undefined });
+  assert.deepStrictEqual({ ...rec.briefSignature, ids: undefined, content: undefined }, { contactId: '77', itemCount: 1, newestAt: '2026-11-01T00:00:00Z', ids: undefined, content: undefined });
+  assert.match(rec.briefSignature.content, /^[0-9a-f]{16}$/, 'what the items said is kept as a hash, never the words');
   assert.match(rec.briefSignature.ids, /^[0-9a-f]{16}$/);
   assert.strictEqual(rec.dealNumber, '90001');
 });

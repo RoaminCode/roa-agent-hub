@@ -4,7 +4,8 @@
 // turns that into an instant, checks it is ahead, and confirms it back, so a misread time
 // is seen at once. Uses the same small model as routing.
 
-const { MODEL, costOf } = require('./askRouter');
+const { MODEL, EFFORT, MAX_TOKENS } = require('./askRouter');
+const { runStructured } = require('./run');
 
 const SYSTEM = `You read reminder requests for ROA OFF-ROAD's Team Members. You receive the current date and time in Utah (Mountain time) and the request, for example "me let the Roamer know if we got that ordered within the hour".
 
@@ -62,30 +63,16 @@ function fromUtah(local) {
 }
 
 // { ok: true, forSelf, what, dueAt (Date), usage, costUsd } or { ok: false, reason, usage }.
-async function parseReminder({ anthropic, text, now = new Date() }) {
-  const message = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: 300,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: `Now in Utah: ${utahNow(now)}\n\n<request>\n${String(text).replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n</request>` }],
-    },
-    { timeout: 15 * 1000 },
-  );
-  const usage = message.usage;
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage };
-  let out;
-  try {
-    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
-  } catch {
-    return { ok: false, reason: 'bad_output', usage };
-  }
-  if (!out || out.understood !== true) return { ok: false, reason: 'not_understood', usage };
+async function parseReminder({ anthropic, text, now = new Date(), dealId = null }) {
+  const user = `Now in Utah: ${utahNow(now)}\n\n<request>\n${String(text).replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n</request>`;
+  const r = await runStructured({ anthropic, job: 'remind', model: MODEL, effort: EFFORT, maxTokens: MAX_TOKENS, timeout: 20 * 1000, system: SYSTEM, schema: SCHEMA, user, dealId });
+  if (!r.ok) return r;
+  const { out, usage, costUsd } = r;
+  if (out.understood !== true) return { ok: false, reason: 'not_understood', usage, costUsd };
   const dueAt = fromUtah(out.due);
   const what = String(out.what || '').trim();
-  if (!dueAt || !what) return { ok: false, reason: 'not_understood', usage };
-  return { ok: true, forSelf: out.for_self !== false, what: what.slice(0, 200), dueAt, usage, costUsd: costOf(usage) };
+  if (!dueAt || !what) return { ok: false, reason: 'not_understood', usage, costUsd };
+  return { ok: true, forSelf: out.for_self !== false, what: what.slice(0, 200), dueAt, usage, costUsd };
 }
 
 module.exports = { parseReminder, fromUtah, utahNow, SYSTEM, SCHEMA };

@@ -225,7 +225,7 @@ function createTexts({ anthropic, db, hubspot, createNote, findDealSpace, alowar
       const { contact } = await roamerOf(dealId);
       if (!contact) return SAY.noRoamer(dealNumber);
       if (!contact.numbers.length) return SAY.noNumber(contact.name);
-      const result = await draft({ anthropic, instruction: args, firstName: contact.firstName });
+      const result = await draft({ anthropic, instruction: args, firstName: contact.firstName, dealId });
       const usage = result.usage || {};
       log('INFO', result.ok ? 'text drafted' : 'text draft failed', { dealNumber, reason: result.reason || null, chars: result.ok ? result.text.length : null, inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: result.costUsd ?? null, user: userEmail, ms: Date.now() - started });
       if (!result.ok) return SAY.failed;

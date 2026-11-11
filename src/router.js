@@ -5,7 +5,8 @@
 // away and posts the Roamer brief when it is ready; "open a space for <deal#>", which
 // opens the deal's Chat space with the brief as its first post; "use this space for
 // <deal#>", said in a space a person made, which makes it the deal's space; and "note
-// <text>" in a deal space, which saves the text as a HubSpot note on the deal. App Home
+// <text>" in a deal space, which saves the text as a HubSpot note on the deal's Delivery
+// record and its Roamer. "cost" in a direct message shows what the AI has cost. App Home
 // shows open deals, each with a Brief button and its deal space: a link, a button to
 // create it, or a button to ask the space to add you.
 
@@ -26,6 +27,12 @@ const MESSAGES = {
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
   paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out. Home still shows every deal, delivery, and last contact.",
   notBriefUser: "Roamer briefs are off for you for now, to save Basecamp's AI credits for a test. Home still shows every deal, delivery, and last contact.",
+  overLimit: "Basecamp's AI reached today's spending limit and is paused until tomorrow. Home, notes, and approving texts still work.",
+  notApprover: "Approving and sending texts isn't switched on for you yet, so nothing was sent. Blake can add you.",
+  costOff: "Cost tracking isn't switched on yet.",
+  factsWorking: (n) => `Looking up deal ${n} in LightSpeed. It will be here in a moment.`,
+  factsOff: "LightSpeed lookups aren't switched on yet.",
+  factsDirectOnly: (n) => `Deal facts stay private for now: ask me for "facts ${n}" in a direct message with me.`,
   directOnly: (n) => `Roamer briefs stay private for now: ask me for deal ${n} in a direct message with me.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
@@ -58,6 +65,11 @@ function parseCommand(text) {
   if (ask) return { command: 'ask', text: ask[1].trim() };
   const remind = /^remind\b:?\s*([\s\S]*)$/i.exec(t);
   if (remind) return { command: 'remind', text: remind[1].trim() };
+  // "facts 51431" (also "lightspeed 51431"): the deal as LightSpeed has it now.
+  const facts = /^(?:facts|lightspeed)\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t.trim());
+  if (facts) return { command: 'facts', dealNumber: facts[1], store: (facts[2] || 'UT').toUpperCase() };
+  // "cost" (or "spend"): what the AI has cost lately.
+  if (/^(?:cost|spend)\s*\??$/i.test(t.trim())) return { command: 'cost' };
   let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
   if (m) return { command: 'brief', dealNumber: m[1], store: (m[2] || 'UT').toUpperCase() };
   m = /^open\s+(?:a\s+)?(?:deal\s+)?space\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
@@ -76,11 +88,20 @@ function log(severity, message, fields = {}) {
 // numbers whose brief this user started recently. See chat/homeCard.js.
 // buildHome also gets `briefsOff`: null, or why this user's briefs are off ('paused' or
 // 'notBriefUser'), so Home leaves off the Brief buttons and says why.
-// `briefsPaused` turns briefs off for everyone without a deploy (BRIEFS_PAUSED in server.js).
-// `briefUsers` lists who may start a brief, the only thing that spends AI credits. Anyone
-// else allowed keeps Home but gets a short answer instead of a brief. Left out, every
-// allowed user may brief (tests only); server.js always passes it, so an empty BRIEF_USERS
-// means nobody.
+// Three permissions, each its own list, so one never grants another:
+// `aiUsers` (AI_USERS) lists who may spend AI credits: briefs, /ask, /wow, /new, /remind, a
+// /text draft, and opening a space (it can write a brief). Anyone else allowed keeps Home
+// and notes, and gets a short answer instead. Left out, every allowed user may (tests
+// only); server.js always passes it, so an empty list means nobody.
+// `textApprovers` (TEXT_APPROVERS) lists who may approve and send a text to a Roamer.
+// Approving spends no AI credits, so it does not need them, and a pause or the daily limit
+// does not block it. Left out, it follows `aiUsers` (tests only); server.js always passes it.
+// `aiPaused` (AI_PAUSED) turns every AI job off for everyone without a deploy.
+// `overDailyLimit()` says whether today's AI spend reached the daily limit (spend.js);
+// `showCost()` returns the spend report for "cost" in a direct message.
+// `briefUsers` and `briefsPaused` are the earlier names of the first and third, still read.
+// `startFacts({ spaceName, dealNumber, store, userEmail })` looks a deal up in LightSpeed and
+// posts it where it was asked (factsJob.js); left out, LightSpeed lookups are off.
 // saveSpaceNote({ spaceName, spaceDisplayName, userEmail, userDisplayName, text }) saves a
 // note from a deal space and returns the reply; see spaceNotes.js. It spends no AI credits,
 // so it needs only ALLOWED_USERS, and works while briefs are paused.
@@ -94,16 +115,23 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, startFacts = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
-  const mayBrief = briefUsers ? new Set(briefUsers.map((u) => u.toLowerCase())) : null;
-  function briefsOffFor(userEmail) {
-    if (briefsPaused) return 'paused';
+  const lower = (users) => new Set(users.map((u) => u.toLowerCase()));
+  const aiList = aiUsers || briefUsers;
+  const mayBrief = aiList ? lower(aiList) : null;
+  const mayText = textApprovers ? lower(textApprovers) : mayBrief;
+  const paused = Boolean(aiPaused || briefsPaused);
+  // Why this person's AI jobs are off, or null: paused for everyone, not on the list, or
+  // today's spend reached the daily limit.
+  function aiOffFor(userEmail, overLimit) {
+    if (paused) return 'paused';
     if (mayBrief && !mayBrief.has(userEmail)) return 'notBriefUser';
+    if (overLimit) return 'overLimit';
     return null;
   }
   function logRefused(off, userEmail) {
-    if (off === 'notBriefUser') log('INFO', 'brief not started: user is not in BRIEF_USERS', { user: userEmail });
+    if (off === 'notBriefUser') log('INFO', 'AI job not started: user is not in AI_USERS', { user: userEmail });
   }
 
   // A brief takes about a minute and Home gives no progress bar, so a second tap on the
@@ -163,6 +191,9 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     }
 
     const isAllowed = Boolean(event.userEmail && allowed.has(event.userEmail));
+    // Read once per event (the meter keeps it for a minute), then checked wherever AI is.
+    const overLimit = isAllowed ? await Promise.resolve(overDailyLimit()).catch(() => false) : false;
+    const briefsOffFor = (userEmail) => aiOffFor(userEmail, overLimit);
 
     if (event.type === 'APP_HOME') {
       const card = isAllowed
@@ -220,14 +251,14 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
     }
 
     // Texts: "Review and send" opens the approval dialog; "Approve and send" sends the exact
-    // words in it; Cancel closes it. Only people who may brief can approve a text.
+    // words in it; Cancel closes it. Only text approvers can open the dialog or send; it
+    // spends no AI credits, so a pause or the daily limit does not stop an approval.
     if (event.type === 'CARD_CLICKED' && ['textReview', 'textSend', 'textCancel'].includes(event.parameters.action)) {
       const action = event.parameters.action;
       if (action === 'textCancel') return { status: 200, body: closeDialog() };
-      const off = briefsOffFor(event.userEmail);
-      if (off) {
-        logRefused(off, event.userEmail);
-        postNotice({ spaceName: event.spaceName, threadName: event.threadName, text: MESSAGES[off] });
+      if (mayText && !mayText.has(event.userEmail)) {
+        log('INFO', 'text not approved: user is not in TEXT_APPROVERS', { user: event.userEmail });
+        postNotice({ spaceName: event.spaceName, threadName: event.threadName, text: MESSAGES.notApprover });
         return { status: 200, body: closeDialog() };
       }
       if (action === 'textReview') {
@@ -337,6 +368,20 @@ function createRouter({ verify, allowedUsers, briefUsers, startBrief = () => {},
       else if (slash === 'wowQuick') cmd = { command: 'wow', text: '' };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
+      // What the AI has cost: for the people who may spend it, in a direct message. No AI.
+      if (cmd.command === 'cost') {
+        if (!event.isDirectMessage || (mayBrief && !mayBrief.has(event.userEmail))) return { status: 200, body: replyFor(event, MESSAGES.help) };
+        return { status: 200, body: replyFor(event, await showCost()) };
+      }
+      // The deal as LightSpeed has it, read live. No AI, so it needs no credits; in a direct
+      // message only, like a brief. Not awaited: LightSpeed can take several seconds.
+      if (cmd.command === 'facts') {
+        if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
+        if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.factsDirectOnly(cmd.dealNumber)) };
+        if (!startFacts) return { status: 200, body: replyFor(event, MESSAGES.factsOff) };
+        startFacts({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
+        return { status: 200, body: replyFor(event, MESSAGES.factsWorking(cmd.dealNumber)) };
+      }
       if (cmd.command === 'note') {
         // In a direct message the note names its deal ("note 51455 <text>"); see spaceNotes.js.
         // Answered in the request (a few HubSpot reads and one write), so the reply lands in the note's thread.

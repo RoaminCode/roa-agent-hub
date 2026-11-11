@@ -6,7 +6,8 @@
 // reused, a status answer only within 48 hours). In shadow mode nothing it says reaches the
 // asker: Blake sees it and marks it right or wrong. Uses the same small model as routing.
 
-const { MODEL, PRICE_PER_MTOK, costOf } = require('./askRouter');
+const { MODEL, PRICE_PER_MTOK, EFFORT, MAX_TOKENS } = require('./askRouter');
+const { runStructured } = require('./run');
 const { recordDate } = require('./roamerBrief');
 
 const SYSTEM = `You help ROA OFF-ROAD's Team Members reuse answers they have already given about one deal. You receive a new question and the deal's earlier questions and answers, each filed under a topic note with its id, every line dated and attributed.
@@ -48,30 +49,15 @@ function formatEarlier({ question, notes }) {
 
 // { ok: true, decision, noteId, answer, answeredBy, answeredOn, kind, reason, usage, costUsd }
 // or { ok: false, reason, usage }. A note id it names must be one it was given.
-async function checkEarlier({ anthropic, question, notes }) {
-  const message = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: 400,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: formatEarlier({ question, notes }) }],
-    },
-    { timeout: 20 * 1000 },
-  );
-  const usage = message.usage;
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage };
-  let out;
-  try {
-    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
-  } catch {
-    return { ok: false, reason: 'bad_output', usage };
-  }
+async function checkEarlier({ anthropic, question, notes, dealId = null }) {
+  const r = await runStructured({ anthropic, job: 'reuse check', model: MODEL, effort: EFFORT, maxTokens: MAX_TOKENS, timeout: 20 * 1000, system: SYSTEM, schema: SCHEMA, user: formatEarlier({ question, notes }), dealId });
+  if (!r.ok) return r;
+  const { out, usage } = r;
   if (!out || !SCHEMA.properties.decision.enum.includes(out.decision)) return { ok: false, reason: 'bad_output', usage };
   const known = notes.some((n) => n.noteId === out.noteId);
   if (out.decision !== 'new' && !known) return { ok: false, reason: 'unknown_note', usage };
   if (out.decision === 'answered' && !String(out.answer || '').trim()) return { ok: false, reason: 'bad_output', usage };
-  return { ok: true, ...out, noteId: out.decision === 'new' ? '' : out.noteId, usage, costUsd: costOf(usage), model: message.model };
+  return { ok: true, ...out, noteId: out.decision === 'new' ? '' : out.noteId, usage, costUsd: r.costUsd, model: r.model };
 }
 
 // The Deal Knowledge rule: a fact is reused at any age; a status answer only within 48 hours.

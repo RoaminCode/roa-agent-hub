@@ -5,7 +5,7 @@
 
 const { errorFields, isOutOfCredits } = require('./errors');
 const { writeBrief, updateBrief } = require('./agents/roamerBrief');
-const { briefSignature, sameSignature } = require('./agents/briefNote');
+const { briefSignature, sameSignature, contentHash } = require('./agents/briefNote');
 const { renderBriefCard, renderContactChoice } = require('./chat/briefCard');
 
 const SORRY = {
@@ -31,9 +31,12 @@ function planBrief(context, now = Date.now()) {
   const saved = context.briefNote;
   if (!saved || !saved.brief || !saved.signature) return { mode: 'full', why: 'no saved brief' };
   const meta = context.briefMeta;
-  // An older item edited after the brief was written (a call summary filled in later).
-  const edited = meta && context.items.some((i) => i.modified && Date.parse(i.modified) > Date.parse(meta.writtenAt));
-  if (sameSignature(saved.signature, briefSignature(context)) && !edited) return { mode: 'reuse' };
+  // An older item edited after the brief was written (a call summary filled in later). A
+  // saved brief that knows what its items said is compared by their words. One saved before
+  // that goes by HubSpot's "last modified" date, which can also move when nothing was reworded.
+  const hashed = Boolean(saved.signature.content);
+  const touchedSince = (items) => Boolean(meta) && items.some((i) => i.modified && Date.parse(i.modified) > Date.parse(meta.writtenAt));
+  if (sameSignature(saved.signature, briefSignature(context)) && (hashed || !touchedSince(context.items))) return { mode: 'reuse' };
   if (saved.signature.contactId !== briefSignature(context).contactId) return { mode: 'full', why: 'different Roamer' };
   if (!meta) return { mode: 'full', why: 'no brief history' };
   if (meta.updates >= MAX_UPDATES) return { mode: 'full', why: `${MAX_UPDATES} updates since the last full read` };
@@ -45,12 +48,12 @@ function planBrief(context, now = Date.now()) {
   // Something old was removed, or added with an old date: the saved brief no longer
   // matches its own record, so only a full read is safe.
   if (older.length !== saved.signature.itemCount) return { mode: 'full', why: 'older items changed' };
-  if (older.some((i) => i.modified && Date.parse(i.modified) > Date.parse(meta.writtenAt))) return { mode: 'full', why: 'an older item was edited' };
+  if (hashed ? contentHash(older) !== saved.signature.content : touchedSince(older)) return { mode: 'full', why: 'an older item was edited' };
   if (!newItems.length) return { mode: 'full', why: 'record changed with nothing new' };
   return { mode: 'update', newItems };
 }
 
-const tokens = (result) => ({ inputTokens: result.usage ? result.usage.input_tokens : null, outputTokens: result.usage ? result.usage.output_tokens : null });
+const tokens = (result) => ({ inputTokens: result.usage ? result.usage.input_tokens : null, outputTokens: result.usage ? result.usage.output_tokens : null, costUsd: result.costUsd ?? null, model: result.model || null });
 
 // The brief for a loaded deal: the saved one from the deal's brief note when nothing in the
 // record changed since it was written (no AI call, no credits); the saved one updated from
@@ -81,14 +84,14 @@ function createBriefSource({ anthropic, log }) {
 
   async function makeBrief({ context, dealNumber, started = Date.now() }) {
     const plan = planBrief(context);
-    const base = { dealNumber, items: context.items.length, duplicates: context.duplicates, omitted: context.omitted, clipped: context.clipped, missing: context.missing };
+    const base = { dealNumber, items: context.items.length, duplicates: context.duplicates, filtered: context.filtered, omitted: context.omitted, clipped: context.clipped, missing: context.missing };
     if (plan.mode === 'reuse') {
       log('INFO', 'brief reused from HubSpot note', { dealNumber, items: context.items.length, ms: Date.now() - started });
       return { brief: context.briefNote.brief, reused: true, mode: 'reuse', newSince: [] };
     }
     if (plan.mode === 'update') {
       const result = await updateBrief({ anthropic, context, brief: context.briefNote.brief, newItems: plan.newItems });
-      log('INFO', 'brief updated', { ...base, newItems: plan.newItems.length, ok: result.ok, rebuild: result.ok ? result.rebuild : null, reason: result.reason || null, ...tokens(result), ms: Date.now() - started });
+      log('INFO', 'brief updated', { ...base, newItems: plan.newItems.length, changed: result.ok ? result.changed.length : null, ok: result.ok, rebuild: result.ok ? result.rebuild : null, reason: result.reason || null, ...tokens(result), ms: Date.now() - started });
       if (result.ok && !result.rebuild) return { brief: result.brief, reused: false, mode: 'update', newSince: result.newSince };
       plan.why = result.ok ? 'the update asked for a full read' : `the update failed (${result.reason})`;
     }

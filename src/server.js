@@ -5,10 +5,19 @@
 //   CHAT_AUDIENCE   the endpoint URL configured in the Chat app (required)
 //   ALLOWED_USERS   comma-separated emails allowed to use Basecamp (shadow mode: Blake only)
 //   PROJECT_NUMBER  Google Cloud project number, to accept Workspace add-on signed requests
-//   BRIEFS_PAUSED   "true" turns Roamer briefs off (Home stays on); remove it to turn them back on
-//   BRIEF_USERS     comma-separated emails who may start a Roamer brief, the only thing that
-//                   spends AI credits. Unset or empty means nobody. Each must also be in
-//                   ALLOWED_USERS; everyone else allowed keeps Home without Brief buttons.
+//   AI_USERS        comma-separated emails who may spend AI credits (briefs, /ask, /wow, /new,
+//                   /remind, a /text draft, opening a space). Unset or empty means nobody.
+//                   Each must also be in ALLOWED_USERS; everyone else allowed keeps Home
+//                   and notes. BRIEF_USERS, its earlier name, is read when AI_USERS is unset.
+//   TEXT_APPROVERS  comma-separated emails who may approve and send a text to a Roamer.
+//                   Its own list: being in AI_USERS does not grant it. Unset or empty means
+//                   nobody can approve a text.
+//   AI_PAUSED       "true" turns every AI job off (Home, notes, and text approvals stay on);
+//                   remove it to turn them back on. BRIEFS_PAUSED is its earlier name.
+//   RJB_LOOKUP_URL  the address of rjbDealLookup, the integration project's read-only
+//                   LightSpeed lookup (hs-ls-integration). Unset, "facts <deal#>" is off.
+//   AI_DAILY_LIMIT_USD  a dollar amount: once a day's AI spend (Utah time) reaches it, AI
+//                   jobs stop until the next day and Blake is told once. Unset, no limit.
 //   ALOWARE_API_TOKEN from Secret Manager (aloware-api-token), for approved texts (/text)
 //   TEXTS_LIVE      "true" turns approved texts on, live to Roamers; anything else, off
 //   TEXT_TEST_TO    a phone number: test mode, every approved text goes there instead (and
@@ -49,6 +58,9 @@ const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries, withDeliveryRecord } = require('./hubspot/deliveries');
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
+const { createMeter, withMeter } = require('./spend');
+const { createDealLookup } = require('./lightspeed/lookup');
+const { createFacts } = require('./factsJob');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -101,6 +113,13 @@ function features(audience) {
   const spaces = createSpaces();
   // Basecamp's own records (IDs, timestamps, statuses) in the project's Firestore database.
   const db = createDb({ firestore: new Firestore({ ignoreUndefinedProperties: true }) });
+  // What the AI costs, counted as it is spent, and the daily limit (spend.js). When the
+  // limit is reached, Blake (the shadow reviewer) is told in his direct message.
+  const tellBlake = async (text) => {
+    const person = process.env.SHADOW_REVIEWER ? await db.getPerson(process.env.SHADOW_REVIEWER) : null;
+    if (person) await sendMessage(await findDirectMessage(person.userName), text);
+  };
+  const meter = createMeter({ db, log, limitUsd: process.env.AI_DAILY_LIMIT_USD, notify: tellBlake });
   // A deal found with an open space but no Delivery record gets one (deliveries.js).
   const ensureDelivery = hubspot ? createDeliveries({ hubspot, db, log }) : null;
   const findDealSpace = hubspot ? withDeliveryRecord(createDealContext({ hubspot, db }).findDealSpace, { ensureDelivery, log }) : null;
@@ -136,7 +155,8 @@ function features(audience) {
     useSpace = later('use space', (job) => sendMessage(job.spaceName, "Briefs aren't switched on yet."));
   } else {
     const loadContext = withDeliveryRecord(createDealContext({ hubspot, db }), { ensureDelivery, log });
-    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    // Every agent is handed this client, so every call is priced and counted.
+    const anthropic = withMeter(new Anthropic({ apiKey: ANTHROPIC_API_KEY }), meter);
     const saveBriefNote = createBriefNoteSaver({ hubspot, db });
     // Bump v when the avatar image changes.
     const avatarUrl = `${new URL(audience).origin}/avatar.png?v=2`;
@@ -217,6 +237,16 @@ function features(audience) {
     };
   }
 
+  // "facts <deal#>": the deal as LightSpeed has it, through the integration's read-only
+  // lookup. Needs neither HubSpot nor AI. Posted where it was asked, when LightSpeed answers.
+  let startFacts = null;
+  if (process.env.RJB_LOOKUP_URL) {
+    const facts = createFacts({ lookupDeal: createDealLookup({ url: process.env.RJB_LOOKUP_URL }), log });
+    startFacts = later('facts', async (job) => sendMessage(job.spaceName, await facts(job)));
+  } else {
+    log('WARNING', 'LightSpeed lookups are off: RJB_LOOKUP_URL is not set');
+  }
+
   // Notes from deal spaces need HubSpot only, no AI.
   const saveSpaceNote = hubspot
     ? createSpaceNotes({ db, createNote: hubspot.createNote, findDealSpace, log })
@@ -279,7 +309,7 @@ function features(audience) {
     sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome, startFacts, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
 }
 
 function start() {
@@ -289,18 +319,23 @@ function start() {
     process.exit(1);
   }
 
-  const briefsPaused = process.env.BRIEFS_PAUSED === 'true';
-  if (briefsPaused) console.log(JSON.stringify({ severity: 'INFO', message: 'briefs are paused (BRIEFS_PAUSED)' }));
+  // The earlier names (BRIEFS_PAUSED, BRIEF_USERS) are read when the new ones are unset.
+  const env = (name, earlier) => (process.env[name] !== undefined ? process.env[name] : process.env[earlier]);
+  const aiPaused = env('AI_PAUSED', 'BRIEFS_PAUSED') === 'true';
+  if (aiPaused) console.log(JSON.stringify({ severity: 'INFO', message: 'AI jobs are paused (AI_PAUSED)' }));
 
-  // Fails closed: an unset BRIEF_USERS is an empty list, so nobody spends credits.
-  const briefUsers = list(process.env.BRIEF_USERS);
-  console.log(JSON.stringify({ severity: 'INFO', message: 'brief users', count: briefUsers.length }));
+  // Both fail closed: an unset list is empty, so nobody spends credits or approves a text.
+  const aiUsers = list(env('AI_USERS', 'BRIEF_USERS'));
+  const textApprovers = list(process.env.TEXT_APPROVERS);
+  console.log(JSON.stringify({ severity: 'INFO', message: 'permissions', aiUsers: aiUsers.length, textApprovers: textApprovers.length, dailyLimitUsd: Number(process.env.AI_DAILY_LIMIT_USD) || null }));
+  if (process.env.TEXTS_LIVE === 'true' && !textApprovers.length) console.log(JSON.stringify({ severity: 'WARNING', message: 'texts are on but TEXT_APPROVERS is empty: nobody can approve a text' }));
 
   const featureSet = features(audience);
   const handle = createRouter({
     ...featureSet,
-    briefsPaused,
-    briefUsers,
+    aiPaused,
+    aiUsers,
+    textApprovers,
     verify: createVerifier({
       audience,
       projectNumber: process.env.PROJECT_NUMBER,

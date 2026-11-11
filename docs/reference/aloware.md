@@ -1,0 +1,16 @@
+# Aloware sending
+
+The one Aloware call the hub makes, how it was verified, and the Utah lines. Read before touching `src/aloware.js` or `src/textJob.js`.
+
+- `POST https://app.aloware.io/api/v1/webhook/sms-gateway/send` with `Authorization: Bearer <token>` and JSON `line_id`, `to`, `message` (160 characters max). Returns 202 `{"message":"Message sent."}`. Delivered to the phone within seconds and logged to the HubSpot contact automatically ("Creator Type: API").
+- `user_id` sets who the text is sent as: a user ID sends as that user; 0 or omitted sends as the contact's Aloware owner (or the company if none); -1 sends as the company. An unknown ID returns 422. The first test omitted it and was credited to the contact's Aloware owner, a different Team Member.
+- Decision: every approved send will use `user_id: -1` (company). Verified by hand 2026-10-28: delivered, and HubSpot logs it with a blank sender, no owner, "Creator Type: API". The Roamer sees the same line and text either way; a blank company sender on an API text means Basecamp.
+- Rules the send code follows (built 2026-11-07 in `src/aloware.js` and `src/textJob.js`): refuse any `user_id` other than -1; send only with a logged approval of that exact draft; write a HubSpot note per send ("Sent by Basecamp, approved by [name]"); keep its own log (line, recipient, time, approver, draft). The API returns no message ID (`fields` is ignored), so sends are matched by line, recipient, and time.
+- Per Team Member text counts are not a requirement, so company sends losing Team Member credit is accepted.
+- Aloware contact owners can differ from HubSpot owners (Blake's own contact did); worth checking separately.
+- The token opens the whole Aloware account (API, MCP, Form Connect). When send code is built, the hub must expose exactly one Aloware call, the approved send, with a test that fails if any other appears. The hub's only Aloware code is `src/aloware.js` (one method). Secret `aloware-api-token`, readable only by `basecamp-router`, mounted as `ALOWARE_API_TOKEN`.
+- Utah send lines: Sales Coach from UT - Sales (line 67519, (385) 378-8538); Service Advisor from UT - Service (line 67523, (385) 454-9144). Other Utah lines: ROA UTAH MAIN LINE (67440), UTAH PARTS (67516), FABIO LINE (67439). ROA Tech Support is 63273. Other Experience Centers are mapped later.
+- Which line a send uses: the line the Roamer already hears from that Team Member, found in the contact's HubSpot SMS history (this covers personal lines like FABIO LINE); with no history, the role line above. The approval shows the line.
+- Not granted: anything for workflows, marketing, files, settings, or users. After the token exists, run each call once; a 403 names the missing scope.
+- SMS is Aloware. All communications (any department, any sending or receiving number) are on the contact, not necessarily on the deal or LS Deal object, so Basecamp reads communications from the contact. The to and from numbers on each message show which inbox sent it.
+- Calls carry `hs_call_has_transcript` and `hs_call_transcription_id`, but the transcript text itself returns 404 (see Where things stand). `hs_call_summary` and the Aloware summary in `hs_call_body` are on the call itself, and are what briefs read.

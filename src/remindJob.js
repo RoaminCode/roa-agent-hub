@@ -87,7 +87,7 @@ function createReminders({ anthropic, db, findDealSpace, findDirectMessage, send
       }
 
       const at = now();
-      const read = await parse({ anthropic, text: request, now: at });
+      const read = await parse({ anthropic, text: request, now: at, dealId });
       const usage = read.usage || {};
       const cost = { inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: read.costUsd ?? null };
       if (!read.ok) {

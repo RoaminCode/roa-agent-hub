@@ -78,7 +78,7 @@ test('the summary sees only the items it is given, escaped, and drops dashes', a
   const r = await summarizeNew({ anthropic, items: [{ ...item('9', '2026-11-06T15:00:00Z'), text: '<b>hi</b>' }] });
   assert.strictEqual(r.items[0].detail, 'Asked, twice');
   assert.ok(sent[0].messages[0].content.includes('&lt;b&gt;hi&lt;/b&gt;'));
-  assert.strictEqual(sent[0].model, 'claude-haiku-4-5-20251001');
+  assert.strictEqual(sent[0].model, 'claude-haiku-5-5');
 });
 
 test('the router: /new, "anything new?", and command 7 start in the background for people who may brief', async () => {

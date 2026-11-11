@@ -167,6 +167,7 @@ function dealWidgets(deal, today, endpoint, sent, briefsPaused, spaces) {
 const BRIEFS_OFF = {
   paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out.",
   notBriefUser: "Roamer briefs are off for you for now, to save Basecamp's AI credits for a test.",
+  overLimit: "Basecamp's AI reached today's spending limit and is paused until tomorrow.",
 };
 
 // With `briefsOff` ('paused' or 'notBriefUser'), tiles have no Brief button and the footer

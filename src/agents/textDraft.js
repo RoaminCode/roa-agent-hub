@@ -4,10 +4,11 @@
 // arrives Tuesday"). Only a draft: a Team Member reviews and approves the exact words before
 // anything is sent. Uses the small model; a text is short.
 
-const { MODEL, costOf } = require('./askRouter');
+const { MODEL, EFFORT, MAX_TOKENS } = require('./askRouter');
+const { runStructured } = require('./run');
 const { MAX_CHARS } = require('../aloware');
 
-const SYSTEM = `You draft a text message from ROA OFF-ROAD to a Roamer (a customer who bought, or is buying, an off-road trailer). A Team Member tells you what the text should say; you write it.
+const SYSTEM = `You draft a text message from ROA OFF-ROAD to a Roamer (someone who bought, or is buying, an off-road trailer). A Team Member tells you what the text should say; you write it.
 
 Rules:
 - At most ${MAX_CHARS} characters, one message. Plain words, warm and direct, like a person who knows them.
@@ -26,32 +27,18 @@ const SCHEMA = {
 const noDashes = (text) => String(text).replace(/\s*[–—]\s*/g, ', ');
 
 // { ok: true, text, usage, costUsd } or { ok: false, reason, usage }.
-async function draftText({ anthropic, instruction, firstName }) {
-  const message = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: 300,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: `<roamer_first_name>${String(firstName || 'unknown').replace(/[<>]/g, '')}</roamer_first_name>\n<instruction>\n${String(instruction).replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n</instruction>` }],
-    },
-    { timeout: 20 * 1000 },
-  );
-  const usage = message.usage;
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage };
-  let out;
-  try {
-    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
-  } catch {
-    return { ok: false, reason: 'bad_output', usage };
-  }
+async function draftText({ anthropic, instruction, firstName, dealId = null }) {
+  const user = `<roamer_first_name>${String(firstName || 'unknown').replace(/[<>]/g, '')}</roamer_first_name>\n<instruction>\n${String(instruction).replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n</instruction>`;
+  const r = await runStructured({ anthropic, job: 'text draft', model: MODEL, effort: EFFORT, maxTokens: MAX_TOKENS, timeout: 20 * 1000, system: SYSTEM, schema: SCHEMA, user, dealId });
+  if (!r.ok) return r;
+  const { out, usage, costUsd } = r;
   // No signature (Blake, 2026-11-08): a trailing "ROA" or "- ROA" the model adds anyway is cut.
   const text = noDashes(String((out && out.text) || '').trim())
     .replace(/\s*(?:[-,:]\s*)?(?:the\s+)?ROA(?:\s+(?:OFF-ROAD|team))?\.?\s*$/i, '')
     .trim();
-  if (!text) return { ok: false, reason: 'bad_output', usage };
+  if (!text) return { ok: false, reason: 'bad_output', usage, costUsd };
   // Over the limit stays as drafted: the Team Member sees the count and trims it before sending.
-  return { ok: true, text, usage, costUsd: costOf(usage) };
+  return { ok: true, text, usage, costUsd };
 }
 
 module.exports = { draftText, SYSTEM, SCHEMA };

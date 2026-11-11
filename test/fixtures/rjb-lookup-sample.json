@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "result": {
+    "found": [
+      {
+        "store": "ROA1",
+        "feed": "open",
+        "deal": {
+          "DealNo": "90001",
+          "dealstate": "Deal",
+          "stagename": "Deposit",
+          "OriginatingDate": "2026-10-01T00:00:00",
+          "DeliveryDate": "2026-11-20T00:00:00",
+          "lastmodifieddate": "2026-11-01T10:00:00",
+          "SalesmanName": "Casey Coach",
+          "salesmanager": "Morgan Lead",
+          "source": "Web",
+          "totaldownpayment": 1000,
+          "customerextraline": "Promised a full propane tank.",
+          "customernotes": "Wants delivery on a Saturday.",
+          "Units": [
+            {
+              "Year": 2026,
+              "Make": "Sample",
+              "Model": "XT16",
+              "unittype": "Travel Trailer",
+              "Newused": "N",
+              "stocknumber": "S1001",
+              "VIN": "1SAMPLE0000000001",
+              "DateReceived": "2026-10-15T00:00:00",
+              "DaysInStore": 20,
+              "deposit": 1000,
+              "Labor": [
+                { "SetupInstall": "Customer Add", "RepairOrderJobTitle": "Solar panel install", "Description": "Install 200W solar", "RetailPrice": 500, "RepairOrderNumber": "R1001", "rostatus": "In Process" },
+                { "SetupInstall": "Dealer Add", "RepairOrderJobTitle": "Leveling jacks", "Description": "Corner leveling jacks", "RetailPrice": 250, "RepairOrderNumber": null, "rostatus": null },
+                { "SetupInstall": "Prep", "RepairOrderJobTitle": "PDI", "Description": "Pre-delivery inspection", "RetailPrice": 0, "RepairOrderNumber": "R1002", "rostatus": "In Process" }
+              ],
+              "Parts": [{ "PartNumber": "P-1", "Description": "Panel", "Qty": 2, "SetupInstall": "Customer Add" }]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

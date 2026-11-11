@@ -1,8 +1,11 @@
 'use strict';
 
 // Compact "RJB view" of a LightSpeed deal lookup result.
-// Input: the full lookup response ({ ok, result: { found: [ ... ] } }) or a single found[] entry.
-// Output: the small object the RJB agent reads instead of the raw ~80 KB deal.
+// Input: the full lookup response ({ ok, result: { found: [ ... ] } }) or a single found[] entry
+// ({ store, feed, deal }), as the integration's rjbDealLookup returns it (lightspeed/lookup.js).
+// Output: the small object the RJB agent and the facts card read.
+// The lookup never returns the Roamer's LightSpeed record, so the Roamer's name comes from
+// HubSpot: pass it as `roamer` ({ name, firstName }) when the caller has it.
 
 const STORES = {
   ROA1: 'Utah',
@@ -95,7 +98,7 @@ function classifyLabor(labor, flags) {
   return { mods, prep };
 }
 
-function toRjbView(lookup) {
+function toRjbView(lookup, { roamer = null } = {}) {
   const found = lookup && lookup.result ? (lookup.result.found || [])[0] : lookup;
   if (!found || !found.deal) {
     throw new Error('toRjbView: no deal found in lookup result');
@@ -103,6 +106,7 @@ function toRjbView(lookup) {
 
   const deal = found.deal;
   const unit = (deal.Units || [])[0] || {};
+  // An older sample of the lookup carried a `customer` block; the live function does not.
   const customer = found.customer || {};
   const flags = [];
 
@@ -115,26 +119,29 @@ function toRjbView(lookup) {
 
   return {
     view: 'rjb',
-    version: 1,
+    version: 2,
+    // "open" or "closed": which LightSpeed feed the deal came from. A closed deal has no
+    // state, and carries its deposit on the deal instead of the unit.
+    feed: found.feed || null,
     deal: {
       dealNo: deal.DealNo,
       store: found.store || null,
       experienceCenter: STORES[found.store] || null,
-      state: deal.dealstate,
-      stage: deal.stagename,
+      state: deal.dealstate || null,
+      stage: deal.stagename || null,
       opened: cleanDate(deal.OriginatingDate),
       deliveryDate: cleanDate(deal.DeliveryDate),
       lastModified: deal.lastmodifieddate || null,
       salesCoach: cleanText(deal.SalesmanName),
       salesManager: cleanText(deal.salesmanager),
       source: cleanText(deal.source),
-      deposit: Number(unit.deposit) || Number(deal.totaldownpayment) || 0,
+      deposit: Number(unit.deposit) || Number(deal.deposit) || Number(deal.totaldownpayment) || 0,
       salesNotes: cleanText(deal.customerextraline),
       customerNotes: cleanText(deal.customernotes),
     },
     roamer: {
-      name: cleanText(customer.CustFullName),
-      firstName: cleanText(customer.FirstName),
+      name: cleanText(customer.CustFullName) || cleanText(roamer && roamer.name),
+      firstName: cleanText(customer.FirstName) || cleanText(roamer && roamer.firstName),
       city: cleanText(customer.City),
       state: cleanText(customer.State),
     },

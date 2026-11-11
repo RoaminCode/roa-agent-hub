@@ -3,13 +3,18 @@
 // Picks which ROA role owns the answer to a Team Member's question. It never answers the
 // question: in shadow mode the question goes to Blake, labeled with the role it would have
 // gone to. Sees only the question, not the Roamer's record. Uses the smallest current
-// model, since the job is one short classification.
+// model (agents/models.js), since the job is one short classification.
 
-const MODEL = 'claude-haiku-4-5-20251001';
+const { MODELS, PRICES, costOf: costFor } = require('./models');
+const { runStructured } = require('./run');
 
-// Estimated US dollars per million tokens for MODEL, for the cost log. Check Anthropic's
-// pricing page if these look off; the logged token counts are exact either way.
-const PRICE_PER_MTOK = { input: 1, output: 5 };
+// The small model every narrow job shares, and its price, for the cost log.
+const MODEL = MODELS.small;
+const PRICE_PER_MTOK = PRICES[MODEL];
+// It thinks before it answers, and thinking counts toward the token limit: low effort keeps
+// that short, and the limit leaves room for it ahead of a short answer.
+const EFFORT = 'low';
+const MAX_TOKENS = 1024;
 
 // Who owns what, from ROA's role map and delegation paths ("roa-roles"). "Service Advisor",
 // never "Service Writer".
@@ -53,33 +58,19 @@ const SCHEMA = {
   additionalProperties: false,
 };
 
-const costOf = (usage) => (usage ? (usage.input_tokens * PRICE_PER_MTOK.input + usage.output_tokens * PRICE_PER_MTOK.output) / 1e6 : null);
+const costOf = (usage) => costFor(usage, MODEL);
 
 // { ok: true, role, reason, topic, clarify, usage, costUsd } or { ok: false, reason, usage }.
 // `clarify` is a question back to the asker, only when the role is "Not sure".
-async function routeQuestion({ anthropic, question }) {
-  const message = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: 200,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: `<question>\n${question}\n</question>` }],
-    },
-    { timeout: 20 * 1000 },
-  );
-  const usage = message.usage;
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage };
-  let out;
-  try {
-    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
-  } catch {
-    return { ok: false, reason: 'bad_output', usage };
-  }
-  if (!out || !SCHEMA.properties.role.enum.includes(out.role) || typeof out.reason !== 'string' || typeof out.topic !== 'string') return { ok: false, reason: 'bad_output', usage };
+// `dealId`, when the question is about a deal, counts the cost toward that deal.
+async function routeQuestion({ anthropic, question, dealId = null }) {
+  const r = await runStructured({ anthropic, job: 'route', model: MODEL, effort: EFFORT, maxTokens: MAX_TOKENS, timeout: 20 * 1000, system: SYSTEM, schema: SCHEMA, user: `<question>\n${question}\n</question>`, dealId });
+  if (!r.ok) return r;
+  const { out, usage } = r;
+  if (!SCHEMA.properties.role.enum.includes(out.role) || typeof out.reason !== 'string' || typeof out.topic !== 'string') return { ok: false, reason: 'bad_output', usage, costUsd: r.costUsd, model: r.model };
   const topic = out.topic.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) || 'general';
   const clarify = out.role === UNSURE && typeof out.clarify === 'string' ? out.clarify.trim() : '';
-  return { ok: true, role: out.role, reason: out.reason.trim(), topic, clarify, usage, costUsd: costOf(usage), model: message.model };
+  return { ok: true, role: out.role, reason: out.reason.trim(), topic, clarify, usage, costUsd: r.costUsd, model: r.model };
 }
 
-module.exports = { routeQuestion, costOf, ROLES, UNSURE, SYSTEM, SCHEMA, MODEL, PRICE_PER_MTOK };
+module.exports = { routeQuestion, costOf, ROLES, UNSURE, SYSTEM, SCHEMA, MODEL, PRICE_PER_MTOK, EFFORT, MAX_TOKENS };

@@ -123,7 +123,7 @@ function createWow({ anthropic, db, library, readBriefNote, findDealSpace, creat
       if (!saved || !saved.brief) return SAY.noBrief(dealNumber);
 
       const [ideas, standards] = await Promise.all([library.listIdeas(), library.standards()]);
-      const result = await suggest({ anthropic, brief: saved.brief, ideas, standards });
+      const result = await suggest({ anthropic, brief: saved.brief, ideas, standards, dealId });
       const usage = result.usage || {};
       log('INFO', result.ok ? 'wow ideas' : 'wow ideas failed', {
         dealNumber,
@@ -132,6 +132,7 @@ function createWow({ anthropic, db, library, readBriefNote, findDealSpace, creat
         fromLibrary: result.ok ? result.suggestions.filter((s) => s.ideaId).length : 0,
         inputTokens: usage.input_tokens ?? null,
         outputTokens: usage.output_tokens ?? null,
+        costUsd: result.costUsd ?? null,
         user: userEmail,
         ms: Date.now() - started,
       });

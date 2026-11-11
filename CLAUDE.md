@@ -9,7 +9,8 @@ Basecamp is ROA's Google Chat app. This repo is the hub behind it: the router th
   - Update "Where things stand" and "Next steps" to match what actually happened this session.
   - Add new decisions to "Current decisions".
   - When a decision is replaced, **delete the old one**. Do not leave it with a pointer to the new one ("see below", "replaced by"). If deleting would lose context someone still needs, move it under "Retired, do not use" instead. Nothing under that heading is ever acted on.
-  - Keep it short. It is a snapshot of now, not a history; git holds the history.
+  - Keep it short, about 120 lines. It is a snapshot of now, not a history; git holds the history. Detail that stays true (how a feature works, an API's quirks, a rule set) goes in the matching file under `docs/reference/`, with a one-line decision in `HANDOFF.md`.
+- **`docs/reference/` holds the stable detail** (features, deal spaces and routing, the clock, App Home, HubSpot, Aloware, Google Chat). Read the file for the area a piece of work touches before changing it; do not load them all at session start.
 
 ## Project facts
 
@@ -17,7 +18,7 @@ Basecamp is ROA's Google Chat app. This repo is the hub behind it: the router th
 - Google Cloud project: `roa-agent-hub` (router service account `basecamp-router@roa-agent-hub.iam.gserviceaccount.com`).
 - The production LightSpeed/HubSpot sync lives in a separate project, `hs-ls-integration`. Never deploy to or change it from this repo. The hub only ever gets read-only access to specific endpoints there.
 - gcloud may not be on PATH in an already-open shell. On the laptop it is at `C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd`; on other machines find it with `where gcloud`.
-- Basecamp runs on Cloud Run as service `basecamp` in `us-central1`. Deploy with `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (existing settings and env vars are kept, including `BRIEFS_PAUSED`; a deploy does not resume paused briefs).
+- Basecamp runs on Cloud Run as service `basecamp` in `us-central1`. Deploy with `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (existing settings and env vars are kept, including `AI_PAUSED` and its earlier name `BRIEFS_PAUSED`; a deploy does not resume paused AI jobs).
 - Basecamp's timer is the Cloud Scheduler job `basecamp-tick` (`us-central1`, every 5 minutes), which calls `POST /tasks/tick` signed as `basecamp-router`; only that signer is accepted. It sends due reminders.
 - Node.js 24. Run tests with `npm test`.
 - Design spec: "RJB Agent Spec" in Claude Docs, https://claude.ai/artifact/BuBh95ZHEVuLrFXrnSXht9

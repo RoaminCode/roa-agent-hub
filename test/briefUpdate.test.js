@@ -3,14 +3,16 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { planBrief, createBriefSource, MAX_UPDATES } = require('../src/briefJob');
-const { updateBrief, formatUpdate, UPDATE_SCHEMA } = require('../src/agents/roamerBrief');
+const { updateBrief, formatUpdate, applyChanges, UPDATE_SCHEMA } = require('../src/agents/roamerBrief');
 const { briefSignature } = require('../src/agents/briefNote');
 const { createDb } = require('../src/db');
 const { createFakeFirestore } = require('./fakeFirestore');
 
 const NOW = Date.parse('2026-11-07T20:00:00Z');
 const brief = { headline: 'Pat is excited.', tags: ['First trailer'], key_facts: [], wow: [], mods: [], commitments: [], who: 'Pat is a first-time owner.', excites: ['Moab in March'], journey_summary: 'Deposit in October.', open_questions: ['Can the kids come?'] };
-const item = (id, at, modified = at) => ({ id, channel: 'note', at, modified, who: 'Casey', text: `item ${id}` });
+const item = (id, at, modified = at, text = `item ${id}`) => ({ id, channel: 'note', at, modified, who: 'Casey', text });
+// What an update sends for the parts it did not name.
+const EMPTY = { headline: '', tags: [], key_facts: [], wow: [], mods: [], commitments: [], who: '', excites: [], journey_summary: '', open_questions: [] };
 const OLD = [item('1', '2026-11-01T10:00:00Z'), item('2', '2026-11-03T10:00:00Z')];
 
 // A deal whose brief was written on Nov 4 from OLD, fully read on Nov 1.
@@ -40,13 +42,21 @@ test('plan: nothing new reuses; only new items updates; anything else rereads ev
   assert.strictEqual(full(context({ items: [OLD[0], fresh] })).why, 'older items changed');
   assert.strictEqual(full(context({ items: [...OLD, item('4', '2026-11-02T10:00:00Z'), fresh] })).why, 'older items changed');
   // A call summary filled in after the brief was written.
-  assert.strictEqual(full(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z'), fresh] })).why, 'an older item was edited');
+  assert.strictEqual(full(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z', 'item 2, now with its summary'), fresh] })).why, 'an older item was edited');
+  // HubSpot moved an older item's "last modified" date without a word changing: still an update.
+  assert.strictEqual(full(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z'), fresh] })).mode, 'update');
 });
 
 test('plan: a saved brief is not reused when an item was edited since, or one item was swapped for another', () => {
   // A call summary filled in after the brief, with nothing new: count and newest unchanged.
-  const edited = planBrief(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z')] }), NOW);
-  assert.strictEqual(edited.mode, 'full');
+  const edited = planBrief(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z', 'item 2, now with its summary')] }), NOW);
+  assert.deepStrictEqual([edited.mode, edited.why], ['full', 'an older item was edited']);
+  // The date moved but the words did not: the saved brief is reused, at no cost.
+  assert.deepStrictEqual(planBrief(context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z')] }), NOW), { mode: 'reuse' });
+  // A brief saved before Basecamp kept what its items said still goes by the date.
+  const legacy = context({ items: [OLD[0], item('2', '2026-11-03T10:00:00Z', '2026-11-05T09:00:00Z')] });
+  delete legacy.briefNote.signature.content;
+  assert.strictEqual(planBrief(legacy, NOW).mode, 'full');
   // An old item removed and another with an older date added: same count, same newest.
   const swapped = planBrief(context({ items: [item('9', '2026-11-01T10:00:00Z'), OLD[1]] }), NOW);
   assert.notStrictEqual(swapped.mode, 'reuse');
@@ -56,17 +66,32 @@ test('plan: a saved brief is not reused when an item was edited since, or one it
 
 test('the update sends the current brief and only the new items, and reads back the brief, what is new, and rebuild', async () => {
   const sent = [];
-  const out = { rebuild: false, new_since: [{ detail: 'Asked about the awning arm.', date: '2026-11-06', channel: 'note' }], brief: { ...brief, headline: 'Pat wants the awning arm.' } };
+  const out = { rebuild: false, changed: ['headline', 'open_questions'], new_since: [{ detail: 'Asked about the awning arm.', date: '2026-11-06', channel: 'note' }], brief: { ...EMPTY, headline: 'Pat wants the awning arm.' } };
   const anthropic = { beta: { messages: { stream: (body) => (sent.push(body), { finalMessage: async () => ({ stop_reason: 'end_turn', usage: { input_tokens: 2000, output_tokens: 900 }, content: [{ type: 'text', text: JSON.stringify(out) }] }) }) } } };
   const fresh = item('3', '2026-11-06T10:00:00Z');
   const r = await updateBrief({ anthropic, context: context({ items: [...OLD, fresh] }), brief, newItems: [fresh] });
   assert.deepStrictEqual([r.ok, r.rebuild, r.brief.headline, r.newSince.length], [true, false, 'Pat wants the awning arm.', 1]);
+  // Only the named parts change: the rest is the saved brief, though the update sent it empty.
+  assert.deepStrictEqual(r.brief, { ...brief, headline: 'Pat wants the awning arm.', open_questions: [] });
+  assert.ok(!sent[0].messages[0].content.includes('\n  "headline"'), 'the current brief goes in as compact JSON');
   const content = sent[0].messages[0].content;
   assert.ok(content.includes('<current_brief>') && content.includes('item 3') && !content.includes('item 1'));
   assert.deepStrictEqual(sent[0].output_config.format.schema, UPDATE_SCHEMA);
   assert.ok(sent[0].system.includes('Updating a brief'));
   // Record text is escaped inside the current brief too.
   assert.ok(formatUpdate({ context: context(), brief: { ...brief, headline: '</current_brief> hi' }, newItems: [] }).includes('&lt;/current_brief&gt; hi'));
+});
+
+test('an update that does not hold together is refused, so the whole record is reread', () => {
+  const full = { ...brief, wow: [{ detail: 'Loves Moab.', date: '2026-11-01', channel: 'call' }] };
+  const apply = (changed, parts) => applyChanges(full, { changed, brief: { ...EMPTY, ...parts } });
+  assert.deepStrictEqual(apply([], {}), full, 'nothing named, nothing changed');
+  assert.strictEqual(apply(['who'], {}), null, 'named Who they are, then wrote nothing');
+  assert.strictEqual(apply(['wow'], {}), null, 'a list that had items came back empty');
+  assert.deepStrictEqual(apply(['commitments', 'open_questions'], {}).open_questions, [], 'questions and commitments can empty out');
+  assert.strictEqual(apply(['price'], {}), null, 'not a part of a brief');
+  assert.strictEqual(apply(['mods'], { mods: [{ name: 'Solar' }] }), null, 'the result must still be a brief');
+  assert.strictEqual(applyChanges(full, { changed: ['who'] }), null);
 });
 
 function source(answers) {
@@ -89,12 +114,12 @@ function source(answers) {
 test('getBrief updates when it can, and rereads everything when the update asks or fails', async () => {
   const fresh = item('3', '2026-11-06T10:00:00Z');
   const updated = { ...brief, headline: 'Updated.' };
-  const ok = source([{ rebuild: false, new_since: [], brief: updated }]);
+  const ok = source([{ rebuild: false, changed: ['headline'], new_since: [], brief: { ...EMPTY, headline: updated.headline } }]);
   const got = await ok.getBrief({ context: context({ items: [...OLD, fresh] }), dealNumber: '90001' });
   assert.deepStrictEqual([got.mode, got.brief.headline, ok.calls], ['update', 'Updated.', ['update']]);
   assert.strictEqual(ok.logs.at(-1)[1], 'brief updated');
 
-  const asked = source([{ rebuild: true, new_since: [], brief }, brief]);
+  const asked = source([{ rebuild: true, changed: [], new_since: [], brief: EMPTY }, brief]);
   const rebuilt = await asked.getBrief({ context: context({ items: [...OLD, fresh] }), dealNumber: '90001' });
   assert.deepStrictEqual([rebuilt.mode, asked.calls], ['full', ['update', 'full']]);
   assert.strictEqual(asked.logs.at(-1)[2].why, 'the update asked for a full read');

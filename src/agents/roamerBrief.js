@@ -6,7 +6,10 @@
 // them, Journey so far, and Open questions. One model call, no tools. The record is data the
 // Roamer and Team Members wrote, never instructions.
 
-const MODEL = 'claude-opus-5-5';
+const { MODELS } = require('./models');
+const { settle } = require('./run');
+
+const MODEL = MODELS.brief;
 
 const SYSTEM = `You are Basecamp, the assistant for the Team Members of ROA Off-Road, an off-road trailer Experience Center. ROA sells transformation, not trailers: the Roamer's life, family, destinations, and dream trips matter more than specs. Every touchpoint should create at least one unexpected, personal moment.
 
@@ -157,22 +160,19 @@ async function writeBrief({ anthropic, context }) {
     messages: [{ role: 'user', content: formatRecord(context) }],
   });
   const message = await stream.finalMessage();
+  // Counted whatever comes back: a brief that fails its checks was still paid for.
+  const spent = await settle({ anthropic, job: 'brief', asked: MODEL, message, dealId: context.deal ? context.deal.id : null });
 
-  if (message.stop_reason === 'refusal') {
-    return { ok: false, reason: 'refusal', usage: message.usage };
-  }
-  if (message.stop_reason === 'max_tokens') {
-    return { ok: false, reason: 'too_long', usage: message.usage };
-  }
-  const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', ...spent };
+  if (message.stop_reason === 'max_tokens') return { ok: false, reason: 'too_long', ...spent };
   let brief;
   try {
-    brief = JSON.parse(text);
+    brief = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
   } catch {
-    return { ok: false, reason: 'bad_output', usage: message.usage };
+    return { ok: false, reason: 'bad_output', ...spent };
   }
-  if (!isBrief(brief)) return { ok: false, reason: 'bad_output', usage: message.usage };
-  return { ok: true, brief, usage: message.usage, model: message.model };
+  if (!isBrief(brief)) return { ok: false, reason: 'bad_output', ...spent };
+  return { ok: true, brief, ...spent };
 }
 
 // Updating a saved brief from only what is new, instead of rereading the whole record.
@@ -180,30 +180,55 @@ async function writeBrief({ anthropic, context }) {
 // the new items change too much to patch, so Basecamp rereads everything instead.
 const UPDATE_SYSTEM = `${SYSTEM}
 
-Updating a brief: this time you receive the deal's current brief, written earlier from the full record, and only the record items added since then. Return the whole brief, updated:
-- Keep every item that still holds, with its original date and channel.
-- Add what the new items bring, under the same rules and limits. When a new item changes something already in the brief (a mod's status, a date, a plan), replace that item with the newer one. When it contradicts it, say so in that item and give each version.
-- Rewrite the headline and tags only if the new items change what matters most.
-- Keep Who they are, What excites them, and Journey so far true with the new items, rewriting them where the new items change them.
-- Open questions: remove any the new items answer or settle, update any that changed, and add any new ones the new items raise.
+Updating a brief: this time you receive the deal's current brief, written earlier from the full record, and only the record items added since then. Return only the parts of the brief the new items change. Basecamp keeps every other part exactly as it is.
+- In "changed", name each part the new items change: headline, tags, key_facts, wow, mods, commitments, who, excites, journey_summary, open_questions. Leave a part out when it still holds as written.
+- In "brief", write each part named in "changed" in full, as it should now read. For a list, that is the whole list: every item that still holds, with its original date and channel, plus what the new items bring, under the same rules and limits. Give every part not named in "changed" as an empty string or an empty list; it is ignored.
+- When a new item changes something already in the brief (a mod's status, a date, a plan), replace that item with the newer one. When it contradicts it, say so in that item and give each version.
+- Change the headline and tags only if the new items change what matters most.
+- Who they are, What excites them, and Journey so far must stay true with the new items: name and rewrite the ones the new items change.
+- Open questions: when the new items answer or settle one, change one, or raise a new one, name open_questions and give the whole list as it now stands.
 - In "new_since", list what the new items added or changed, one short sentence each with its date and channel, at most 8, most important first; empty if the new items hold nothing worth a Team Member's attention.
-- Set "rebuild" to true, with the rest as you best can, only if the new items change so much that patching the brief would mislead (for example, the Roamer changed trailers or the deal was restructured). Basecamp then rereads the whole record.`;
+- Set "rebuild" to true, with "changed" empty, only if the new items change so much that patching the brief would mislead (for example, the Roamer changed trailers or the deal was restructured). Basecamp then rereads the whole record.`;
+
+// The parts of a brief an update can name.
+const PARTS = SCHEMA.required;
 
 const UPDATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['rebuild', 'new_since', 'brief'],
+  required: ['rebuild', 'changed', 'new_since', 'brief'],
   properties: {
     rebuild: { type: 'boolean' },
+    changed: { type: 'array', items: { type: 'string', enum: PARTS }, description: 'The parts of the brief the new items change' },
     new_since: { type: 'array', items: ITEM },
     brief: SCHEMA,
   },
 };
 
-// The current brief and the new items, in the same record format as a full brief.
+// The current brief and the new items, in the same record format as a full brief. The brief
+// goes in as compact JSON: indenting it only adds tokens to read.
 function formatUpdate({ context, brief, newItems }) {
   const record = formatRecord({ ...context, items: newItems, omitted: 0, clipped: newItems.filter((i) => i.clipped).length, missing: 0 });
-  return `<current_brief>\n${escapeRecord(JSON.stringify(brief, null, 2))}\n</current_brief>\n\nRecord items added since the brief was written:\n\n${record}`;
+  return `<current_brief>\n${escapeRecord(JSON.stringify(brief))}\n</current_brief>\n\nRecord items added since the brief was written:\n\n${record}`;
+}
+
+// Lists that can rightly come back empty: every question answered, every commitment kept.
+const MAY_EMPTY = new Set(['open_questions', 'commitments']);
+const isEmpty = (v) => (typeof v === 'string' ? !v.trim() : Array.isArray(v) && v.length === 0);
+
+// The saved brief with the parts an update named replaced by what it wrote. Null when the
+// update does not hold together: it names a part that is not one, or hands back empty a part
+// that had something in it (the model named it and then did not write it), or the result is
+// not a brief. Basecamp then rereads the whole record instead of saving a damaged brief.
+function applyChanges(saved, out) {
+  if (!out || !Array.isArray(out.changed) || out.brief === null || typeof out.brief !== 'object') return null;
+  const merged = { ...saved };
+  for (const part of new Set(out.changed)) {
+    if (!PARTS.includes(part)) return null;
+    if (isEmpty(out.brief[part]) && !isEmpty(saved[part]) && !MAY_EMPTY.has(part)) return null;
+    merged[part] = out.brief[part];
+  }
+  return isBrief(merged) ? merged : null;
 }
 
 // { ok: true, rebuild, brief, newSince, usage } or { ok: false, reason, usage }.
@@ -219,16 +244,20 @@ async function updateBrief({ anthropic, context, brief, newItems }) {
     messages: [{ role: 'user', content: formatUpdate({ context, brief, newItems }) }],
   });
   const message = await stream.finalMessage();
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage: message.usage };
-  if (message.stop_reason === 'max_tokens') return { ok: false, reason: 'too_long', usage: message.usage };
+  const spent = await settle({ anthropic, job: 'brief update', asked: MODEL, message, dealId: context.deal ? context.deal.id : null });
+  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', ...spent };
+  if (message.stop_reason === 'max_tokens') return { ok: false, reason: 'too_long', ...spent };
   let out;
   try {
     out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
   } catch {
-    return { ok: false, reason: 'bad_output', usage: message.usage };
+    return { ok: false, reason: 'bad_output', ...spent };
   }
-  if (!out || typeof out.rebuild !== 'boolean' || !Array.isArray(out.new_since) || !isBrief(out.brief)) return { ok: false, reason: 'bad_output', usage: message.usage };
-  return { ok: true, rebuild: out.rebuild, brief: out.brief, newSince: out.new_since, usage: message.usage, model: message.model };
+  if (!out || typeof out.rebuild !== 'boolean' || !Array.isArray(out.new_since)) return { ok: false, reason: 'bad_output', ...spent };
+  if (out.rebuild) return { ok: true, rebuild: true, brief, newSince: out.new_since, changed: [], ...spent };
+  const merged = applyChanges(brief, out);
+  if (!merged) return { ok: false, reason: 'bad_output', ...spent };
+  return { ok: true, rebuild: false, brief: merged, newSince: out.new_since, changed: [...new Set(out.changed)], ...spent };
 }
 
 // The schema constrains the model's output; this catches anything that still slips past,
@@ -344,4 +373,4 @@ function renderBrief({ dealNumber, context, brief, now }) {
   return text;
 }
 
-module.exports = { writeBrief, updateBrief, formatUpdate, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };
+module.exports = { writeBrief, updateBrief, formatUpdate, applyChanges, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };

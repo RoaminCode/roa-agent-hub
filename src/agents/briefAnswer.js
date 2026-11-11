@@ -8,12 +8,13 @@
 // verdicts count toward the bar like reused answers (Blake, 2026-11-07). A Team Member's own
 // earlier answer always wins over the brief. Uses the same small model as routing.
 
-const { MODEL, costOf } = require('./askRouter');
+const { MODEL, EFFORT, MAX_TOKENS } = require('./askRouter');
+const { runStructured } = require('./run');
 
 const SYSTEM = `You help ROA OFF-ROAD's Team Members answer questions about one deal from its Roamer brief, a summary written earlier from the deal's HubSpot record. You receive a new question and the brief.
 
 Decide one of:
-- "answered": the brief states the answer to this question. Give the answer in one short sentence, in the brief's own words as far as possible; which part of the brief it came from (for example "Key facts: Tow vehicle", "Mods", "Journey", "Who they are"); and the date of the source item when the brief gives one (YYYY-MM-DD), else empty.
+- "answered": the brief states the answer to this question. Give the answer in one short sentence, in the brief's own words as far as possible; which part of the brief it came from (for example "Key facts: Tow vehicle", "Mods", "Commitments and next steps", "Who they are"); and the date of the source item when the brief gives one (YYYY-MM-DD), else empty.
 - "not_in_brief": the brief does not answer it, only touches on it, or would need a guess.
 
 Also say whether the answer is a "fact" (stays true, such as a tow vehicle, a color chosen, who is coming) or a "status" (true only for now, such as whether a part arrived, when something is scheduled, whether work is done). Use "fact" when not answering.
@@ -41,33 +42,18 @@ const SCHEMA = {
 const escapeData = (text) => String(text).replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 function formatBrief({ question, brief }) {
-  return `<new_question>\n${escapeData(question)}\n</new_question>\n\n<brief>\n${escapeData(JSON.stringify(brief, null, 2))}\n</brief>`;
+  return `<new_question>\n${escapeData(question)}\n</new_question>\n\n<brief>\n${escapeData(JSON.stringify(brief))}\n</brief>`;
 }
 
 // { ok: true, decision, answer, part, sourceDate, kind, reason, usage, costUsd } or
 // { ok: false, reason, usage }.
-async function checkBrief({ anthropic, question, brief }) {
-  const message = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: 400,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: formatBrief({ question, brief }) }],
-    },
-    { timeout: 20 * 1000 },
-  );
-  const usage = message.usage;
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage };
-  let out;
-  try {
-    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
-  } catch {
-    return { ok: false, reason: 'bad_output', usage };
-  }
+async function checkBrief({ anthropic, question, brief, dealId = null }) {
+  const r = await runStructured({ anthropic, job: 'brief check', model: MODEL, effort: EFFORT, maxTokens: MAX_TOKENS, timeout: 20 * 1000, system: SYSTEM, schema: SCHEMA, user: formatBrief({ question, brief }), dealId });
+  if (!r.ok) return r;
+  const { out, usage } = r;
   if (!out || !SCHEMA.properties.decision.enum.includes(out.decision)) return { ok: false, reason: 'bad_output', usage };
   if (out.decision === 'answered' && !String(out.answer || '').trim()) return { ok: false, reason: 'bad_output', usage };
-  return { ok: true, ...out, usage, costUsd: costOf(usage), model: message.model };
+  return { ok: true, ...out, usage, costUsd: r.costUsd, model: r.model };
 }
 
 module.exports = { checkBrief, formatBrief, SYSTEM, SCHEMA };

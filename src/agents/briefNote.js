@@ -16,19 +16,26 @@ const HEADER = 'Written by AI from HubSpot; not checked against LightSpeed.';
 const NO_PRICE = 'no price stated';
 
 // What the brief was built from. A saved brief is reused only when the record still
-// matches: the same Roamer, the same number of items, the same newest item, and the same
-// items (`ids`, a short hash of their ids, kept in Basecamp's records), so an old item
-// removed and another added in its place is not mistaken for no change.
+// matches: the same Roamer, the same number of items, the same newest item, the same items
+// (`ids`, a short hash of their ids, kept in Basecamp's records), so an old item removed
+// and another added in its place is not mistaken for no change, and the same words
+// (`content`, a hash of what each item says), so an item edited later is caught by what
+// changed in it, not by HubSpot moving its "last modified" date for some other reason.
+function contentHash(items) {
+  const each = (items || []).map((i) => `${i.id}\u0000${i.who || ''}\u0000${i.text || ''}`).sort();
+  return createHash('sha1').update(each.join('\u0001')).digest('hex').slice(0, 16);
+}
+
 function briefSignature(context) {
   const items = context.items || [];
   const newest = items.map((i) => String(i.at || '')).sort().pop() || '';
   const ids = createHash('sha1').update(items.map((i) => String(i.id)).sort().join(',')).digest('hex').slice(0, 16);
-  return { contactId: context.contact ? String(context.contact.id) : '', itemCount: items.length, newestAt: newest, ids };
+  return { contactId: context.contact ? String(context.contact.id) : '', itemCount: items.length, newestAt: newest, ids, content: contentHash(items) };
 }
 
-// `a` is the saved signature; one saved before `ids` existed is compared without it.
+// `a` is the saved signature; one saved before `ids` or `content` existed is compared without it.
 function sameSignature(a, b) {
-  return Boolean(a && b) && a.contactId === b.contactId && a.itemCount === b.itemCount && a.newestAt === b.newestAt && (!a.ids || a.ids === b.ids);
+  return Boolean(a && b) && a.contactId === b.contactId && a.itemCount === b.itemCount && a.newestAt === b.newestAt && (!a.ids || a.ids === b.ids) && (!a.content || a.content === b.content);
 }
 
 // One line of the layout: no line breaks, and no "|" inside a mod's fields.
@@ -124,4 +131,4 @@ function parseBriefNote(text) {
   return { brief, signature, spaceName };
 }
 
-module.exports = { MARKER, renderBriefNote, parseBriefNote, isBriefNoteText, briefSignature, sameSignature };
+module.exports = { MARKER, renderBriefNote, parseBriefNote, isBriefNoteText, briefSignature, sameSignature, contentHash };

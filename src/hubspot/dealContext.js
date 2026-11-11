@@ -81,6 +81,62 @@ function parseAlowareText(body) {
   return { sender: null, message };
 }
 
+// Aloware logs a call as a header ("<who> has made an outbound call to <number>", "Line:",
+// "From:" or "Destination:", "Creator Type:") and then, when it has one, its own summary of
+// the call. The header says nothing the item's date, direction, and owner do not.
+function splitCallBody(body) {
+  const lines = cleanText(body).split('\n');
+  const end = lines.findIndex((l) => /^Creator Type:/i.test(l.trim()));
+  if (end < 0) return { header: '', rest: lines.join('\n').trim() };
+  // A line Aloware adds about its own bookkeeping is not part of the conversation.
+  const rest = lines.slice(end + 1).filter((l) => !/^Agent .+ added the ".*" tag to this communication\.?$/i.test(l.trim()));
+  return { header: lines.slice(0, end + 1).join('\n'), rest: rest.join('\n').trim() };
+}
+
+// What a call adds to the record. HubSpot and Aloware each write their own summary of the
+// same call, so a call with both was read, and paid for, twice. Aloware's is kept when it
+// is there: on real Utah calls (checked 2026-11-11) it names the Team Member and the Roamer
+// from its own records, where HubSpot's summary guesses names from the audio and gets them
+// wrong. HubSpot's is used when Aloware wrote none. A call nobody summarized (most are
+// missed or unanswered) is kept as one short line, so the contact still shows.
+function callText(p) {
+  const { header, rest } = splitCallBody(p.hs_call_body);
+  const hubspot = cleanText(p.hs_call_summary);
+  // Every call is titled "Call with <name>"; only a title that says more is kept.
+  const title = p.hs_call_title && !/^Call with\b/i.test(String(p.hs_call_title).trim()) ? `Title: ${p.hs_call_title}` : null;
+  let said;
+  if (/^Call Summary\b/i.test(rest)) said = [`Summary: ${rest.replace(/^Call Summary\s*/i, '')}`];
+  else said = [hubspot && `Summary: ${hubspot}`, rest && `Notes: ${rest}`].filter(Boolean);
+  if (said.length) return [title, ...said].filter(Boolean).join('\n');
+  if (title) return title;
+  if (/missed an incoming call/i.test(header)) return 'Missed call from the Roamer; not answered.';
+  if (/missed an outbound call/i.test(header)) return 'ROA called; the Roamer did not answer.';
+  if (/callback pending/i.test(header)) return 'The Roamer asked for a callback.';
+  const seconds = Math.round(Number(p.hs_call_duration || 0) / 1000);
+  if (!header && !seconds) return '';
+  return seconds >= 60 ? `Call of ${Math.round(seconds / 60)} min; no summary recorded.` : 'Call of under a minute; no summary recorded.';
+}
+
+// Texts Aloware sends on its own, word for word the same to everyone (found on real Utah
+// records, 2026-11-11). A Roamer's reply to one is its own item and is kept.
+const AUTOMATED_TEXTS = [
+  /^thanks for reaching out to roa off-road, you have reached us after business hours/i,
+  /^hey there, thanks for reaching out to rvs of america! we.re sorry we missed your call/i,
+];
+const TEXT_HEADER_LINE = /has sent an SMS|^(Line|From|Destination|Creator Type|Source):|^Click here to respond$/i;
+
+// What a text adds to the record: its message, without the "Click here to respond" link
+// Aloware puts after it. Empty (so the item is left out) for a log entry with no message
+// at all (a header only, as a picture message leaves), a message that is just "null", and
+// Aloware's own automated replies.
+function textMessage(body, message) {
+  const raw = cleanText(body);
+  if (!/Message:/i.test(raw) && /has sent an SMS/i.test(raw) && raw.split('\n').every((l) => !l.trim() || TEXT_HEADER_LINE.test(l.trim()))) return '';
+  const text = String(message || '').replace(/\s*Click here to respond\s*$/i, '').trim();
+  if (!text || /^null$/i.test(text) || AUTOMATED_TEXTS.some((re) => re.test(text))) return '';
+  return text;
+}
+
 // Drop quoted earlier messages from an email reply so each email is counted once.
 function stripQuotedReply(text) {
   const lines = text.split('\n');
@@ -102,18 +158,12 @@ function toItem(type, record, ownerName) {
 
   if (type === 'calls') {
     who = [p.hs_call_direction === 'INBOUND' ? 'inbound' : 'outbound', ownerName(p.hubspot_owner_id)].filter(Boolean).join(', ');
-    text = [
-      p.hs_call_title && `Title: ${p.hs_call_title}`,
-      p.hs_call_summary && `Summary: ${cleanText(p.hs_call_summary)}`,
-      p.hs_call_body && `Notes: ${cleanText(p.hs_call_body)}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
+    text = callText(p);
   } else if (type === 'communications') {
     if (p.hs_communication_channel_type && p.hs_communication_channel_type !== 'SMS') return null;
     const parsed = parseAlowareText(p.hs_communication_body);
     who = parsed.sender && /^\+?\d[\d\s()-]+$/.test(parsed.sender) ? 'from the Roamer' : parsed.sender;
-    text = parsed.message;
+    text = textMessage(p.hs_communication_body, parsed.message);
   } else if (type === 'emails') {
     who = [p.hs_email_direction === 'INCOMING_EMAIL' ? 'from the Roamer' : 'to the Roamer', ownerName(p.hubspot_owner_id)].filter(Boolean).join(', ');
     text = [p.hs_email_subject && `Subject: ${p.hs_email_subject}`, stripQuotedReply(cleanText(p.hs_email_text))].filter(Boolean).join('\n');
@@ -331,8 +381,13 @@ function createDealContext({ hubspot, db = null }) {
     const all = [];
     const counts = {};
     let duplicates = 0;
+    // Records read but left out of the record the model sees: Basecamp's own notes, automated
+    // texts, and entries with nothing in them.
+    let filtered = 0;
     for (const [type, list] of Object.entries(records)) {
-      const once = dropDuplicates(list.map((r) => toItem(type, r, ownerName)).filter(Boolean));
+      const kept = list.map((r) => toItem(type, r, ownerName)).filter(Boolean);
+      filtered += list.length - kept.length;
+      const once = dropDuplicates(kept);
       counts[SOURCES[type].channel] = once.items.length;
       duplicates += once.duplicates;
       all.push(...once.items);
@@ -362,23 +417,33 @@ function createDealContext({ hubspot, db = null }) {
       missing,
       // Copies of an item HubSpot holds twice, left out (dropDuplicates).
       duplicates,
+      filtered,
       counts,
     };
   }
 
-  // Just the deal, its Chat space, and the Roamer the brief was written for, without
-  // reading the Roamer's record.
+  // Just the deal, its Chat space, and its Roamer, without reading the Roamer's record. The
+  // Roamer is the one the brief was written for; on a deal Basecamp has no record of yet
+  // (never briefed), it is the deal's one contact. With several contacts and none picked,
+  // `contactId` is null and `contactCount` says how many, so the caller can say so
+  // instead of guessing.
   load.findDealSpace = async function findDealSpace({ store = 'UT', dealNumber }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal || deal.duplicate) return null;
     const record = await recordOf(deal.id);
     const note = await findBriefNote(deal.id, record, record && record.contactId);
-    const contactId = (record && record.contactId) || (note && note.signature && note.signature.contactId) || null;
-    return { deal, spaceName: spaceOf(record, note), contactId, deliveryId: (record && record.deliveryId) || null };
+    let contactId = (record && record.contactId) || (note && note.signature && note.signature.contactId) || null;
+    let contactCount = null;
+    if (!contactId) {
+      const onDeal = await associatedIds('deals', deal.id, 'contacts');
+      contactCount = onDeal.length;
+      if (onDeal.length === 1) [contactId] = onDeal;
+    }
+    return { deal, spaceName: spaceOf(record, note), contactId, contactCount, deliveryId: (record && record.deliveryId) || null };
   };
 
   load.readBriefNote = readBriefNote;
   return load;
 }
 
-module.exports = { isBasecampNoteText, BASECAMP_NOTE_MARKERS, createDealContext, cleanText, parseAlowareText, stripQuotedReply, dropDuplicates, fitBudget, STORE_CMF, COMPANY_SENDER };
+module.exports = { callText, textMessage, splitCallBody, isBasecampNoteText, BASECAMP_NOTE_MARKERS, createDealContext, cleanText, parseAlowareText, stripQuotedReply, dropDuplicates, fitBudget, STORE_CMF, COMPANY_SENDER };

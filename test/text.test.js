@@ -40,7 +40,7 @@ test('the draft comes from the small model, without dashes or a signature', asyn
   assert.strictEqual(r.text, 'Hi Pat, your awning arm arrives Tuesday.');
   assert.ok(sent[0].system.includes('No sign-off and no signature'));
   assert.ok(sent[0].messages[0].content.includes('&lt;Tuesday&gt;'));
-  assert.strictEqual(sent[0].model, 'claude-haiku-4-5-20251001');
+  assert.strictEqual(sent[0].model, 'claude-haiku-5-5');
 });
 
 test("a Roamer's numbers: each with its field, the same number once", () => {

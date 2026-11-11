@@ -25,7 +25,7 @@ test('the parser sends the Utah time and the request to the small model, and ref
   const fake = (out) => ({ messages: { create: async (body) => (sent.push(body), { stop_reason: 'end_turn', usage: { input_tokens: 300, output_tokens: 30 }, content: [{ type: 'text', text: JSON.stringify(out) }] }) } });
   const r = await parseReminder({ anthropic: fake({ understood: true, for_self: true, what: 'let the Roamer know if we got <it> ordered', due: '2026-11-07T14:00' }), text: 'me let the Roamer know <x> within the hour', now: NOW });
   assert.deepStrictEqual([r.ok, r.forSelf, r.dueAt.toISOString()], [true, true, '2026-11-07T21:00:00.000Z']);
-  assert.strictEqual(sent[0].model, 'claude-haiku-4-5-20251001');
+  assert.strictEqual(sent[0].model, 'claude-haiku-5-5');
   assert.ok(sent[0].messages[0].content.startsWith('Now in Utah: Saturday 2026-11-07 13:00'));
   assert.ok(sent[0].messages[0].content.includes('&lt;x&gt;'));
   assert.strictEqual((await parseReminder({ anthropic: fake({ understood: false, for_self: true, what: '', due: '' }), text: 'x', now: NOW })).ok, false);

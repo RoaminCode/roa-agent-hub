@@ -194,7 +194,7 @@ test('the brief check sends the question and the brief to the small model, and r
   const fake = (out) => ({ messages: { create: async (body) => (sent.push(body), { stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 40 }, content: [{ type: 'text', text: JSON.stringify(out) }] }) } });
   const r = await checkBrief({ anthropic: fake(FROM_BRIEF), question: 'What is <Pat> towing with?', brief: { key_facts: [{ label: 'Tow vehicle', value: 'Jeep' }] } });
   assert.deepStrictEqual([r.ok, r.decision, r.part], [true, 'answered', 'Key facts: Tow vehicle']);
-  assert.strictEqual(sent[0].model, 'claude-haiku-4-5-20251001');
+  assert.strictEqual(sent[0].model, 'claude-haiku-5-5');
   assert.deepStrictEqual(sent[0].output_config.format.schema, BRIEF_SCHEMA);
   assert.ok(sent[0].messages[0].content.includes('What is &lt;Pat&gt; towing with?'));
   assert.strictEqual((await checkBrief({ anthropic: fake({ ...FROM_BRIEF, answer: ' ' }), question: 'q', brief: {} })).ok, false);

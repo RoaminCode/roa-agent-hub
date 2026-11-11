@@ -1,7 +1,7 @@
 'use strict';
 
 // Notes from a deal space to HubSpot. "@Basecamp note <text>" in a deal space saves the
-// text, as written, as a HubSpot note on that deal and its Roamer, signed with who added
+// text, as written, as a HubSpot note on that deal's Delivery record and its Roamer (never the deal), signed with who added
 // it and when. No AI. The deal comes from Basecamp's record of the space (db.js), so a note
 // lands only on the deal the space was linked to, never on a guess. In a direct message with
 // Basecamp, the note names its deal instead: "note 51455 <text>". Logs steps, never the
@@ -19,6 +19,10 @@ const SAY = {
   // In a direct message there is no deal space, so the note names its deal.
   directOnly: 'In a direct message, name the deal first, for example: note 51455 Roamer asked for the delivery to move to Saturday.',
   noDeal: (n) => `I couldn't find deal ${n} in HubSpot, so I didn't save the note.`,
+  // A deal Basecamp has never briefed: with one contact the note goes on it; otherwise
+  // there is no Roamer to put it on, and Basecamp does not guess.
+  severalContacts: (n) => `Deal ${n} has more than one contact in HubSpot, so I can't tell which is the Roamer, and I didn't save the note. Ask me for "brief ${n}" and pick the Roamer, then send the note again.`,
+  noRoamer: (n) => `Deal ${n} has no Roamer contact attached in HubSpot, so there is nowhere to save the note. That needs fixing in HubSpot.`,
   notDealSpace: "This space isn't linked to a deal, so I didn't save the note. Link it first with \"use this space for <deal#>\".",
   // Where the note went: the deal's Delivery record (and the Roamer), or only the Roamer's
   // record when the deal has no Delivery record yet. Never the deal itself.
@@ -71,6 +75,10 @@ function createSpaceNotes({ db, createNote, findDealSpace, log, now = () => new 
     try {
       const found = await findDealSpace({ dealNumber });
       if (!found) return SAY.noDeal(dealNumber);
+      if (!found.contactId && !found.deliveryId) {
+        log('INFO', 'direct note not saved: no Roamer to put it on', { dealNumber, contacts: found.contactCount ?? null });
+        return found.contactCount > 1 ? SAY.severalContacts(dealNumber) : SAY.noRoamer(dealNumber);
+      }
       return await write({ dealId: found.deal.id, contactId: found.contactId, deliveryId: found.deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, fromSpace: false });
     } catch (err) {
       log('ERROR', 'space note failed', { dealNumber, space: spaceName, error: errorFields(err) });

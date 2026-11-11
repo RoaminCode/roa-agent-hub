@@ -301,11 +301,11 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       // Routing and the check against the deal's earlier Q&A run side by side.
       const [earlier, brief] = await Promise.all([earlierQa(dealId, dealNumber), savedBrief(dealId, dealNumber)]);
       const [routed, found, inBrief] = await Promise.all([
-        route({ anthropic, question }),
+        route({ anthropic, question, dealId }),
         earlier.notes.length
-          ? reuseCheck({ anthropic, question, notes: earlier.notes }).catch((e) => (log('WARNING', 'reuse check failed', { dealNumber, error: errorFields(e) }), null))
+          ? reuseCheck({ anthropic, question, notes: earlier.notes, dealId }).catch((e) => (log('WARNING', 'reuse check failed', { dealNumber, error: errorFields(e) }), null))
           : null,
-        brief ? briefCheck({ anthropic, question, brief }).catch((e) => (log('WARNING', 'brief check failed', { dealNumber, error: errorFields(e) }), null)) : null,
+        brief ? briefCheck({ anthropic, question, brief, dealId }).catch((e) => (log('WARNING', 'brief check failed', { dealNumber, error: errorFields(e) }), null)) : null,
       ]);
       const usage = routed.usage || {};
       const cost = { model: routed.model || null, inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: routed.costUsd ?? null };
@@ -341,7 +341,8 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       // On the record before anyone answers: in the earlier topic's note when this follows
       // up on it, else a new topic note. A failed save is logged; routing goes on.
       let noteId = null;
-      if (dealId && qaNotes) {
+      // A deal with no Roamer on record and no Delivery record has nowhere to keep the note.
+      if (dealId && qaNotes && (qa || contactId || deliveryId)) {
         const askedBy = nameOf(userDisplayName, userEmail);
         const saving = qa
           ? qaNotes.addFollowUp({ noteId: qa.noteId, question, askedBy, at: now() }).then(() => qa.noteId)

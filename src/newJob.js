@@ -125,7 +125,7 @@ function createWhatsNew({ anthropic, db, loadContext, findDealSpace, log, summar
         log('INFO', 'whats new: nothing', { dealNumber, user: userEmail, ms: Date.now() - started });
         return SAY.nothing(dealNumber, sinceLabel);
       }
-      const result = await summarize({ anthropic, items: fresh });
+      const result = await summarize({ anthropic, items: fresh, dealId: context.deal ? context.deal.id : null });
       const usage = result.usage || {};
       log('INFO', result.ok ? 'whats new' : 'whats new failed', { dealNumber, reason: result.reason || null, items: fresh.length, listed: result.ok ? result.items.length : 0, inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: result.costUsd ?? null, user: userEmail, ms: Date.now() - started });
       if (!result.ok) return SAY.failed;

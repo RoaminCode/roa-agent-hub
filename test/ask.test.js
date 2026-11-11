@@ -29,9 +29,12 @@ test('routing sends only the question, to the small model with a schema, and pri
   const anthropic = fakeAnthropic({ role: 'Parts Manager', reason: 'Asks when a part arrives.', topic: 'Awning Arm!' });
   const r = await routeQuestion({ anthropic, question: 'When does the awning arm get here?' });
   assert.deepStrictEqual({ ok: r.ok, role: r.role, reason: r.reason, topic: r.topic }, { ok: true, role: 'Parts Manager', reason: 'Asks when a part arrives.', topic: 'awning arm' });
-  assert.strictEqual(r.costUsd, (600 * 1 + 30 * 5) / 1e6);
+  assert.strictEqual(r.costUsd, (600 * 0.1 + 30 * 0.5) / 1e6);
   const [body, opts] = anthropic.sent[0];
-  assert.strictEqual(body.model, 'claude-haiku-4-5-20251001');
+  assert.strictEqual(body.model, 'claude-haiku-5-5');
+  // The small model thinks first: low effort, and room for it under the token limit.
+  assert.strictEqual(body.output_config.effort, 'low');
+  assert.ok(body.max_tokens >= 1024);
   assert.strictEqual(body.messages[0].content, '<question>\nWhen does the awning arm get here?\n</question>');
   assert.deepStrictEqual(body.output_config.format.schema.properties.role.enum, [...Object.keys(ROLES), UNSURE]);
   assert.ok(opts.timeout > 0);

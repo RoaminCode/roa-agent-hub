@@ -6,7 +6,10 @@
 // the record points to something better. Every idea also comes back in a general form, with
 // no Roamer details, so a chosen new idea can join the library and be re-tailored later.
 
-const MODEL = 'claude-sonnet-5-5';
+const { MODELS } = require('./models');
+const { runStructured } = require('./run');
+
+const MODEL = MODELS.wow;
 
 // What ROA already does at every delivery. These are the baseline, not a WOW: Basecamp
 // never suggests them or a variation of them (Blake, 2026-11-07).
@@ -88,33 +91,18 @@ function formatWowInput({ brief, ideas }) {
   const library = ideas
     .map((i) => `<idea id="${i.id}" category="${escapeData(i.category)}" tier="${escapeData(i.tier)}" uses="${i.uses || 0}">\n${escapeData(i.idea)}\nFits when: ${escapeData(i.fitsWhen || 'not said')}\n</idea>`)
     .join('\n');
-  return `<brief>\n${escapeData(JSON.stringify(brief, null, 2))}\n</brief>\n\n<library>\n${library}\n</library>`;
+  return `<brief>\n${escapeData(JSON.stringify(brief))}\n</brief>\n\n<library>\n${library}\n</library>`;
 }
 
 const noDashes = (text) => String(text).replace(/\s*[–—]\s*/g, ', ');
 
 // { ok: true, suggestions, usage } or { ok: false, reason, usage }. A library id it names
 // must be one it was given; otherwise the suggestion counts as new.
-async function suggestWow({ anthropic, brief, ideas, standards }) {
-  const message = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: 2000,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      system: systemFor(standards && standards.length ? standards : STANDARD_AT_DELIVERY),
-      messages: [{ role: 'user', content: formatWowInput({ brief, ideas }) }],
-    },
-    { timeout: 60 * 1000 },
-  );
-  const usage = message.usage;
-  if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', usage };
-  let out;
-  try {
-    out = JSON.parse(message.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
-  } catch {
-    return { ok: false, reason: 'bad_output', usage };
-  }
-  if (!out || !Array.isArray(out.suggestions) || !out.suggestions.length) return { ok: false, reason: 'bad_output', usage };
+async function suggestWow({ anthropic, brief, ideas, standards, dealId = null }) {
+  const r = await runStructured({ anthropic, job: 'wow', model: MODEL, maxTokens: 2000, timeout: 60 * 1000, system: systemFor(standards && standards.length ? standards : STANDARD_AT_DELIVERY), schema: SCHEMA, user: formatWowInput({ brief, ideas }), dealId });
+  if (!r.ok) return r;
+  const { out, usage, costUsd } = r;
+  if (!Array.isArray(out.suggestions) || !out.suggestions.length) return { ok: false, reason: 'bad_output', usage, costUsd };
   const known = new Set(ideas.map((i) => i.id));
   const suggestions = out.suggestions.slice(0, 3).map((s) => ({
     ...s,
@@ -125,7 +113,7 @@ async function suggestWow({ anthropic, brief, ideas, standards }) {
     idea: noDashes(s.idea),
     fitsWhen: noDashes(s.fitsWhen || ''),
   }));
-  return { ok: true, suggestions, usage, model: message.model };
+  return { ok: true, suggestions, usage, costUsd, model: r.model };
 }
 
 const SYSTEM = systemFor();

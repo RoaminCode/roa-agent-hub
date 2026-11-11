@@ -37,6 +37,10 @@
 //                           dueAt, dealId, dealNumber, spaceUri, status ("pending",
 //                           "sending", "sent", "failed"), sentAt, at. `what` is the person's
 //                           own words, kept only until the reminder is sent, then cleared
+//   spend/{YYYY-MM-DD}      day (Utah), totalUsd, calls, jobs { job: { usd, calls } },
+//                           models { model: { usd, calls } }, limitReachedAt, updatedAt:
+//                           what the AI cost that day (spend.js). A deal's own total is
+//                           aiCostUsd and aiCalls on its deals record
 
 const { createHash } = require('crypto');
 const { safeError } = require('./errors');
@@ -406,7 +410,52 @@ function createDb({ firestore, now = () => new Date() }) {
     await reminders.doc(String(id)).set({ status, what: null, sentAt: stamp() }, { merge: true });
   }
 
-  return { addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
+  // One AI call's cost, added to its day (by job and by model) and, when it was about a
+  // deal, to that deal's total. Returns { totalUsd, crossed }: the day's total, and whether
+  // this call is the one that took the day to `limitUsd` (true once a day, so Blake is told once).
+  const spend = firestore.collection('spend');
+  const spendDay = (day) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) throw safeError('invalid day');
+    return spend.doc(String(day));
+  };
+  async function addSpend({ day, job, model, costUsd, dealId = null, limitUsd = null }) {
+    const ref = spendDay(day);
+    const bump = (map, key) => {
+      const was = (map && map[key]) || { usd: 0, calls: 0 };
+      return { ...(map || {}), [key]: { usd: was.usd + costUsd, calls: was.calls + 1 } };
+    };
+    const result = await firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const d = snap.exists ? snap.data() : {};
+      const totalUsd = (d.totalUsd || 0) + costUsd;
+      const crossed = Boolean(limitUsd) && totalUsd >= limitUsd && !d.limitReachedAt;
+      tx.set(ref, {
+        day: String(day),
+        totalUsd,
+        calls: (d.calls || 0) + 1,
+        jobs: bump(d.jobs, String(job || 'other')),
+        models: bump(d.models, String(model || 'unknown')),
+        limitReachedAt: crossed ? stamp() : d.limitReachedAt || null,
+        updatedAt: stamp(),
+      });
+      return { totalUsd, crossed };
+    });
+    if (dealId && /^\d+$/.test(String(dealId))) {
+      const dealRef = deals.doc(String(dealId));
+      await firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(dealRef);
+        const d = snap.exists ? snap.data() : {};
+        tx.set(dealRef, { aiCostUsd: (d.aiCostUsd || 0) + costUsd, aiCalls: (d.aiCalls || 0) + 1, updatedAt: stamp() }, { merge: true });
+      });
+    }
+    return result;
+  }
+  async function getSpend(day) {
+    const snap = await spendDay(day).get();
+    return snap.exists ? snap.data() : null;
+  }
+
+  return { addSpend, getSpend, addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
 }
 
 module.exports = { createDb, CLAIM_MS };
