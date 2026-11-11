@@ -8,9 +8,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { createDealLookup } = require('../src/lightspeed/lookup');
+const { createDealLookup, createLightSpeed } = require('../src/lightspeed/lookup');
 const { toRjbView } = require('../src/lightspeed/rjbView');
-const { createFacts, SAY } = require('../src/factsJob');
+const { createFacts, roStanding, SAY } = require('../src/factsJob');
 const { createRouter, parseCommand, MESSAGES } = require('../src/router');
 
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'rjb-lookup-sample.json'), 'utf8'));
@@ -119,6 +119,96 @@ test('the router: "facts <deal#>" works in a direct message for anyone allowed, 
   assert.deepStrictEqual((await off({ headers, body: msg('DIRECT_MESSAGE', 'facts 90001') })).body, { text: MESSAGES.factsOff });
 });
 
+// A repair order as the function returns it: made-up values, the function's real shape.
+const SESSION = (start, end, hrs, loggedOut = true) => ({ technician: 'Terry Tech', start, end, hours: hrs, loggedOut, saleType: 'internal' });
+const OPEN_RO = { roNumber: '10001', paid: null, clock: { sessions: [SESSION('2026-11-07T08:00:00', '2026-11-07T10:30:00', 2.5), SESSION('2026-11-10T13:05:00', null, 0.5, false)], totalHours: 3, technicians: ['Terry Tech'], lastActivity: '2026-11-10T13:05:00', clockedOn: true, truncated: false } };
+const PAID_RO = {
+  roNumber: '10002',
+  paid: {
+    roNumber: '10002',
+    category: '1-New Unit',
+    serviceAdvisor: 'Sam Advisor',
+    dates: { in: '2026-11-01T09:00:00', promised: null, closed: '2026-11-08T16:00:00', paid: '2026-11-09T10:00:00' },
+    units: [{ vin: '1SAMPLE0000000001', stockNumber: 'S1001', year: '2026', make: 'Sample', model: 'XT16', jobs: [{ title: 'Solar panel install', description: 'Install 200W solar', saleType: 'To Sales - Customer Add', approval: 'approved', warranty: false, internal: true, partsOnly: false, resolution: 'Installed and tested.', techNotes: null, recommendations: null, billedHours: 2, actualHours: 2.5, technicians: ['Terry Tech'], laborClosedAt: '2026-11-08T15:30:00', parts: [] }] }],
+  },
+  clock: { sessions: [SESSION('2026-11-07T08:00:00', '2026-11-07T10:30:00', 2.5)], totalHours: 2.5, technicians: ['Terry Tech'], lastActivity: '2026-11-07T10:30:00', clockedOn: false, truncated: false },
+};
+const NO_TRACE = { roNumber: '10003', paid: null, clock: { sessions: [], totalHours: 0, technicians: [], lastActivity: null, clockedOn: false, truncated: false } };
+
+test('a repair order is asked for by its number, and only a well-formed answer is trusted', async () => {
+  const auth = fakeAuth({ status: 200, data: { ok: true, result: { ro: OPEN_RO } } });
+  const { lookupRepairOrder } = createLightSpeed({ url: URL, auth });
+  const got = await lookupRepairOrder({ store: 'UT', roNumber: '10001' });
+  assert.deepStrictEqual([got.ok, got.ro.roNumber], [true, '10001']);
+  assert.deepStrictEqual(auth.seen.requests[0].data, { store: 'ROA1', roNo: '10001' });
+  await assert.rejects(lookupRepairOrder({ roNumber: "1' or 1 eq 1" }), /invalid repair order number/);
+  const wrong = await createLightSpeed({ url: URL, auth: fakeAuth({ status: 200, data: { ok: true, result: { found: [] } } }) }).lookupRepairOrder({ roNumber: '10001' });
+  assert.deepStrictEqual(wrong, { ok: false, reason: 'http_200' });
+  const down = await createLightSpeed({ url: URL, auth: fakeAuth({ status: 502, data: { ok: false, reason: 'lightspeed_http_403' } }) }).lookupRepairOrder({ roNumber: '10001' });
+  assert.deepStrictEqual(down, { ok: false, reason: 'lightspeed_http_403' });
+});
+
+test('where a repair order stands is said from what LightSpeed shows, never more', () => {
+  assert.strictEqual(roStanding(OPEN_RO), 'Not paid yet; tech time 3 hours by Terry Tech, last worked Nov 10, a tech is clocked on now');
+  assert.strictEqual(roStanding(PAID_RO), 'Paid Nov 9; tech time 2.5 hours by Terry Tech, last worked Nov 7');
+  assert.strictEqual(roStanding(NO_TRACE), 'Not paid yet; no tech time yet');
+  for (const ro of [OPEN_RO, NO_TRACE]) assert.ok(!/done|finished|complete|installed/i.test(roStanding(ro)), 'an open repair order is never called done');
+});
+
+test('the facts card shows tech time for each of the deal’s repair orders, and survives one that fails', async () => {
+  const asked = [];
+  const lookupRepairOrder = async ({ roNumber, store }) => {
+    asked.push([roNumber, store]);
+    if (roNumber === 'R1002') throw new Error('never asked: not digits');
+    return roNumber === '1001' ? { ok: true, ro: { ...OPEN_RO, roNumber: '1001' } } : { ok: false, reason: 'lightspeed_http_500' };
+  };
+  // The sample's repair order numbers, as digits like LightSpeed's real ones.
+  const found = JSON.parse(JSON.stringify(SAMPLE.result.found).replace(/R1001/g, '1001').replace(/R1002/g, '1002'));
+  const logs = [];
+  const card = await createFacts({ lookupDeal: async () => ({ ok: true, found }), lookupRepairOrder, log: (...l) => logs.push(l) })({ dealNumber: '90001', store: 'UT', userEmail: 'b@example.com' });
+  const text = JSON.stringify(card);
+  assert.deepStrictEqual(asked.sort(), [['1001', 'UT'], ['1002', 'UT']], 'each repair order on the deal is asked for once');
+  assert.ok(text.includes('Repair orders') && text.includes('Not paid yet; tech time 3 hours by Terry Tech, last worked Nov 10'));
+  assert.ok(text.includes('Tech time could not be read just now'), 'one failed repair order does not hide the deal');
+  assert.ok(text.includes('not that a job is finished'));
+  assert.deepStrictEqual([logs.at(-1)[2].repairOrders, logs.at(-1)[2].repairOrdersRead], [2, 1]);
+  // Without the repair order lookup the card is the deal alone.
+  const plain = await createFacts({ lookupDeal: async () => ({ ok: true, found }), log: () => {} })({ dealNumber: '90001' });
+  assert.ok(!JSON.stringify(plain).includes('Repair orders'));
+});
+
+test('ro shows one repair order: its jobs when paid, tech time either way, and what cannot be known', async () => {
+  const logs = [];
+  const ro = (answer) => createFacts({ lookupDeal: async () => ({ ok: true, found: [] }), lookupRepairOrder: async () => answer, log: (...l) => logs.push(l) }).repairOrder({ roNumber: answer.ro ? answer.ro.roNumber : '10001', store: 'UT', userEmail: 'b@example.com' });
+  const open = JSON.stringify(await ro({ ok: true, ro: OPEN_RO }));
+  for (const shown of ['Repair order 10001 in LightSpeed', 'not paid yet', '3 hours by Terry Tech', 'a tech is clocked on now', 'Nov 10, 1:05 PM (still clocked on)', 'Nov 7, 8:00 AM to 10:30 AM', 'gives a job list only once a repair order is paid', 'not that a job is finished']) {
+    assert.ok(open.includes(shown), `${shown} is on the open card`);
+  }
+  const paid = JSON.stringify(await ro({ ok: true, ro: PAID_RO }));
+  for (const shown of ['Paid (finished and cashiered)', 'Sam Advisor', 'Solar panel install', 'approved', 'Resolution: Installed and tested.', 'Jobs on 2026 Sample XT16 (1)']) {
+    assert.ok(paid.includes(shown), `${shown} is on the paid card`);
+  }
+  assert.strictEqual(await ro({ ok: true, ro: NO_TRACE }), SAY.roNoTrace('10003'));
+  assert.strictEqual(await ro({ ok: false, reason: 'lightspeed_http_403' }), SAY.roFailed('10001'));
+  assert.strictEqual(await ro({ ok: false, reason: 'lookup_timeout' }), SAY.roSlow('10001'));
+  const logged = JSON.stringify(logs);
+  assert.ok(logged.includes('repair order lookup') && !logged.includes('Terry') && !logged.includes('Solar'));
+});
+
+test('the router: "ro <number>" works in a direct message, like facts', async () => {
+  assert.deepStrictEqual(parseCommand('ro 300686'), { command: 'ro', roNumber: '300686', store: 'UT' });
+  assert.deepStrictEqual(parseCommand('Repair order #300686'), { command: 'ro', roNumber: '300686', store: 'UT' });
+  const started = [];
+  const headers = { authorization: 'x' };
+  const msg = (spaceType, text) => ({ type: 'MESSAGE', space: { name: 'spaces/S', spaceType }, user: { email: 'c@example.com', name: 'users/5' }, message: { name: 'spaces/S/messages/1', text } });
+  const r = createRouter({ verify: async () => true, allowedUsers: ['c@example.com'], aiUsers: [], startRo: (j) => started.push(j) });
+  assert.deepStrictEqual((await r({ headers, body: msg('DIRECT_MESSAGE', 'ro 300686') })).body, { text: MESSAGES.roWorking('300686') });
+  assert.deepStrictEqual(started, [{ spaceName: 'spaces/S', roNumber: '300686', store: 'UT', userEmail: 'c@example.com' }]);
+  assert.deepStrictEqual((await r({ headers, body: msg('SPACE', 'ro 300686') })).body, { text: MESSAGES.roDirectOnly('300686') });
+  const off = createRouter({ verify: async () => true, allowedUsers: ['c@example.com'] });
+  assert.deepStrictEqual((await off({ headers, body: msg('DIRECT_MESSAGE', 'ro 300686') })).body, { text: MESSAGES.factsOff });
+});
+
 test('the hub reaches LightSpeed through the lookup function only, and holds no LightSpeed credential', () => {
   const files = [];
   const walk = (dir) => {
@@ -132,7 +222,7 @@ test('the hub reaches LightSpeed through the lookup function only, and holds no 
     const source = fs.readFileSync(file, 'utf8');
     assert.ok(!/lightspeeddataservices|pch\.v-sept|LIGHTSPEED_(API_KEY|GATEWAY)/i.test(source), `${path.basename(file)} must not talk to LightSpeed directly`);
     if (!file.endsWith(path.join('lightspeed', 'lookup.js')) && !file.endsWith('server.js')) {
-      assert.ok(!/createDealLookup|RJB_LOOKUP_URL/.test(source), `${path.basename(file)} must go through the lookup it is handed`);
+      assert.ok(!/createDealLookup|createLightSpeed|RJB_LOOKUP_URL/.test(source), `${path.basename(file)} must go through the lookup it is handed`);
     }
   }
 });

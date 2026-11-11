@@ -59,7 +59,7 @@ const { createDeliveries, withDeliveryRecord } = require('./hubspot/deliveries')
 const { Firestore } = require('@google-cloud/firestore');
 const { createRouter } = require('./router');
 const { createMeter, withMeter } = require('./spend');
-const { createDealLookup } = require('./lightspeed/lookup');
+const { createLightSpeed } = require('./lightspeed/lookup');
 const { createFacts } = require('./factsJob');
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -239,10 +239,14 @@ function features(audience) {
 
   // "facts <deal#>": the deal as LightSpeed has it, through the integration's read-only
   // lookup. Needs neither HubSpot nor AI. Posted where it was asked, when LightSpeed answers.
+  // "ro <number>" is one repair order, through the same function.
   let startFacts = null;
+  let startRo = null;
   if (process.env.RJB_LOOKUP_URL) {
-    const facts = createFacts({ lookupDeal: createDealLookup({ url: process.env.RJB_LOOKUP_URL }), log });
+    const lightspeed = createLightSpeed({ url: process.env.RJB_LOOKUP_URL });
+    const facts = createFacts({ lookupDeal: lightspeed.lookupDeal, lookupRepairOrder: lightspeed.lookupRepairOrder, log });
     startFacts = later('facts', async (job) => sendMessage(job.spaceName, await facts(job)));
+    startRo = later('repair order', async (job) => sendMessage(job.spaceName, await facts.repairOrder(job)));
   } else {
     log('WARNING', 'LightSpeed lookups are off: RJB_LOOKUP_URL is not set');
   }
@@ -309,7 +313,7 @@ function features(audience) {
     sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome, startFacts, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
+  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome, startFacts, startRo, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
 }
 
 function start() {

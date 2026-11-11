@@ -13,7 +13,7 @@ Start with `HANDOFF.md` for what is live, what is decided, and what is next. `CL
 - **Questions:** `/ask` works out which role owns the answer and, in shadow mode, sends it to Blake with a suggested answer from earlier answers or the brief.
 - **`/new`, `/wow`, `/remind`:** what is new on a deal, WOW ideas tailored from the brief, and a reminder sent at the time asked.
 - **`/text`:** drafts a text to the Roamer. Nothing is sent until a text approver reviews the exact words in a dialog and approves; the send goes through Aloware as the company and is logged.
-- **`facts <deal#>`:** in a direct message, the deal as LightSpeed has it right now (state, trailer, mods, PDI), read live with no AI.
+- **`facts <deal#>` and `ro <number>`:** in a direct message, the deal or one repair order as LightSpeed has it right now (state, trailer, mods, PDI, tech time), read live with no AI.
 - **`cost`:** in a direct message, what the AI has cost over the last 7 days.
 
 What Basecamp can write: HubSpot notes (on the Roamer and the Delivery record, never the deal), a deal's Delivery record, an approved text through Aloware, rows and counts in the ROA WOW Ideas sheet, Chat spaces and messages, and its own Firestore records. It never edits HubSpot fields or LightSpeed.

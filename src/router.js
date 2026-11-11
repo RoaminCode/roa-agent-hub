@@ -32,6 +32,8 @@ const MESSAGES = {
   costOff: "Cost tracking isn't switched on yet.",
   factsWorking: (n) => `Looking up deal ${n} in LightSpeed. It will be here in a moment.`,
   factsOff: "LightSpeed lookups aren't switched on yet.",
+  roWorking: (n) => `Looking up repair order ${n} in LightSpeed. It will be here in a moment.`,
+  roDirectOnly: (n) => `Repair orders stay private for now: ask me for "ro ${n}" in a direct message with me.`,
   factsDirectOnly: (n) => `Deal facts stay private for now: ask me for "facts ${n}" in a direct message with me.`,
   directOnly: (n) => `Roamer briefs stay private for now: ask me for deal ${n} in a direct message with me.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
@@ -68,6 +70,9 @@ function parseCommand(text) {
   // "facts 51431" (also "lightspeed 51431"): the deal as LightSpeed has it now.
   const facts = /^(?:facts|lightspeed)\s+(?:for\s+)?(?:deal\s+)?#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t.trim());
   if (facts) return { command: 'facts', dealNumber: facts[1], store: (facts[2] || 'UT').toUpperCase() };
+  // "ro 300686" (also "repair order 300686"): one repair order as LightSpeed has it now.
+  const ro = /^(?:ro|repair\s+order)\s+#?(\d{3,10})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t.trim());
+  if (ro) return { command: 'ro', roNumber: ro[1], store: (ro[2] || 'UT').toUpperCase() };
   // "cost" (or "spend"): what the AI has cost lately.
   if (/^(?:cost|spend)\s*\??$/i.test(t.trim())) return { command: 'cost' };
   let m = /^brief\s+#?(\d{3,8})(?:\s+([A-Za-z]{2}))?\s*$/i.exec(t);
@@ -102,6 +107,7 @@ function log(severity, message, fields = {}) {
 // `briefUsers` and `briefsPaused` are the earlier names of the first and third, still read.
 // `startFacts({ spaceName, dealNumber, store, userEmail })` looks a deal up in LightSpeed and
 // posts it where it was asked (factsJob.js); left out, LightSpeed lookups are off.
+// `startRo({ spaceName, roNumber, store, userEmail })` does the same for one repair order.
 // saveSpaceNote({ spaceName, spaceDisplayName, userEmail, userDisplayName, text }) saves a
 // note from a deal space and returns the reply; see spaceNotes.js. It spends no AI credits,
 // so it needs only ALLOWED_USERS, and works while briefs are paused.
@@ -115,7 +121,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, startFacts = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, startFacts = null, startRo = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const lower = (users) => new Set(users.map((u) => u.toLowerCase()));
   const aiList = aiUsers || briefUsers;
@@ -381,6 +387,14 @@ function createRouter({ verify, allowedUsers, startFacts = null, aiUsers, textAp
         if (!startFacts) return { status: 200, body: replyFor(event, MESSAGES.factsOff) };
         startFacts({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
         return { status: 200, body: replyFor(event, MESSAGES.factsWorking(cmd.dealNumber)) };
+      }
+      // One repair order as LightSpeed has it. The same rules as deal facts.
+      if (cmd.command === 'ro') {
+        if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
+        if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.roDirectOnly(cmd.roNumber)) };
+        if (!startRo) return { status: 200, body: replyFor(event, MESSAGES.factsOff) };
+        startRo({ spaceName: event.spaceName, roNumber: cmd.roNumber, store: cmd.store, userEmail: event.userEmail });
+        return { status: 200, body: replyFor(event, MESSAGES.roWorking(cmd.roNumber)) };
       }
       if (cmd.command === 'note') {
         // In a direct message the note names its deal ("note 51455 <text>"); see spaceNotes.js.

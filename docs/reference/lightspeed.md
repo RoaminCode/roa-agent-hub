@@ -16,7 +16,19 @@ How the hub reads LightSpeed deal facts. Read before touching `src/lightspeed/`,
 - Any failure is `{ ok: false, reason }` with a short label (`lightspeed_http_403`, `lightspeed_timeout`, `store_not_enabled`, `caller_not_allowed`). A LightSpeed failure is never reported as "not found".
 - The function aims to answer within 12 seconds; the hub gives up at 20.
 
-## What comes back (the allowlist lives in the integration project, `src/rjb/dealLookup.ts`)
+## Repair orders
+
+- The same function answers `{ "store": "ROA1", "roNo": "300686" }` with `{ ok: true, result: { ro: { roNumber, paid, clock } } }` (integration file `src/rjb/roLookup.ts`).
+- What LightSpeed lets us read (checked 2026-11-11): paid repair orders in full (`ServiceDet`), and the tech clock for any repair order, open or paid (`ServiceLabor`). The open repair order feed (`OpenServiceDet`) is still refused, so an open repair order has no job list and nothing anywhere says a job is done.
+- `paid` is the finished repair order, or null while it is not paid: dates (in, promised, closed, paid), Service Advisor, category, and per unit its jobs (title, description, sale type, approval, hours, technicians, resolution, tech notes, recommendations, parts by number and quantity).
+- `clock` is tech time: sessions (technician, start, end, hours, still clocked on or not), total hours, technicians, last activity, and whether someone is clocked on now.
+- Never returned: any dollar amount, rate, or cost; the Roamer; invoice and warranty claim numbers; usernames.
+- A repair order that is neither paid nor clocked comes back with `paid: null` and no sessions. That means open with no tech time yet, or a wrong number; LightSpeed cannot tell those apart and Basecamp says so.
+- Tech time shows work happened, never that a job is finished. Every card says this, and an agent must never turn tech time into "done".
+- In the hub: `ro <number>` in a direct message shows one repair order; the facts card shows where each of the deal's repair orders stands (up to 6).
+- Tried on two real Utah deals 2026-11-11: the deal read took about a second, each repair order about a third of a second.
+
+## What comes back for a deal (the allowlist lives in the integration project, `src/rjb/dealLookup.ts`)
 
 - Deal: `DealNo`, `dealstate`, `stagename`, `OriginatingDate`, `DeliveryDate`, `lastmodifieddate`, `SalesmanName`, `salesmanager`, `source`, `totaldownpayment`, `deposit`, `customerextraline`, `customernotes`, `Units`.
 - Unit: `Year`, `Make`, `Model`, `unittype`, `Newused`, `stocknumber`, `VIN`, `DateReceived`, `DaysInStore`, `deposit`, `Labor`, `Parts`.
