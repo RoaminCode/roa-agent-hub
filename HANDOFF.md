@@ -16,36 +16,37 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
 5. **`cost` in a direct message with Basecamp** shows the last 7 days of AI spend by job and by day (AI users only, no AI call).
 6. **`/brief` in Claude Code** writes a brief by hand from the same record and prompt, on Blake's subscription, with no API credits.
 
-**To start Shane's test (after his approval of texts):** add shane@rvsofamerica.com to `ALLOWED_USERS` and `AI_USERS` (through a gcloud `--flags-file`), and to `TEXT_APPROVERS` only if he should approve texts. Make the Basecamp Chat app visible to him and make sure `AI_PAUSED` is unset. Send him, once shared from each page's Share menu: the how-to page https://claude.ai/artifact/7jEBvFNbBiz6VFE9Bij5wt and the walkthrough film https://claude.ai/artifact/NrZoze1b6SrR5o9AcMUnNC (the film has no `/remind` step).
+**Who is on which list (read from the service 2026-11-11):** `ALLOWED_USERS` and `BRIEF_USERS` hold blake@, coby@, and shane@rvsofamerica.com (Coby and Shane were added 2026-11-09). `TEXT_APPROVERS` holds blake@ only, so Coby and Shane can draft a text but not approve one; add either to `TEXT_APPROVERS` when they should. `AI_DAILY_LIMIT_USD` is not set: with three people able to spend, Blake should pick an amount.
+
+**For Shane's test:** share the how-to page https://claude.ai/artifact/7jEBvFNbBiz6VFE9Bij5wt and the walkthrough film https://claude.ai/artifact/NrZoze1b6SrR5o9AcMUnNC from each page's Share menu (the film has no `/remind` step), and make sure `AI_PAUSED` is unset.
 
 ## Where things stand
 
-- **Live:** Cloud Run service `basecamp`, `us-central1`, revision `basecamp-00074-jgf` (2026-11-11, a settings change; the code is the image built 2026-11-08 from commit `8d77006`), https://basecamp-732941376364.us-central1.run.app. Service account `basecamp-router`, max 2 instances, CPU always allocated. Shadow mode for everything except approved texts, which are on but in test mode (`TEXT_TEST_TO`, Blake's phone, set in Cloud Run only) until Shane approves.
-- **Built 2026-11-11, not deployed** (tests pass, nothing has run against real services):
-  - A note in a direct message now works on a deal Basecamp has never briefed (it goes on the deal's one contact; with several contacts it asks for a brief first).
+- **Live:** Cloud Run service `basecamp`, `us-central1`, revision `basecamp-00076-bx5` (deployed 2026-11-11 from commit `ef1aba0` on branch `basecamp-2026-11-11`), https://basecamp-732941376364.us-central1.run.app. Service account `basecamp-router`, max 2 instances, CPU always allocated. It started clean and `/health` answers. Shadow mode for everything except approved texts, which are on but in test mode (`TEXT_TEST_TO`, Blake's phone, set in Cloud Run only) until Shane approves.
+- **New in that revision, deployed but not yet used by anyone** (tests pass; the first real use is the test):
+  - A note in a direct message works on a deal Basecamp has never briefed (it goes on the deal's one contact; with several contacts it asks for a brief first).
   - The three permission lists above replace the single `BRIEF_USERS` gate.
   - Every AI call is priced and counted (`src/agents/models.js`, `src/agents/run.js`, `src/spend.js`; Firestore `spend/{day}` and `aiCostUsd` on each deal), with the daily limit and the `cost` command.
-  - The six small jobs moved from Haiku 4.5 to Haiku 5.5 at low effort, with room under the token limit for its thinking.
+  - The six small jobs run on Haiku 5.5 at low effort, with room under the token limit for its thinking.
   - Less for the brief to read and write (Blake approved, 2026-11-11): a brief update returns only the parts that changed and code merges them into the saved brief; the saved brief is sent to models as compact JSON; a call is read from one summary, not two; call and text headers, contentless entries, and Aloware's automated replies are left out; an edited item is caught by a hash of its words, not HubSpot's modified date. Measured on the 14 open Utah deals: 17% less record to read (calls 35% less, texts 16% less). Each deal's next brief is a full read, because the record it sees changed.
-  - The LightSpeed lookup (built in both projects, neither deployed): `rjbDealLookup` in the integration project, and in the hub `src/lightspeed/lookup.js`, the RJB view updated to the function's real answer, and `facts <deal#>` in a direct message, which shows the deal as LightSpeed has it, with no AI. Detail in `docs/reference/lightspeed.md`.
-  - **Before deploying:** `TEXT_APPROVERS=blake@rvsofamerica.com` is set (2026-11-11); set `AI_DAILY_LIMIT_USD` (Blake picks the amount). `BRIEF_USERS` and `BRIEFS_PAUSED` keep working as they are.
-  - **After deploying:** re-ask the six routing questions and the `/ask` traps (the 8 Right verdicts were earned on Haiku 4.5), try `/remind` and `/text` once each, run one brief, add a text to that deal and run it again (the first update that returns only what changed; compare it with the saved brief), and check `cost`.
-- **Env vars on the service:** `CHAT_AUDIENCE`, `PROJECT_NUMBER` (732941376364), `ALLOWED_USERS`, `BRIEF_USERS`, and `TEXT_APPROVERS` (blake@rvsofamerica.com), `SHADOW_REVIEWER` (blake@rvsofamerica.com), `WOW_SHEET_ID`, `TEXTS_LIVE=true`, `TEXT_TEST_TO`. Secrets: `HUBSPOT_ACCESS_TOKEN`, `ANTHROPIC_API_KEY`, `ALOWARE_API_TOKEN`.
+  - `facts <deal#>` in a direct message: the deal as LightSpeed has it, through `rjbDealLookup` in the integration project (deployed 2026-11-11, https://rjbdeallookup-kx7povhcmq-uc.a.run.app, set as `RJB_LOOKUP_URL`). Detail in `docs/reference/lightspeed.md`.
+  - **To check, in this order:** `facts <deal#>` on a few Utah deals against LightSpeed itself (no real answer has passed through the new code yet); the six routing questions and the `/ask` traps again (the 8 Right verdicts were earned on Haiku 4.5); `/remind` and `/text` once each; one brief, then add a text to that deal and run it again (the first update that returns only what changed; compare it with the saved brief); `cost`.
+- **Env vars on the service:** `CHAT_AUDIENCE`, `PROJECT_NUMBER` (732941376364), `ALLOWED_USERS`, `BRIEF_USERS`, `TEXT_APPROVERS`, `SHADOW_REVIEWER` (blake@rvsofamerica.com), `WOW_SHEET_ID`, `TEXTS_LIVE=true`, `TEXT_TEST_TO`, `RJB_LOOKUP_URL`. Secrets: `HUBSPOT_ACCESS_TOKEN`, `ANTHROPIC_API_KEY`, `ALOWARE_API_TOKEN`.
 - **Deploy:** `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (env vars and secrets are kept). Run `node -e "require('./src/server')"` and `npm test` first. gcloud's default project on the laptop is `hs-ls-integration`; always pass `--project roa-agent-hub`.
 - **Tests:** 321 pass (`npm test`). Firestore is faked in `test/fakeFirestore.js`.
-- **Chat app "Basecamp":** visible only to Blake, App Home on. Commands: `/note` (1), `/ask` (2), `/wow` (3), Save to HubSpot message action (4), `/text` (5), WOW ideas quick command (6), `/new` (7), `/remind` (8). OAuth scopes waiting on the Workspace admin install: `chat.app.spaces.create`, `chat.app.memberships`, `chat.app.messages.readonly`.
+- **Chat app "Basecamp":** App Home on; Blake, Coby, and Shane are allowed. Commands: `/note` (1), `/ask` (2), `/wow` (3), Save to HubSpot message action (4), `/text` (5), WOW ideas quick command (6), `/new` (7), `/remind` (8). OAuth scopes waiting on the Workspace admin install: `chat.app.spaces.create`, `chat.app.memberships`, `chat.app.messages.readonly`.
 - **What works on the live revision** (detail in `docs/reference/features.md`): briefs with reuse and incremental updates; App Home; deal spaces by "use this space for <deal#>"; Delivery records found or created when a space opens; notes; `/ask` routed to Blake with a suggested answer; `/new`; `/wow`; `/text` in test mode; `/remind` and the 5-minute timer; an email to Blake when a deal has no Roamer contact.
 - **Data:** HubSpot is the record (Basecamp writes notes and creates Delivery records, nothing else). Firestore holds Basecamp's own ids, timestamps, statuses, the text send log, pending reminders, and AI spend. The ROA WOW Ideas sheet holds the idea library. LightSpeed is not reachable yet. Call transcript text is not reachable (404); briefs read call summaries.
 - **Logs** never hold message text or Roamer details. `GET /health`, `GET /avatar.png`.
 
 ## Next steps
 
-1. **Turn the LightSpeed lookup on (Blake, in the `LightSpeed Integration` folder):** run `.deploysetupRjbDealLookup.ps1` once, then `.deploydeployRjbDealLookup.ps1`; run the two checks it prints; set the URL it prints as `RJB_LOOKUP_URL` on the `basecamp` service. After the hub is deployed, type `facts <deal#>` for a few Utah deals and compare each card with LightSpeed. The field names came from the integration's own review of real deals, but no real answer has passed through the new code yet, so the first lookups are the test. This is what opens the "prove against LightSpeed" gate.
-2. **Deploy the 2026-11-11 changes** with the before and after steps above.
+1. **Prove deal facts:** type `facts <deal#>` for Utah deals and compare each card with LightSpeed. Tell Claude what is wrong or missing on a card; the allowlist of fields is in the integration project (`src/rjb/dealLookup.ts`) and the card in `src/factsJob.js`. This is what opens the "prove against LightSpeed" gate.
+2. **Repair order lookup:** in progress 2026-11-11. LightSpeed still refuses the open repair order feed for Utah (`OpenServiceDet`, 403, checked 2026-11-11), so an open RO can only be read through the tech clock and the deal's labor lines; a paid RO can be read in full.
 3. **Workspace admin install** (a super admin): admin.google.com > Apps > Google Workspace Marketplace apps > Apps list > Install app > Basecamp (internal) > Admin install, then Grant access under Data Access. Make Basecamp visible to the Utah team. Then test reading a space's messages: ones from before Basecamp joined, and replies in threads. Whether this happened on 2026-11-09 is not recorded; confirm with Blake.
 4. **Build commitment follow-ups** on the reminders timer (rules in `docs/reference/deal-spaces-and-routing.md`). The space check needs `chat.app.messages.readonly` from step 3.
 5. **Touchpoint clock:** keep designing how each touchpoint's completion is detected (`docs/reference/clock.md`). Its state belongs in Firestore.
-6. **Shane:** share the how-to page and the film, then add him.
+6. **Shane:** share the how-to page and the film. He is already allowed and can spend AI credits; add him to `TEXT_APPROVERS` when he should approve texts.
 
 Smaller, waiting on real use or on Blake:
 - Q&A answers in the space: the bar is 10 Right or Wrong verdicts on real Team Member questions, at most 1 Wrong. 8 so far, all Right, all on Blake's own test questions, so none count yet.
@@ -55,6 +56,7 @@ Smaller, waiting on real use or on Blake:
 - The Service Advisor contact check with a draft (rest of Slice 1).
 - The Deal's `delivery_date_lightspeed` waits on confirming nothing writes to it.
 - In the integration project, still open from its 2026-10-30 review: old build images hold the current Utah, South Carolina, and Colorado Gateway passwords (rotate, then delete the images), and its Part 2 on how each function is protected.
+- Today's work is on branch `basecamp-2026-11-11`, not pushed and not merged to `main` (2026-11-11). Merge and push when Blake says, or the other computer will not have it.
 - The rest of the 2026-11-11 audit (findings beyond the ones done today): https://claude.ai/artifact/2FNNEg8byXfTCraFzT7pgR
 
 ## Reference, read when the work touches it
