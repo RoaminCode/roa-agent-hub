@@ -42,6 +42,8 @@ How the hub reads LightSpeed deal facts. Read before touching `src/lightspeed/`,
 
 - `src/lightspeed/rjbView.js` trims an answer to the RJB view (version 2): deal, unit, mods, prep (PDI and findings), parts line count, and flags for things worth a look (a line not on a repair order, a PDI line mislabeled).
 - `facts <deal#>` in a direct message (`src/factsJob.js`) shows that view as a card, read live, with no AI. Anyone on `ALLOWED_USERS` may use it; it spends nothing. It is the tool for proving deal facts before an agent is trusted with them.
+- `/ask` on a deal reads the same view and repair orders (`facts.read`) and offers Blake a suggested answer from them (`src/agents/factsAnswer.js`; detail in `features.md`). This is how answers from LightSpeed get proven in shadow mode.
+- Known quirks in real data (2026-11-11): a clock left on overnight inflates total tech hours (repair order 11009: 21.07 hours recorded, 4.38 without one 16.69 hour session); a paid repair order's "in" date can fall after its work was closed (11044); resolution and tech notes usually hold the same text. The clock's sessions carry a labor line id (`ROLaborID`) that matches a paid repair order's job lines but not a deal's labor lines, so hours on an open repair order cannot be tied to a job title. Blake chose to wait for LightSpeed to open `OpenServiceDet` rather than show hours by untitled line (2026-11-11).
 - Repair orders: no LightSpeed feed exposes per-job completion. Labor lines carry a repair-order-level `rostatus` only. Per-job "done" needs `OpenServiceDet` access from LightSpeed or an ROA-side record (integration review, 2026-10-30).
 
 ## Deploying the function (in the integration project, by Blake)

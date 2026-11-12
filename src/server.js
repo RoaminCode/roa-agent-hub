@@ -128,6 +128,10 @@ function features(audience) {
     run(job).catch((err) => log('ERROR', `${what} crashed`, { dealNumber: job.dealNumber, error: errorFields(err) }));
   };
 
+  // LightSpeed, through the integration's read-only lookup. Needs neither HubSpot nor AI.
+  const lightspeed = process.env.RJB_LOOKUP_URL ? createLightSpeed({ url: process.env.RJB_LOOKUP_URL }) : null;
+  const facts = lightspeed ? createFacts({ lookupDeal: lightspeed.lookupDeal, lookupRepairOrder: lightspeed.lookupRepairOrder, log }) : null;
+
   let startBrief;
   let startSpace;
   let useSpace;
@@ -178,7 +182,7 @@ function features(audience) {
     startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
     useSpace = later('use space', spaceJob.useSpace);
     if (process.env.SHADOW_REVIEWER) {
-      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot, lock: db.withLock }), findDealSpace, readBriefNote: loadContext.readBriefNote });
+      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot, lock: db.withLock }), findDealSpace, readBriefNote: loadContext.readBriefNote, readDealFacts: facts ? facts.read : null });
       askQuestion = questions.ask;
       relayAnswer = questions.relayAnswer;
       clarifyQuestion = questions.clarify;
@@ -237,14 +241,11 @@ function features(audience) {
     };
   }
 
-  // "facts <deal#>": the deal as LightSpeed has it, through the integration's read-only
-  // lookup. Needs neither HubSpot nor AI. Posted where it was asked, when LightSpeed answers.
-  // "ro <number>" is one repair order, through the same function.
+  // "facts <deal#>": the deal as LightSpeed has it. Posted where it was asked, when
+  // LightSpeed answers. "ro <number>" is one repair order, through the same function.
   let startFacts = null;
   let startRo = null;
-  if (process.env.RJB_LOOKUP_URL) {
-    const lightspeed = createLightSpeed({ url: process.env.RJB_LOOKUP_URL });
-    const facts = createFacts({ lookupDeal: lightspeed.lookupDeal, lookupRepairOrder: lightspeed.lookupRepairOrder, log });
+  if (facts) {
     startFacts = later('facts', async (job) => sendMessage(job.spaceName, await facts(job)));
     startRo = later('repair order', async (job) => sendMessage(job.spaceName, await facts.repairOrder(job)));
   } else {

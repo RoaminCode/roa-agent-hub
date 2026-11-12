@@ -19,9 +19,13 @@ const { errorFields, isOutOfCredits } = require('./errors');
 const { routeQuestion, UNSURE } = require('./agents/askRouter');
 const { checkEarlier, stillGood } = require('./agents/qaReuse');
 const { checkBrief } = require('./agents/briefAnswer');
+const { checkFacts } = require('./agents/factsAnswer');
 const { noDashes, recordDate } = require('./agents/roamerBrief');
 const { primary, secondary, label } = require('./chat/style');
 const { dealsNamedIn } = require('./hubspot/namedDeals');
+
+// How long a question waits on LightSpeed before going on without it.
+const FACTS_WAIT_MS = 8000;
 
 // How many times Basecamp asks the asker to clarify before sending the question to Blake
 // as "Not sure", so nothing gets stuck.
@@ -117,6 +121,9 @@ function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, questio
 
 // What Basecamp would have done with an earlier answer or the brief, for Blake to judge.
 function reuseLine(reuse) {
+  if (reuse.source === 'lightspeed') {
+    return `*Basecamp would answer from LightSpeed:* "${reuse.answer}" (LightSpeed's ${reuse.part || 'deal facts'}, read just now, ${reuse.kind}). Mark below whether that is right.`;
+  }
   if (reuse.source === 'brief') {
     const from = `the brief's ${reuse.part || 'details'}${reuse.answeredOn ? `, from ${reuse.answeredOn}` : ''}, ${reuse.kind}`;
     return reuse.stillGood
@@ -154,7 +161,7 @@ function reviewCard(ctx, { reuse = null, endpoint = '', note = '' } = {}) {
   ];
   const suggested = reuse && reuse.decision === 'answered' && reuse.stillGood;
   if (suggested) {
-    const from = reuse.source === 'brief' ? `From the brief's ${reuse.part || 'details'}` : `From ${reuse.answeredBy}, ${reuse.answeredOn}`;
+    const from = reuse.source === 'lightspeed' ? `From LightSpeed's ${reuse.part || 'deal facts'}, read just now` : reuse.source === 'brief' ? `From the brief's ${reuse.part || 'details'}` : `From ${reuse.answeredBy}, ${reuse.answeredOn}`;
     sections.push({
       header: label('Suggested answer'),
       widgets: [
@@ -201,7 +208,10 @@ const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
 // question asked in a direct message that names a deal is handled as if asked in its space.
 // `readBriefNote(noteId)` reads a deal's saved brief (hubspot/dealContext.js); `briefCheck`
 // looks for the answer in it (agents/briefAnswer.js).
-function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, readBriefNote = null, route = routeQuestion, reuseCheck = checkEarlier, briefCheck = checkBrief, now = () => new Date() }) {
+// `readDealFacts({ dealNumber, store })` reads the deal from LightSpeed (factsJob.js's read);
+// `factsCheck` looks for the answer in it (agents/factsAnswer.js). Left out, LightSpeed is
+// not a source.
+function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, readBriefNote = null, readDealFacts = null, route = routeQuestion, reuseCheck = checkEarlier, briefCheck = checkBrief, factsCheck = checkFacts, now = () => new Date() }) {
   // The deal's saved brief, or null when it has none or it can't be read.
   async function savedBrief(dealId, dealNumber) {
     if (!dealId || !readBriefNote) return null;
@@ -223,6 +233,29 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     return { decision: 'answered', source: 'brief', noteId: null, part: found.part, kind: found.kind, stillGood: Boolean(good), answer: found.answer, answeredBy: 'the brief', answeredOn: found.sourceDate || '', costUsd: found.costUsd ?? null };
   }
 
+  // The deal as LightSpeed has it now, or null when lookups are off, it has no such deal, it
+  // could not be read, or it took too long. A question never waits long or fails on this.
+  async function dealFacts(dealNumber, store) {
+    if (!dealNumber || !readDealFacts) return null;
+    let timer;
+    const tooSlow = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), FACTS_WAIT_MS);
+    });
+    try {
+      return await Promise.race([readDealFacts({ dealNumber, store }), tooSlow]);
+    } catch (err) {
+      log('WARNING', 'could not read LightSpeed for a question', { dealNumber, error: errorFields(err) });
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // The LightSpeed check's finding. It was read a moment ago, so a status is always fresh.
+  function judgeFacts(found) {
+    if (!found || !found.ok || found.decision !== 'answered') return null;
+    return { decision: 'answered', source: 'lightspeed', noteId: null, part: found.part, kind: found.kind, stillGood: true, answer: found.answer, answeredBy: 'LightSpeed', answeredOn: recordDate(now().toISOString()), costUsd: found.costUsd ?? null };
+  }
 
   // The deal's earlier Q&A: its questions on record and their notes' text from HubSpot.
   // Empty when there are none or they can't be read (routing goes on without them).
@@ -266,6 +299,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     let step = 'deal';
     let dealId = null;
     let dealNumber = null;
+    let store = 'UT';
     try {
       // In a linked deal space, the question is about that deal.
       let spaceUri = null;
@@ -277,6 +311,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         if (deal && deal.spaceName === spaceName) {
           dealId = space.dealId;
           dealNumber = space.dealNumber;
+          store = space.store || deal.store || store;
           spaceUri = deal.spaceUri || null;
           contactId = deal.contactId || null;
           deliveryId = deal.deliveryId || null;
@@ -291,6 +326,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
           const record = (await db.getDeal(String(d.deal.id))) || {};
           dealId = String(d.deal.id);
           dealNumber = d.dealNumber;
+          store = d.store || record.store || store;
           spaceUri = record.spaceUri || null;
           contactId = d.contactId || record.contactId || null;
           deliveryId = d.deliveryId || record.deliveryId || null;
@@ -298,14 +334,18 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       }
 
       step = 'route';
-      // Routing and the check against the deal's earlier Q&A run side by side.
-      const [earlier, brief] = await Promise.all([earlierQa(dealId, dealNumber), savedBrief(dealId, dealNumber)]);
-      const [routed, found, inBrief] = await Promise.all([
-        route({ anthropic, question, dealId }),
+      // Routing and the checks against the deal's earlier Q&A, its brief, and LightSpeed run
+      // side by side. Routing does not wait on LightSpeed being read.
+      const routing = route({ anthropic, question, dealId });
+      routing.catch(() => {});
+      const [earlier, brief, facts] = await Promise.all([earlierQa(dealId, dealNumber), savedBrief(dealId, dealNumber), dealFacts(dealNumber, store)]);
+      const [routed, found, inBrief, inFacts] = await Promise.all([
+        routing,
         earlier.notes.length
           ? reuseCheck({ anthropic, question, notes: earlier.notes, dealId }).catch((e) => (log('WARNING', 'reuse check failed', { dealNumber, error: errorFields(e) }), null))
           : null,
         brief ? briefCheck({ anthropic, question, brief, dealId }).catch((e) => (log('WARNING', 'brief check failed', { dealNumber, error: errorFields(e) }), null)) : null,
+        facts ? factsCheck({ anthropic, question, facts, dealId }).catch((e) => (log('WARNING', 'lightspeed check failed', { dealNumber, error: errorFields(e) }), null)) : null,
       ]);
       const usage = routed.usage || {};
       const cost = { model: routed.model || null, inputTokens: usage.input_tokens ?? null, outputTokens: usage.output_tokens ?? null, costUsd: routed.costUsd ?? null };
@@ -331,12 +371,15 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         return SAY.noReviewer;
       }
 
-      // What Basecamp would answer with: a Team Member's earlier answer still good wins, then
-      // the brief's, then whatever the earlier Q&A found (a follow-up, or a stale answer).
+      // What Basecamp would answer with: a Team Member's earlier answer still good wins (a
+      // person can know what LightSpeed cannot, such as a job being done), then LightSpeed
+      // read just now, then the brief, then whatever the earlier Q&A found (a follow-up, or a
+      // stale answer).
       const qa = judgeReuse(found, earlier.questions);
+      const fromFacts = judgeFacts(inFacts);
       const fromBrief = judgeBrief(inBrief);
       const good = (r) => r && r.decision === 'answered' && r.stillGood;
-      const reuse = good(qa) ? qa : good(fromBrief) ? fromBrief : qa || fromBrief;
+      const reuse = good(qa) ? qa : fromFacts || (good(fromBrief) ? fromBrief : qa || fromBrief);
 
       // On the record before anyone answers: in the earlier topic's note when this follows
       // up on it, else a new topic note. A failed save is logged; routing goes on.
@@ -381,9 +424,11 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         role: routed.role,
         topic: routed.topic,
         noteId,
-        reuse: reuse ? `${reuse.decision}${reuse.source === 'brief' ? ' from the brief' : ''}${reuse.decision === 'answered' ? (reuse.stillGood ? ' (reusable)' : ' (too old)') : ''}` : 'new',
+        reuse: reuse ? `${reuse.decision}${reuse.source === 'brief' ? ' from the brief' : reuse.source === 'lightspeed' ? ' from LightSpeed' : ''}${reuse.decision === 'answered' ? (reuse.stillGood ? ' (reusable)' : ' (too old)') : ''}` : 'new',
         reuseCostUsd: found && found.ok ? found.costUsd : null,
         briefCostUsd: inBrief && inBrief.ok ? inBrief.costUsd : null,
+        lightspeed: facts ? (inFacts && inFacts.ok ? inFacts.decision : 'check failed') : 'not read',
+        factsCostUsd: inFacts && inFacts.ok ? inFacts.costUsd : null,
         user: userEmail,
         chars: question.length,
         ...cost,
@@ -493,4 +538,4 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
   return { ask, relayAnswer, clarify, reuseVerdict, fromCard };
 }
 
-module.exports = { createQuestionRouter, reviewMessage, reviewCard, reuseLine, verdictCard, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY };
+module.exports = { createQuestionRouter, reviewMessage, reviewCard, reuseLine, verdictCard, clarifyCard, withDetail, SAY, MAX_CHARS, MAX_CLARIFY, FACTS_WAIT_MS };

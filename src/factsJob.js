@@ -209,6 +209,21 @@ function createFacts({ lookupDeal, lookupRepairOrder = null, log }) {
     }
   }
 
+  // The same read without a card, for a question about the deal (askJob.js):
+  // { view, ros }, or null when LightSpeed has no such deal or could not be read.
+  facts.read = async function read({ dealNumber, store = 'UT' }) {
+    const started = Date.now();
+    const got = await lookupDeal({ store, dealNumber });
+    if (!got.ok || !got.found.length) {
+      log(got.ok ? 'INFO' : 'WARNING', 'lightspeed not read for a question', { dealNumber, store, reason: got.ok ? 'not_found' : got.reason, ms: Date.now() - started });
+      return null;
+    }
+    const view = toRjbView(got.found[0]);
+    const ros = await repairOrdersOf(view, store);
+    log('INFO', 'lightspeed read for a question', { dealNumber, store, feed: view.feed, repairOrders: ros.length, repairOrdersRead: ros.filter((r) => r.ro).length, ms: Date.now() - started });
+    return { view, ros };
+  };
+
   // "ro <number>": one repair order. Returns a card, or text saying why not.
   facts.repairOrder = async function repairOrder({ roNumber, store = 'UT', userEmail }) {
     const started = Date.now();

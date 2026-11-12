@@ -6,6 +6,7 @@ const { checkEarlier, stillGood, formatEarlier } = require('../src/agents/qaReus
 const { createQuestionRouter, reuseLine, verdictCard, SAY } = require('../src/askJob');
 const { createRouter } = require('../src/router');
 const { createDb } = require('../src/db');
+const { recordDate } = require('../src/agents/roamerBrief');
 const { createFakeFirestore } = require('./fakeFirestore');
 
 // The Suggested answer section of a routed-question card, read back.
@@ -53,7 +54,7 @@ test('the 48-hour rule never takes a future date as fresh, and counts from the e
   assert.ok(!stillGood({ kind: 'status', answeredOn: 'Nov 7' }, NOW.getTime()));
 });
 
-async function harness(found, { answeredAt = '2026-11-09T10:00:00Z', inBrief = null } = {}) {
+async function harness(found, { answeredAt = '2026-11-09T10:00:00Z', inBrief = null, inFacts = null, readDealFacts = null } = {}) {
   const firestore = createFakeFirestore();
   const db = createDb({ firestore, now: () => NOW });
   await db.linkSpace({ dealId: '111', dealNumber: '90001', store: 'UT', spaceName: 'spaces/DEAL', spaceUri: 'u', how: 'adopted', by: 'b' });
@@ -63,13 +64,14 @@ async function harness(found, { answeredAt = '2026-11-09T10:00:00Z', inBrief = n
   if (answeredAt) await firestore.collection('questions').doc(earlierId).set({ answeredAt }, { merge: true });
   const sent = [];
   const qa = [];
+  const logs = [];
   const q = createQuestionRouter({
     anthropic: {},
     db,
     sendMessage: async (space, message, opts = {}) => (sent.push([space, message, opts.threadName || null]), { threadName: `${space}/threads/t${sent.length}` }),
     findDirectMessage: async () => 'spaces/DM-9',
     reviewerEmail: 'blake@example.com',
-    log: () => {},
+    log: (...a) => logs.push(a),
     endpoint: 'https://example.com/',
     qaNotes: {
       readNotes: async (ids) => NOTES.filter((n) => ids.includes(n.noteId)),
@@ -81,10 +83,12 @@ async function harness(found, { answeredAt = '2026-11-09T10:00:00Z', inBrief = n
     reuseCheck: async () => found,
     readBriefNote: async (id) => (id === '9' ? { brief: { who: 'Pat tows with a Jeep.' } } : null),
     briefCheck: async () => inBrief || { ok: true, decision: 'not_in_brief', answer: '', part: '', sourceDate: '', kind: 'fact', reason: '' },
+    ...(readDealFacts ? { readDealFacts } : {}),
+    factsCheck: async (input) => (typeof inFacts === 'function' ? inFacts(input) : inFacts),
     now: () => NOW,
   });
   const ask = () => q.ask({ spaceName: 'spaces/DEAL', threadName: 'spaces/DEAL/threads/Q', isDirectMessage: false, userEmail: 'c@example.com', userDisplayName: 'Casey', text: 'When does the awning arm get here?' });
-  return { q, ask, sent, qa, data: firestore.data };
+  return { q, ask, sent, qa, logs, data: firestore.data };
 }
 
 const ANSWERED = { ok: true, decision: 'answered', noteId: '555', answer: 'Arrives Tuesday.', answeredBy: 'Blake Locke', answeredOn: '2026-11-07', kind: 'status', reason: '', costUsd: 0.001 };
@@ -198,6 +202,92 @@ test('the brief check sends the question and the brief to the small model, and r
   assert.deepStrictEqual(sent[0].output_config.format.schema, BRIEF_SCHEMA);
   assert.ok(sent[0].messages[0].content.includes('What is &lt;Pat&gt; towing with?'));
   assert.strictEqual((await checkBrief({ anthropic: fake({ ...FROM_BRIEF, answer: ' ' }), question: 'q', brief: {} })).ok, false);
+});
+
+// LightSpeed as a third source (2026-11-11): read live when the question is on a deal.
+const FACTS = { view: { feed: 'open', deal: { dealNo: '90001' }, unit: {}, mods: [], prep: [] }, ros: [] };
+const FROM_LIGHTSPEED = { ok: true, decision: 'answered', answer: 'Delivery is set for Nov 14.', part: 'Deal: delivery date', kind: 'status', reason: '', costUsd: 0.0015 };
+const NOT_EARLIER = { ok: true, decision: 'new', noteId: '' };
+
+test('with LightSpeed read, Blake sees what it would say; a status read just now is always fresh', async () => {
+  const asked = [];
+  const h = await harness(NOT_EARLIER, { readDealFacts: async (job) => (asked.push(job), FACTS), inFacts: FROM_LIGHTSPEED, inBrief: FROM_BRIEF });
+  await h.ask();
+  assert.deepStrictEqual(asked, [{ dealNumber: '90001', store: 'UT' }]);
+  const [review] = h.sent;
+  assert.ok(textOf(review[1]).includes(`*Basecamp would answer from LightSpeed:* "Delivery is set for Nov 14." (LightSpeed's Deal: delivery date, read just now, status)`), textOf(review[1]));
+  assert.deepStrictEqual(suggestion(review[1]), { header: '<b>Suggested answer</b>', answer: 'Delivery is set for Nov 14.', from: "<i>From LightSpeed's Deal: delivery date, read just now (status)</i>", buttons: ['Send this answer', 'Not right'], m: 'Delivery is set for Nov 14.' });
+  const q = Object.entries(h.data.questions).find(([, v]) => v.originThread === 'spaces/DEAL/threads/Q');
+  // LightSpeed wins over the brief; the answer's words stay out of the database.
+  assert.deepStrictEqual(q[1].reuse, { decision: 'answered', source: 'lightspeed', noteId: null, part: 'Deal: delivery date', kind: 'status', stillGood: true, answeredOn: recordDate(NOW.toISOString()), costUsd: 0.0015 });
+  assert.ok(!JSON.stringify(h.data.questions).includes('Nov 14'));
+  assert.ok(!JSON.stringify(h.logs).includes('Nov 14'));
+});
+
+test("a Team Member's earlier answer still good wins over LightSpeed; when LightSpeed does not answer, the brief does", async () => {
+  const person = await harness(ANSWERED, { readDealFacts: async () => FACTS, inFacts: FROM_LIGHTSPEED });
+  await person.ask();
+  assert.ok(textOf(person.sent[0][1]).includes('*Basecamp would answer:* "Arrives Tuesday."'));
+
+  const silent = await harness(NOT_EARLIER, { readDealFacts: async () => FACTS, inFacts: { ...FROM_LIGHTSPEED, decision: 'not_in_lightspeed', answer: '' }, inBrief: FROM_BRIEF });
+  await silent.ask();
+  assert.ok(textOf(silent.sent[0][1]).includes('from the brief'));
+});
+
+test('LightSpeed down, missing, or failing its check never stops a question', async () => {
+  let checked = 0;
+  const count = () => ((checked += 1), FROM_LIGHTSPEED);
+  for (const readDealFacts of [async () => null, async () => { throw new Error('down'); }]) {
+    const h = await harness(NOT_EARLIER, { readDealFacts, inFacts: count });
+    assert.strictEqual(await h.ask(), SAY.routed('Parts Manager'));
+    assert.ok(!textOf(h.sent[0][1]).includes('LightSpeed'));
+  }
+  assert.strictEqual(checked, 0, 'nothing to check when LightSpeed gave no facts');
+  const broken = await harness(NOT_EARLIER, { readDealFacts: async () => FACTS, inFacts: async () => { throw new Error('model down'); } });
+  assert.strictEqual(await broken.ask(), SAY.routed('Parts Manager'));
+  // Lookups off: LightSpeed is never asked.
+  const off = await harness(NOT_EARLIER, { inFacts: count });
+  await off.ask();
+  assert.strictEqual(checked, 0);
+});
+
+test('the LightSpeed check reads a trimmed deal: no prices, no "in" date, long clock sessions counted, and the rules against "done"', async () => {
+  const { checkFacts, factsFor, SCHEMA: FACTS_SCHEMA, SYSTEM } = require('../src/agents/factsAnswer');
+  const view = {
+    feed: 'open',
+    deal: { dealNo: '90001', experienceCenter: 'Utah', state: 'Pending', stage: null, opened: '2026-10-01', deliveryDate: null, salesCoach: 'Casey Coach', deposit: 1000, salesNotes: null, customerNotes: 'Wants <b>solar</b>' },
+    unit: { year: '2026', make: 'ROAMER', model: 'R1', newUsed: 'New', stockNumber: 'S1', vin: 'VIN0000000000TEST', dateReceived: null },
+    mods: [{ type: 'Customer Add', includedAtNoCharge: false, title: 'Solar kit', description: 'Solar kit', laborRetailPrice: 450, repairOrder: { number: '70001 ', status: 'Open' } }, { type: 'Included', includedAtNoCharge: true, title: 'Hitch', description: 'Charge sales', laborRetailPrice: 0, repairOrder: null }],
+    prep: [{ kind: 'PDI', title: 'PDI', description: 'PDI', laborRetailPrice: 0, repairOrder: { number: '70002', status: 'Open' } }],
+  };
+  const session = (hours) => ({ technician: 'Terry Tech', start: '2026-11-01T08:00:00', end: '2026-11-01T09:00:00', hours, loggedOut: true, saleType: 'internal' });
+  const open = { roNumber: '70001', paid: null, clock: { sessions: [session(1), session(16.5)], totalHours: 17.5, technicians: ['Terry Tech'], lastActivity: '2026-11-02T07:50:00', clockedOn: false, truncated: false } };
+  const paid = {
+    roNumber: '70002',
+    paid: { roNumber: '70002', category: null, serviceAdvisor: 'Sam Advisor', dates: { in: '2026-11-09T08:00:00', promised: null, closed: '2026-11-03T12:00:00', paid: '2026-11-05T09:00:00' }, units: [{ jobs: [{ title: 'PDI', description: null, saleType: 'To Sales - MU Prep', approval: 'approved', resolution: 'Completed PDI, no findings.', techNotes: 'Completed PDI, no findings.', recommendations: null, actualHours: 2, technicians: ['Terry Tech'], parts: [] }] }] },
+    clock: { sessions: [], totalHours: 0, technicians: [], lastActivity: null, clockedOn: false, truncated: false },
+  };
+  const facts = { view, ros: [{ number: '70001', ro: open }, { number: '70002', ro: paid }, { number: '70003', ro: null }] };
+  const f = factsFor(facts);
+  assert.deepStrictEqual(f.deal, { number: '90001', experienceCenter: 'Utah', feed: 'open deal', state: 'Pending', opened: '2026-10-01', deliveryDate: 'not set', salesCoach: 'Casey Coach', deposit: 1000, dealNotes: 'Wants <b>solar</b>' });
+  assert.strictEqual(f.trailer.received, 'not received yet');
+  assert.deepStrictEqual(f.mods, [{ title: 'Solar kit', repairOrder: '70001', kind: 'Customer Add' }, { title: 'Hitch', description: 'Charge sales', repairOrder: 'not on a repair order', kind: 'included at no charge' }]);
+  assert.deepStrictEqual(f.repairOrders[0], { number: '70001', paid: false, techTime: { hours: 17.5, sessions: 2, technicians: ['Terry Tech'], lastWorked: '2026-11-02', clockedOnNow: false, longSessions: 1 } });
+  assert.deepStrictEqual(f.repairOrders[1], { number: '70002', paid: true, techTime: 'none recorded', paidOn: '2026-11-05', workClosedOn: '2026-11-03', serviceAdvisor: 'Sam Advisor', jobs: [{ title: 'PDI', billsTo: 'To Sales - MU Prep', approval: 'approved', hoursWorked: 2, technicians: ['Terry Tech'], technicianWroteUp: 'Completed PDI, no findings.' }] });
+  assert.deepStrictEqual(f.repairOrders[2], { number: '70003', read: false });
+  const all = JSON.stringify(f);
+  assert.ok(!all.includes('450') && !all.includes('2026-11-09'), 'no labor price, no "in" date');
+
+  const sent = [];
+  const fake = (out) => ({ messages: { create: async (body) => (sent.push(body), { stop_reason: 'end_turn', usage: { input_tokens: 1500, output_tokens: 60 }, content: [{ type: 'text', text: JSON.stringify(out) }] }) } });
+  const r = await checkFacts({ anthropic: fake(FROM_LIGHTSPEED), question: 'Is the <solar> done?', facts });
+  assert.deepStrictEqual([r.ok, r.decision, r.part], [true, 'answered', 'Deal: delivery date']);
+  assert.strictEqual(sent[0].model, 'claude-haiku-5-5');
+  assert.deepStrictEqual(sent[0].output_config.format.schema, FACTS_SCHEMA);
+  assert.ok(sent[0].messages[0].content.includes('Is the &lt;solar&gt; done?') && sent[0].messages[0].content.includes('Wants &lt;b&gt;solar'));
+  assert.ok(/Nothing in these facts says a job, a mod, or a PDI is finished/.test(SYSTEM) && /Tech time shows that someone clocked on/.test(SYSTEM));
+  assert.strictEqual((await checkFacts({ anthropic: fake({ ...FROM_LIGHTSPEED, answer: ' ' }), question: 'q', facts })).ok, false);
+  assert.strictEqual((await checkFacts({ anthropic: fake({ ...FROM_LIGHTSPEED, decision: 'maybe' }), question: 'q', facts })).ok, false);
 });
 
 // The routed-question card's buttons (Blake, 2026-11-07): answered from the card, not a thread.
