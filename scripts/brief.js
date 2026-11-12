@@ -125,6 +125,8 @@ function render() {
     return;
   }
   console.log(renderBrief({ dealNumber: context.dealNumber, context, brief }));
+  // The brief is on screen; the Roamer's record does not stay on the laptop.
+  fs.rmSync(WORK_DIR, { recursive: true, force: true });
 }
 
 async function main() {

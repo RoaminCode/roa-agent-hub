@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
+    "check": "node -e \"require('./src/server')\" && node --test",
+    "deploy": "npm run check && gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub",
     "show-rjb-view": "node scripts/show-rjb-view.js"
   },
   "dependencies": {

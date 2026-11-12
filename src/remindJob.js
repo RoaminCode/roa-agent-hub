@@ -16,6 +16,8 @@ const { primary, secondary } = require('./chat/style');
 // The furthest ahead a reminder may be set.
 const MAX_AHEAD_MS = 60 * 24 * 60 * 60 * 1000;
 const TIME_ZONE = 'America/Denver';
+// How many timer runs try to send a reminder before it is given up on.
+const MAX_TRIES = 3;
 
 const SAY = {
   empty: 'Say what and when, for example: /remind me let the Roamer know if we got that ordered within the hour',
@@ -114,13 +116,17 @@ function createReminders({ anthropic, db, findDealSpace, findDirectMessage, send
       if (!(await db.claimReminder(r.id))) continue;
       try {
         const dm = await findDirectMessage(r.userName);
-        await sendMessage(dm, reminderCard({ id: r.id, what: r.what, dealNumber: r.dealNumber, spaceUri: r.spaceUri, endpoint }));
+        const lastTry = (r.tries || 0) >= MAX_TRIES - 1;
+        await sendMessage(dm, lastTry ? `Reminder${r.dealNumber ? ` (deal ${r.dealNumber})` : ''}: ${r.what}` : reminderCard({ id: r.id, what: r.what, dealNumber: r.dealNumber, spaceUri: r.spaceUri, endpoint }));
         await db.finishReminder(r.id, 'sent');
         sent += 1;
         log('INFO', 'reminder sent', { dealNumber: r.dealNumber, user: r.userEmail, lateBySeconds: Math.round((now().getTime() - Date.parse(r.dueAt)) / 1000) });
       } catch (err) {
-        await db.finishReminder(r.id, 'failed').catch(() => {});
-        log('ERROR', 'reminder could not be sent', { dealNumber: r.dealNumber, user: r.userEmail, error: errorFields(err) });
+        // Its words are kept and it is tried again on the next timer runs. The last try is
+        // plain text, in case the card was the problem; after that it is given up on.
+        const tries = await db.retryReminder(r.id).catch(() => MAX_TRIES);
+        if (tries >= MAX_TRIES) await db.finishReminder(r.id, 'failed').catch(() => {});
+        log('ERROR', tries >= MAX_TRIES ? 'reminder could not be sent, gave up' : 'reminder could not be sent, will try again', { dealNumber: r.dealNumber, user: r.userEmail, tries, error: errorFields(err) });
       }
     }
     return sent;

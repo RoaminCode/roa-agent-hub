@@ -11,6 +11,7 @@ Start with `HANDOFF.md` for what is live, what is decided, and what is next. `CL
 - **Deal spaces:** a Chat space per open deal with the brief as its first post; opening one finds or creates the deal's Delivery record in HubSpot.
 - **Notes:** `/note`, `note <deal#> ...` in a direct message, and Save to HubSpot on any message.
 - **Questions:** `/ask` works out which role owns the answer and, in shadow mode, sends it to Blake with a suggested answer from earlier answers or the brief.
+- **Commitment follow-ups:** when an answer to a routed question promises something later, Basecamp checks at the due time whether it was kept (a newer answer, the deal space, HubSpot) and, if not, sends one check-in, to Blake in shadow mode.
 - **`/new`, `/wow`, `/remind`:** what is new on a deal, WOW ideas tailored from the brief, and a reminder sent at the time asked.
 - **`/text`:** drafts a text to the Roamer. Nothing is sent until a text approver reviews the exact words in a dialog and approves; the send goes through Aloware as the company and is logged.
 - **`facts <deal#>` and `ro <number>`:** in a direct message, the deal or one repair order as LightSpeed has it right now (state, trailer, mods, PDI, tech time), read live with no AI.
@@ -22,7 +23,7 @@ What Basecamp can write: HubSpot notes (on the Roamer and the Delivery record, n
 
 - `src/server.js`: HTTP entry point; wires everything from environment and Secret Manager values. The environment variables are listed at the top of the file.
 - `src/router.js`: verifies the request came from Google Chat, checks permissions, and routes messages, Home, and button taps.
-- `src/*Job.js`, `src/spaceNotes.js`: one file per feature (brief, space, ask, text, wow, new, remind, notes).
+- `src/*Job.js`, `src/spaceNotes.js`: one file per feature (brief, space, ask, text, wow, new, remind, commit, facts, notes). `src/workHours.js` is business hours in Utah.
 - `src/agents/`: the prompts and schemas. `models.js` holds every model id and price; `run.js` is the shared model call that prices and counts each one.
 - `src/spend.js`: the AI spend records, the daily limit, and the `cost` report.
 - `src/chat/`: Chat plumbing (request verification, event parsing, sending, spaces, cards).
@@ -36,5 +37,4 @@ What Basecamp can write: HubSpot notes (on the Roamer and the Delivery record, n
 ## Run and deploy
 
 - Node.js 24. `npm install`, then `npm test`.
-- Before a deploy: `node -e "require('./src/server')"` and `npm test`.
-- Deploy: `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (keeps existing settings, env vars, and secrets).
+- `npm run check` loads the server and runs the tests. `npm run deploy` does that, then deploys: `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub` (keeps existing settings, env vars, and secrets). GitHub runs the tests on every push (`.github/workflows/test.yml`).

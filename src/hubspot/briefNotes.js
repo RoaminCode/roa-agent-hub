@@ -1,8 +1,9 @@
 'use strict';
 
-// Saves a Roamer brief as Basecamp's one brief note on the deal: updates the note in place
-// when the deal already has one (Blake's call, 2026-11-06), creates it otherwise. These
-// are the only HubSpot writes Basecamp makes. With `db`, the note's id and what the brief
+// Saves a Roamer brief as the deal's one brief note, kept on the Roamer and the deal's
+// Delivery record (never on the deal itself): updates the note in place when there is one
+// (Blake's call, 2026-11-06), creates it otherwise. Every HubSpot write Basecamp makes goes
+// through the client's four narrow methods (hubspot/client.js). With `db`, the note's id and what the brief
 // was built from are recorded in Basecamp's own records, which find the note next time.
 
 const { renderBriefNote, isBriefNoteText, briefSignature } = require('../agents/briefNote');

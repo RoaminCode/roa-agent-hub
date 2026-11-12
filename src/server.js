@@ -53,6 +53,7 @@ const { createWow } = require('./wowJob');
 const { createTexts } = require('./textJob');
 const { createWhatsNew } = require('./newJob');
 const { createReminders } = require('./remindJob');
+const { createCommitments } = require('./commitJob');
 const { createAloware } = require('./aloware');
 const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries, withDeliveryRecord } = require('./hubspot/deliveries');
@@ -101,7 +102,8 @@ function log(severity, message, fields = {}) {
 
 // Briefs and App Home. Both need HubSpot; briefs also need Anthropic. Without the keys,
 // each says it is not switched on rather than failing.
-function features(audience) {
+// `aiPaused` is AI_PAUSED: the timer's own AI work (the commitment check) honors it too.
+function features(audience, { aiPaused = false } = {}) {
   const { HUBSPOT_ACCESS_TOKEN, ANTHROPIC_API_KEY } = process.env;
   const sendMessage = createChatSender();
   const findDirectMessage = createDirectMessageFinder();
@@ -149,6 +151,7 @@ function features(audience) {
   let listWowIdeas = async () => "WOW plans aren't switched on yet.";
   let setReminder = async () => "Reminders aren't switched on yet.";
   let dueReminders = async () => 0;
+  let dueCommitments = async () => 0;
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
     startBrief = (job) =>
@@ -182,7 +185,21 @@ function features(audience) {
     startSpace = later('open space', async (job) => spaceJob.openSpace({ ...job, spaceName: await spaceFor(job) }));
     useSpace = later('use space', spaceJob.useSpace);
     if (process.env.SHADOW_REVIEWER) {
-      const questions = createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot, lock: db.withLock }), findDealSpace, readBriefNote: loadContext.readBriefNote, readDealFacts: facts ? facts.read : null });
+      // Promises made in answers, checked at their due time by the timer (commitJob.js).
+      const commitments = createCommitments({
+        anthropic,
+        db,
+        qaNotes: createQaNotes({ hubspot, lock: db.withLock }),
+        loadContext,
+        listSpaceMessages: spaces.listMessages,
+        findDirectMessage,
+        sendMessage,
+        reviewerEmail: process.env.SHADOW_REVIEWER,
+        aiOff: async () => aiPaused || (await meter.overLimit()),
+        log,
+      });
+      dueCommitments = commitments.due;
+      const questions = createQuestionRouter({ onAnswer: commitments.noteAnswer, anthropic, db, sendMessage, findDirectMessage, reviewerEmail: process.env.SHADOW_REVIEWER, log, endpoint: audience, qaNotes: createQaNotes({ hubspot, lock: db.withLock }), findDealSpace, readBriefNote: loadContext.readBriefNote, readDealFacts: facts ? facts.read : null });
       askQuestion = questions.ask;
       relayAnswer = questions.relayAnswer;
       clarifyQuestion = questions.clarify;
@@ -195,7 +212,6 @@ function features(audience) {
     // "/remind": a person's own reminders, sent by Basecamp when Cloud Scheduler calls /tasks/tick.
     const reminders = createReminders({ anthropic, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience });
     setReminder = reminders.remind;
-    dueReminders = reminders.due;
     // The WOW idea library: the team's sheet when WOW_SHEET_ID is set, else the database.
     const sheetId = process.env.WOW_SHEET_ID;
     const library = sheetId ? createSheetLibrary({ sheetId }) : createDbLibrary({ db });
@@ -240,6 +256,10 @@ function features(audience) {
         .catch((err) => log('ERROR', 'could not find where to send the brief', { dealNumber: job.dealNumber, error: errorFields(err) }));
     };
   }
+
+  // Sending a reminder that is due uses no AI and no HubSpot, so it is wired outside both:
+  // a missing key must not hold back reminders people already set.
+  dueReminders = createReminders({ anthropic: null, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience }).due;
 
   // "facts <deal#>": the deal as LightSpeed has it. Posted where it was asked, when
   // LightSpeed answers. "ro <number>" is one repair order, through the same function.
@@ -314,7 +334,14 @@ function features(audience) {
     sendMessage(spaceName, text, { threadName: threadName || null }).catch((err) => log('ERROR', 'could not post notice', { error: errorFields(err) }));
   }
 
-  return { startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, seenPerson, saveSpaceNote, buildHome, startFacts, startRo, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
+  // The number of the deal a space is linked to, by Basecamp's own records, or null.
+  const dealOfSpace = async (spaceName) => {
+    const space = await db.getSpace(spaceName);
+    const deal = space && space.status === 'ready' ? await db.getDeal(space.dealId) : null;
+    return deal && deal.spaceName === spaceName ? String(space.dealNumber) : null;
+  };
+
+  return { dealOfSpace, startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, dueCommitments, seenPerson, saveSpaceNote, buildHome, startFacts, startRo, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
 }
 
 function start() {
@@ -335,7 +362,7 @@ function start() {
   console.log(JSON.stringify({ severity: 'INFO', message: 'permissions', aiUsers: aiUsers.length, textApprovers: textApprovers.length, dailyLimitUsd: Number(process.env.AI_DAILY_LIMIT_USD) || null }));
   if (process.env.TEXTS_LIVE === 'true' && !textApprovers.length) console.log(JSON.stringify({ severity: 'WARNING', message: 'texts are on but TEXT_APPROVERS is empty: nobody can approve a text' }));
 
-  const featureSet = features(audience);
+  const featureSet = features(audience, { aiPaused });
   const handle = createRouter({
     ...featureSet,
     aiPaused,
@@ -350,7 +377,8 @@ function start() {
     allowedUsers: list(process.env.ALLOWED_USERS),
   });
 
-  // Cloud Scheduler calls POST /tasks/tick every few minutes, signed as Basecamp's own
+  // Cloud Scheduler calls POST /tasks/tick every few minutes (due reminders and commitment
+  // check-ins), signed as Basecamp's own
   // service account with this path as the audience, so nothing else can trigger sends.
   const verifyTick = createVerifier({
     audience: `${audience.replace(/\/+$/, '')}/tasks/tick`,
@@ -361,12 +389,18 @@ function start() {
   const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url.split('?')[0] === '/tasks/tick') {
       if (!(await verifyTick(req.headers.authorization))) return send(res, 401, { error: 'unauthorized' });
-      try {
-        return send(res, 200, { reminders: await featureSet.dueReminders() });
-      } catch (err) {
-        console.error(JSON.stringify({ severity: 'ERROR', message: 'tick failed', error: errorFields(err) }));
-        return send(res, 500, { error: 'tick failed' });
+      // Each kind of timed work runs on its own, so one failing does not hold back the other.
+      const ran = {};
+      let failed = false;
+      for (const [name, run] of [['reminders', featureSet.dueReminders], ['commitments', featureSet.dueCommitments]]) {
+        try {
+          ran[name] = await run();
+        } catch (err) {
+          failed = true;
+          console.error(JSON.stringify({ severity: 'ERROR', message: 'tick failed', part: name, error: errorFields(err) }));
+        }
       }
+      return failed ? send(res, 500, { error: 'tick failed', ...ran }) : send(res, 200, ran);
     }
     // Not /healthz: Cloud Run reserves paths ending in "z" and never forwards them.
     if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });

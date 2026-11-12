@@ -2,7 +2,8 @@
 
 // Creates deal spaces in Google Chat as the Basecamp app and adds people to them. Uses app
 // authentication with two scopes a Workspace admin must approve once: creating spaces and
-// managing memberships. Chat apps cannot pin messages (pins need a person's sign-in), so a
+// managing memberships; reading a space's messages (for commitment follow-ups) uses a
+// third, chat.app.messages.readonly. Chat apps cannot pin messages (pins need a person's sign-in), so a
 // deal space's brief is its first post, for a person to pin.
 
 const { safeError } = require('../errors');
@@ -19,7 +20,9 @@ const fit = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` :
 const defaultAuth = () => new GoogleAuth({ scopes: SCOPES });
 const botAuth = () => new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/chat.bot'] });
 
-function createSpaces({ auth = defaultAuth(), readAuth = botAuth() } = {}) {
+const readMessagesAuth = () => new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/chat.app.messages.readonly'] });
+
+function createSpaces({ auth = defaultAuth(), readAuth = botAuth(), messagesAuth = readMessagesAuth() } = {}) {
   // A new named space with Basecamp in it. Returns { name: "spaces/...", uri }.
   async function createSpace({ displayName, description }) {
     const client = await auth.getClient();
@@ -91,7 +94,31 @@ function createSpaces({ auth = defaultAuth(), readAuth = botAuth() } = {}) {
     }
   }
 
-  return { createSpace, addMember, findSpace, listSpaces, isMember };
+  // What people said in a space since `since` (a Date), oldest first, as [{ who, at, text }].
+  // Basecamp's own messages and other apps' are left out. Needs the messages scope a
+  // Workspace admin approves (chat.app.messages.readonly). At most `max` messages, the
+  // newest ones. With app authentication Chat may leave a sender's name off; `who` is then null.
+  async function listMessages(spaceName, since, { max = 200 } = {}) {
+    if (!/^spaces\/[\w-]+$/.test(spaceName || '')) throw safeError('listMessages: invalid space name');
+    if (!(since instanceof Date) || Number.isNaN(since.getTime())) throw safeError('listMessages: invalid time');
+    const client = await messagesAuth.getClient();
+    const out = [];
+    let pageToken;
+    do {
+      const query = `pageSize=100&orderBy=${encodeURIComponent('createTime desc')}&filter=${encodeURIComponent(`createTime > "${since.toISOString()}"`)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+      const res = await client.request({ url: `${API}/${spaceName}/messages?${query}`, method: 'GET' });
+      for (const m of res.data.messages || []) {
+        const sender = m.sender || {};
+        const text = String(m.text || m.argumentText || '').trim();
+        if (sender.type === 'BOT' || !text) continue;
+        out.push({ who: sender.displayName || null, at: m.createTime, text });
+      }
+      pageToken = res.data.nextPageToken;
+    } while (pageToken && out.length < max);
+    return out.slice(0, max).reverse();
+  }
+
+  return { createSpace, addMember, findSpace, listSpaces, isMember, listMessages };
 }
 
 module.exports = { createSpaces, NAME_MAX, DESCRIPTION_MAX };

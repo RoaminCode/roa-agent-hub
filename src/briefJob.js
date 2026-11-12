@@ -16,6 +16,7 @@ const SORRY = {
   noContact: (n) => `Deal ${n} has no Roamer contact attached in HubSpot, so there's nothing to read. That needs fixing in HubSpot; it has been flagged.`,
   notOnDeal: (n) => `That contact is no longer on deal ${n} in HubSpot. Ask for the brief again to pick from the current contacts.`,
   failed: (n) => `I couldn't finish the brief for deal ${n}. Blake can see what happened in the logs.`,
+  pickInDirect: (n) => `Deal ${n} has more than one contact, and I can't tell which is the Roamer. Ask me for "brief ${n}" in a direct message with me to pick, then ask here again.`,
   noCredits: "Basecamp's AI credits have run out, so I can't write briefs right now. Blake will need to add more. Home still shows every deal.",
 };
 
@@ -126,14 +127,17 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, e
   const keepNote = createNoteKeeper({ saveBriefNote, log });
   // `announce`, when given, is posted before any work so the user knows the brief is coming.
   // `contactId` is the Roamer picked from the contact picker, when the deal has several.
-  return async function runBrief({ spaceName, dealNumber, store = 'UT', announce, contactId }) {
+  // `inDealSpace`: asked for in the deal's own space, where the Roamer picked for its brief
+  // is used again, and the contact picker (which names contacts) is never posted.
+  return async function runBrief({ spaceName, dealNumber, store = 'UT', announce, contactId, inDealSpace = false }) {
     const started = Date.now();
     try {
       if (announce) await sendMessage(spaceName, announce);
-      const context = await loadContext({ store, dealNumber, contactId });
+      const context = await loadContext({ store, dealNumber, contactId, ...(inDealSpace ? { rememberPick: true } : {}) });
       if (context.duplicate) return await sendMessage(spaceName, SORRY.duplicate(dealNumber, store));
       if (!context.found) return await sendMessage(spaceName, SORRY.notFound(dealNumber, store));
       if (context.notOnDeal) return await sendMessage(spaceName, SORRY.notOnDeal(dealNumber));
+      if (context.choices && inDealSpace) return await sendMessage(spaceName, SORRY.pickInDirect(dealNumber));
       if (context.choices) {
         return await sendMessage(spaceName, renderContactChoice({ dealNumber, store, choices: context.choices, contactCount: context.contactCount, endpoint }));
       }

@@ -27,8 +27,8 @@ function createSheetLibrary({ sheetId, auth = new GoogleAuth({ scopes: ['https:/
     return res.data;
   }
 
-  // Active ideas, most used first. An idea's id is its row ("row-5"), so a chosen idea can
-  // be counted; rows are only ever added at the end, never inserted by Basecamp.
+  // Active ideas, most used first. An idea's id is its row ("row-5") when it was read; a
+  // chosen idea is found again by its words before it is counted (useIdea).
   async function listIdeas() {
     const data = await call('GET', `${base}/${encodeURIComponent(`${q(IDEAS)}!A2:G`)}`);
     return (data.values || [])
@@ -42,15 +42,33 @@ function createSheetLibrary({ sheetId, auth = new GoogleAuth({ scopes: ['https:/
     return (data.values || []).map((r) => (r[0] || '').trim()).filter(Boolean);
   }
 
-  // A chosen library idea: Times used goes up by one.
-  async function useIdea({ ideaId }) {
+  // A chosen library idea: Times used goes up by one. The team sorts, inserts, and deletes
+  // rows, so the row is found again by the idea's words (`idea`) at the moment it is chosen:
+  // the row it was on when suggested if that still holds it, else wherever it moved to. An
+  // idea no longer in the sheet is added back as new. Without `idea` (a card drawn before
+  // it was carried), the row number is trusted as before.
+  async function useIdea({ ideaId, idea = '', fitsWhen = '', category = '', tier = '' }) {
     const m = /^row-(\d+)$/.exec(ideaId || '');
     if (!m) throw safeError('useIdea: invalid idea id');
-    const cell = `${q(IDEAS)}!F${m[1]}`;
+    let row = Number(m[1]);
+    const wanted = String(idea || '').trim().toLowerCase();
+    if (wanted) {
+      const rows = (await call('GET', `${base}/${encodeURIComponent(`${q(IDEAS)}!A2:A`)}`)).values || [];
+      const at = (n) => String((rows[n - 2] || [])[0] || '').trim().toLowerCase();
+      if (at(row) !== wanted) {
+        const moved = rows.findIndex((r) => String(r[0] || '').trim().toLowerCase() === wanted);
+        if (moved < 0) {
+          await addIdea({ idea: String(idea).trim(), fitsWhen, category, tier });
+          return null;
+        }
+        row = moved + 2;
+      }
+    }
+    const cell = `${q(IDEAS)}!F${row}`;
     const now = await call('GET', `${base}/${encodeURIComponent(cell)}`);
     const uses = Number(((now.values || [])[0] || [])[0]) || 0;
     await call('PUT', `${base}/${encodeURIComponent(cell)}?valueInputOption=RAW`, { values: [[uses + 1]] });
-    return ideaId;
+    return `row-${row}`;
   }
 
   // A new idea Basecamp suggested and a Team Member chose: added for the team to see and refine.

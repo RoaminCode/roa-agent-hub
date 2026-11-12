@@ -35,8 +35,16 @@
 //   locks/{name}            token, at: held for seconds while a HubSpot note is read and rewritten
 //   reminders/{auto}        userEmail, userName (Chat id, for the direct message), what,
 //                           dueAt, dealId, dealNumber, spaceUri, status ("pending",
-//                           "sending", "sent", "failed"), sentAt, at. `what` is the person's
-//                           own words, kept only until the reminder is sent, then cleared
+//                           "sending", "sent", "failed"), tries, claimedAt, sentAt, at.
+//                           `what` is the person's own words, kept only until the reminder
+//                           is sent or given up on, then cleared
+//   commitments/{auto}      questionId, dealId, dealNumber, noteId, topic, by (email),
+//                           byName, what, promisedAt, dueAt, sendAt, status ("pending",
+//                           "checking", "kept", "followed_up", "failed"), keptBy ("answer",
+//                           "space", "hubspot"), tries, claimedAt, closedAt. A promise made
+//                           in an answer (commitJob.js). `what` is the promise in the
+//                           person's words, kept only until it is closed, then cleared; the
+//                           rest stays as the record of kept and missed promises
 //   spend/{YYYY-MM-DD}      day (Utah), totalUsd, calls, jobs { job: { usd, calls } },
 //                           models { model: { usd, calls } }, limitReachedAt, updatedAt:
 //                           what the AI cost that day (spend.js). A deal's own total is
@@ -47,6 +55,9 @@ const { safeError } = require('./errors');
 
 // A lock older than this was left by a run that crashed, and may be taken.
 const LOCK_MS = 30 * 1000;
+// A reminder or commitment claimed by a timer run for longer than this was left by a run
+// that stopped, and may be claimed again.
+const STALE_MS = 10 * 60 * 1000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A claim to create a deal's space stops a second tap from creating a second space. Past
@@ -374,7 +385,13 @@ function createDb({ firestore, now = () => new Date() }) {
     try {
       return await fn();
     } finally {
-      await ref.delete().catch(() => {});
+      // Only its own lock: one held past LOCK_MS may have been taken by another run by now.
+      await firestore
+        .runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          if (snap.exists && snap.data().token === token) tx.delete(ref);
+        })
+        .catch(() => {});
     }
   }
 
@@ -390,24 +407,101 @@ function createDb({ firestore, now = () => new Date() }) {
     return ref.id;
   }
   async function dueReminders() {
-    const snap = await reminders.where('status', '==', 'pending').get();
     const t = now().getTime();
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((r) => Date.parse(r.dueAt) <= t);
+    const pending = (await reminders.where('status', '==', 'pending').get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+    return [...pending, ...(await stale(reminders, 'sending'))].filter((r) => Date.parse(r.dueAt) <= t);
   }
+  // Records claimed by a run that then stopped (a deploy, a crash): claimed longer ago than
+  // STALE_MS and never finished. They are due again, so nothing waits forever.
+  const isStale = (d) => !d.claimedAt || now().getTime() - Date.parse(d.claimedAt) > STALE_MS;
+  async function stale(collection, status) {
+    return (await collection.where('status', '==', status).get()).docs.map((d) => ({ id: d.id, ...d.data() })).filter(isStale);
+  }
+  const claimable = (d, claimed) => d.status === 'pending' || (d.status === claimed && isStale(d));
   // Claims one reminder for sending, so two timer runs never send it twice: true only for
   // the run that moved it from pending.
   async function claimReminder(id) {
     const ref = reminders.doc(String(id));
     return firestore.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
-      if (!snap.exists || snap.data().status !== 'pending') return false;
+      if (!snap.exists || !claimable(snap.data(), 'sending')) return false;
       tx.set(ref, { status: 'sending', claimedAt: stamp() }, { merge: true });
       return true;
     });
   }
-  // Sent or failed; the person's words are cleared either way.
+  // Sent or given up on; the person's words are cleared either way.
   async function finishReminder(id, status) {
     await reminders.doc(String(id)).set({ status, what: null, sentAt: stamp() }, { merge: true });
+  }
+  // A send that failed: back to pending with its words kept, to try again on the next
+  // timer run. Returns how many times it has now been tried.
+  async function retryReminder(id) {
+    const ref = reminders.doc(String(id));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const tries = ((snap.exists && snap.data().tries) || 0) + 1;
+      tx.set(ref, { status: 'pending', tries, claimedAt: null }, { merge: true });
+      return tries;
+    });
+  }
+
+  // Promises made in answers (commitJob.js). Open ones are few, so the due check reads them
+  // all and compares times in code, as reminders do.
+  const commitments = firestore.collection('commitments');
+  async function addCommitment({ questionId, dealId = null, dealNumber = null, noteId = null, topic = null, by, byName = null, what, dueAt, sendAt }) {
+    const ref = await commitments.add({ questionId: String(questionId), dealId: dealId ? String(dealId) : null, dealNumber: dealNumber ? String(dealNumber) : null, noteId: noteId ? String(noteId) : null, topic, by, byName, what, promisedAt: stamp(), dueAt: dueAt.toISOString(), sendAt: sendAt.toISOString(), status: 'pending', tries: 0 });
+    return ref.id;
+  }
+  // Open promises whose check-in time has come.
+  async function dueCommitments() {
+    const t = now().getTime();
+    const pending = (await commitments.where('status', '==', 'pending').get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+    return [...pending, ...(await stale(commitments, 'checking'))].filter((c) => Date.parse(c.sendAt) <= t);
+  }
+  // Claims one promise for its check, so two timer runs never follow up twice.
+  async function claimCommitment(id) {
+    const ref = commitments.doc(String(id));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || !claimable(snap.data(), 'checking')) return false;
+      tx.set(ref, { status: 'checking', claimedAt: stamp() }, { merge: true });
+      return true;
+    });
+  }
+  // A check that could not finish (AI off for now, or an error): back to pending for the
+  // next timer run. `counts` false leaves the tries alone, for a wait that is nobody's
+  // failure. Returns how many times it has now been tried.
+  async function releaseCommitment(id, { counts = true } = {}) {
+    const ref = commitments.doc(String(id));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const tries = ((snap.exists && snap.data().tries) || 0) + (counts ? 1 : 0);
+      tx.set(ref, { status: 'pending', tries, claimedAt: null }, { merge: true });
+      return tries;
+    });
+  }
+  // Closed: "kept" (with how it was seen), "followed_up" (not seen by its time, so the one
+  // follow-up went out), or "failed". The promise's words are cleared.
+  async function finishCommitment(id, status, { keptBy = null } = {}) {
+    await commitments.doc(String(id)).set({ status, keptBy, what: null, closedAt: stamp() }, { merge: true });
+  }
+  // A newer answer on a question keeps the promises still open on it. Returns how many.
+  async function keepCommitmentsFor(questionId) {
+    const open = (await commitments.where('questionId', '==', String(questionId)).get()).docs.filter((d) => ['pending', 'checking'].includes(d.data().status));
+    for (const d of open) await finishCommitment(d.id, 'kept', { keptBy: 'answer' });
+    return open.length;
+  }
+
+  // One question by its id, as { id, ...fields }, or null.
+  async function getQuestion(id) {
+    if (!/^[\w-]+$/.test(String(id || ''))) return null;
+    const snap = await firestore.collection('questions').doc(String(id)).get();
+    return snap.exists ? { id: String(id), ...snap.data() } : null;
+  }
+  // The reviewer's thread for a question, when a later message about it started a new one,
+  // so a reply there is still read as its answer.
+  async function setReviewerThread({ id, reviewerThread }) {
+    await firestore.collection('questions').doc(String(id)).set({ reviewerThread }, { merge: true });
   }
 
   // One AI call's cost, added to its day (by job and by model) and, when it was about a
@@ -455,7 +549,7 @@ function createDb({ firestore, now = () => new Date() }) {
     return snap.exists ? snap.data() : null;
   }
 
-  return { addSpend, getSpend, addReminder, dueReminders, claimReminder, finishReminder, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
+  return { addSpend, getSpend, addReminder, dueReminders, claimReminder, finishReminder, retryReminder, addCommitment, dueCommitments, claimCommitment, releaseCommitment, finishCommitment, keepCommitmentsFor, getQuestion, setReviewerThread, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
 }
 
-module.exports = { createDb, CLAIM_MS };
+module.exports = { createDb, CLAIM_MS, STALE_MS };

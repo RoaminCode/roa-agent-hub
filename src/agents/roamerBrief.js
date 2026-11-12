@@ -146,6 +146,19 @@ function formatRecord({ deal, salesCoach, contact, items, omitted, clipped, miss
   return `${header}\n\n<record>\n${body}\n</record>`;
 }
 
+// A brief takes 15 to 60 seconds. Without these the SDK waits 10 minutes and tries three
+// times: half an hour of silence, and a brief that can be paid for twice.
+const CALL_LIMITS = { timeout: 3 * 60 * 1000, maxRetries: 1 };
+
+// The longest each list may be, as the instructions ask. Held here too, so an answer that
+// runs long is not saved and then sent back to the model on every update.
+const CAPS = { tags: 5, key_facts: 4, wow: 8, commitments: 8, excites: 5, open_questions: 5 };
+function capBrief(brief) {
+  const out = { ...brief };
+  for (const [part, max] of Object.entries(CAPS)) if (Array.isArray(out[part]) && out[part].length > max) out[part] = out[part].slice(0, max);
+  return out;
+}
+
 async function writeBrief({ anthropic, context }) {
   const stream = anthropic.beta.messages.stream({
     model: MODEL,
@@ -158,7 +171,7 @@ async function writeBrief({ anthropic, context }) {
     output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
     system: SYSTEM,
     messages: [{ role: 'user', content: formatRecord(context) }],
-  });
+  }, CALL_LIMITS);
   const message = await stream.finalMessage();
   // Counted whatever comes back: a brief that fails its checks was still paid for.
   const spent = await settle({ anthropic, job: 'brief', asked: MODEL, message, dealId: context.deal ? context.deal.id : null });
@@ -172,7 +185,7 @@ async function writeBrief({ anthropic, context }) {
     return { ok: false, reason: 'bad_output', ...spent };
   }
   if (!isBrief(brief)) return { ok: false, reason: 'bad_output', ...spent };
-  return { ok: true, brief, ...spent };
+  return { ok: true, brief: capBrief(brief), ...spent };
 }
 
 // Updating a saved brief from only what is new, instead of rereading the whole record.
@@ -242,7 +255,7 @@ async function updateBrief({ anthropic, context, brief, newItems }) {
     output_config: { effort: 'low', format: { type: 'json_schema', schema: UPDATE_SCHEMA } },
     system: UPDATE_SYSTEM,
     messages: [{ role: 'user', content: formatUpdate({ context, brief, newItems }) }],
-  });
+  }, CALL_LIMITS);
   const message = await stream.finalMessage();
   const spent = await settle({ anthropic, job: 'brief update', asked: MODEL, message, dealId: context.deal ? context.deal.id : null });
   if (message.stop_reason === 'refusal') return { ok: false, reason: 'refusal', ...spent };
@@ -257,7 +270,7 @@ async function updateBrief({ anthropic, context, brief, newItems }) {
   if (out.rebuild) return { ok: true, rebuild: true, brief, newSince: out.new_since, changed: [], ...spent };
   const merged = applyChanges(brief, out);
   if (!merged) return { ok: false, reason: 'bad_output', ...spent };
-  return { ok: true, rebuild: false, brief: merged, newSince: out.new_since, changed: [...new Set(out.changed)], ...spent };
+  return { ok: true, rebuild: false, brief: capBrief(merged), newSince: out.new_since.slice(0, 8), changed: [...new Set(out.changed)], ...spent };
 }
 
 // The schema constrains the model's output; this catches anything that still slips past,
@@ -373,4 +386,4 @@ function renderBrief({ dealNumber, context, brief, now }) {
   return text;
 }
 
-module.exports = { writeBrief, updateBrief, formatUpdate, applyChanges, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL };
+module.exports = { writeBrief, updateBrief, formatUpdate, applyChanges, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL, capBrief, CAPS, CALL_LIMITS };

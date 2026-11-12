@@ -51,7 +51,7 @@ function renderSpaceNote({ text, userDisplayName, userEmail, now, writtenBy, fro
 // `findDealSpace({ dealNumber })` finds a deal by number in HubSpot, for notes sent in a
 // direct message, which name their deal: "note 51455 <text>".
 function createSpaceNotes({ db, createNote, findDealSpace, log, now = () => new Date() }) {
-  // Saves the note on the deal and its Roamer and records it. Returns the reply.
+  // Saves the note on the deal's Delivery record and its Roamer and records it. Returns the reply.
   async function write({ dealId, contactId, deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, writtenBy, fromSpace }) {
     const at = now();
     // Also on the Roamer's contact, so the next brief reads it (and is rewritten, not reused).

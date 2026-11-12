@@ -257,8 +257,20 @@ function createAccessRequests({ findDealSpace, spaces, db, sendMessage, findDire
 // was deleted or that Basecamp was removed from: that deal is left out, so its tile offers
 // "Create space" (which opens or adopts one). Any other failure leaves that one deal with
 // no space button for this open of Home.
-function createDealSpaceIndex({ spaces, db, store = 'UT', log = () => {} }) {
+// Every tap on Home redraws it, and each draw asked Chat once per deal space, so one
+// person's answer is kept for a minute (`freshMs`). A space opened in that minute shows on
+// Home after it; its link is posted in the person's direct message at once either way.
+function createDealSpaceIndex({ spaces, db, store = 'UT', log = () => {}, freshMs = 60 * 1000, now = Date.now }) {
+  const kept = new Map();
   return async function spacesFor(userName) {
+    const hit = kept.get(userName);
+    if (hit && now() - hit.at < freshMs) return hit.map;
+    for (const [k, v] of kept) if (now() - v.at >= freshMs) kept.delete(k);
+    const map = await read(userName);
+    kept.set(userName, { at: now(), map });
+    return map;
+  };
+  async function read(userName) {
     const list = await db.listDealSpaces(store);
     const entries = await Promise.all(
       list.map(async (sp) => {
@@ -276,7 +288,7 @@ function createDealSpaceIndex({ spaces, db, store = 'UT', log = () => {} }) {
       }),
     );
     return new Map(entries.filter(Boolean));
-  };
+  }
 }
 
 module.exports = { createSpaceJob, createAccessRequests, createDealSpaceIndex, SAY, ACCESS };

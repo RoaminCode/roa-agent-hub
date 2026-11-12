@@ -40,7 +40,7 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
     const isNoteWrite = write && ((method === 'POST' && path === NOTES) || (method === 'PATCH' && NOTE_PATH.test(path)));
     const isDeliveryWrite = write && ((method === 'POST' && path === DELIVERIES) || (method === 'PUT' && NOTE_DELIVERY_LINK.test(path)));
     if (!isRead && !isNoteWrite && !isDeliveryWrite) {
-      throw safeError(`HubSpot client refuses ${method} to ${path}: only search and batch read are allowed`);
+      throw safeError(`HubSpot client refuses ${method} to ${path}: it is not a read or one of Basecamp's four narrow writes`);
     }
     const send = () =>
       fetchImpl(BASE + path, {
@@ -49,7 +49,20 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(timeoutMs),
       });
-    let res = await send();
+    // A read that times out or meets a server error is tried once more, so one HubSpot
+    // hiccup does not fail a whole brief. A write is never repeated: it may have landed.
+    let res;
+    try {
+      res = await send();
+    } catch (err) {
+      if (!isRead) throw err;
+      await wait(500);
+      res = await send();
+    }
+    if (isRead && res.status >= 500) {
+      await wait(500);
+      res = await send();
+    }
     // HubSpot caps searches per second. One wait and retry covers a burst like App Home's.
     if (res.status === 429) {
       const after = Number(res.headers && res.headers.get && res.headers.get('retry-after'));

@@ -171,7 +171,7 @@ function createWow({ anthropic, db, library, readBriefNote, findDealSpace, creat
       });
       // Remembered in the library: a library idea is counted, a new one is added in general form.
       const remembered = await (p.i
-        ? library.useIdea({ ideaId: p.i })
+        ? library.useIdea({ ideaId: p.i, idea: p.g || '', fitsWhen: p.f || '', category: p.c || 'Gift', tier: p.r || '$' })
         : library.addIdea({ idea: noDashes(p.g || tailored), fitsWhen: noDashes(p.f || ''), category: p.c || 'Gift', tier: p.r || '$', by: userEmail })
       ).then(
         () => true,

@@ -25,8 +25,8 @@ const MESSAGES = {
   useInSpace: (n) => `Say "use this space for ${n}" in the deal's space, after adding me to it.`,
   notAllowed: "Basecamp isn't available to you yet.",
   working: (n, roamer) => `I'll need just a moment to read up on ${roamer ? `${roamer} (deal ${n})` : `deal ${n}`}.`,
-  paused: "Roamer briefs are paused for now while Basecamp's AI funding is sorted out. Home still shows every deal, delivery, and last contact.",
-  notBriefUser: "Roamer briefs are off for you for now, to save Basecamp's AI credits for a test. Home still shows every deal, delivery, and last contact.",
+  paused: "Basecamp's AI (briefs, questions, drafts, reminders) is paused for now. Home, notes, deal facts, and approving texts still work.",
+  notBriefUser: "Basecamp's AI (briefs, questions, drafts, reminders) isn't switched on for you yet. Home, notes, and deal facts still work. Blake can add you.",
   overLimit: "Basecamp's AI reached today's spending limit and is paused until tomorrow. Home, notes, and approving texts still work.",
   notApprover: "Approving and sending texts isn't switched on for you yet, so nothing was sent. Blake can add you.",
   costOff: "Cost tracking isn't switched on yet.",
@@ -35,7 +35,7 @@ const MESSAGES = {
   roWorking: (n) => `Looking up repair order ${n} in LightSpeed. It will be here in a moment.`,
   roDirectOnly: (n) => `Repair orders stay private for now: ask me for "ro ${n}" in a direct message with me.`,
   factsDirectOnly: (n) => `Deal facts stay private for now: ask me for "facts ${n}" in a direct message with me.`,
-  directOnly: (n) => `Roamer briefs stay private for now: ask me for deal ${n} in a direct message with me.`,
+  directOnly: (n) => `Roamer briefs stay private: ask me for deal ${n} in a direct message with me, or in that deal's own space.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
 
@@ -105,6 +105,8 @@ function log(severity, message, fields = {}) {
 // `overDailyLimit()` says whether today's AI spend reached the daily limit (spend.js);
 // `showCost()` returns the spend report for "cost" in a direct message.
 // `briefUsers` and `briefsPaused` are the earlier names of the first and third, still read.
+// `dealOfSpace(spaceName)` is the number of the deal a space is linked to, or null, so a
+// deal's own space may ask for its brief.
 // `startFacts({ spaceName, dealNumber, store, userEmail })` looks a deal up in LightSpeed and
 // posts it where it was asked (factsJob.js); left out, LightSpeed lookups are off.
 // `startRo({ spaceName, roNumber, store, userEmail })` does the same for one repair order.
@@ -121,7 +123,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, startFacts = null, startRo = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, startFacts = null, startRo = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const lower = (users) => new Set(users.map((u) => u.toLowerCase()));
   const aiList = aiUsers || briefUsers;
@@ -458,11 +460,12 @@ function createRouter({ verify, allowedUsers, startFacts = null, startRo = null,
         return { status: 200, body: replyFor(event, MESSAGES.opening(cmd.dealNumber)) };
       }
       // A brief holds a Roamer's personal details, so it is posted only where the reader
-      // should see them: a direct message with Basecamp. When deal spaces exist, a deal's
-      // space will also get briefs for that deal, and only that deal.
-      if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.directOnly(cmd.dealNumber)) };
+      // should see them: a direct message with Basecamp, or the deal's own space, for that
+      // deal and no other.
+      const inDealSpace = !event.isDirectMessage && String(await Promise.resolve(dealOfSpace(event.spaceName)).catch(() => '')) === cmd.dealNumber;
+      if (!event.isDirectMessage && !inDealSpace) return { status: 200, body: replyFor(event, MESSAGES.directOnly(cmd.dealNumber)) };
       // Not awaited: the brief outlives this request and posts itself when done.
-      startBrief({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
+      startBrief({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail, ...(inDealSpace ? { inDealSpace } : {}) });
       return { status: 200, body: replyFor(event, MESSAGES.working(cmd.dealNumber)) };
     }
 

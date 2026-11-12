@@ -211,7 +211,9 @@ const nameOf = (userDisplayName, userEmail) => userDisplayName || userEmail;
 // `readDealFacts({ dealNumber, store })` reads the deal from LightSpeed (factsJob.js's read);
 // `factsCheck` looks for the answer in it (agents/factsAnswer.js). Left out, LightSpeed is
 // not a source.
-function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, readBriefNote = null, readDealFacts = null, route = routeQuestion, reuseCheck = checkEarlier, briefCheck = checkBrief, factsCheck = checkFacts, now = () => new Date() }) {
+// `onAnswer({ question, answer, userEmail, answeredBy, dealNumber })` is told each answer
+// once it is relayed (commitJob.js's noteAnswer); it may return a line to add to the reply.
+function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, reviewerEmail, log, endpoint = '', qaNotes = null, findDealSpace = null, readBriefNote = null, readDealFacts = null, onAnswer = null, route = routeQuestion, reuseCheck = checkEarlier, briefCheck = checkBrief, factsCheck = checkFacts, now = () => new Date() }) {
   // The deal's saved brief, or null when it has none or it can't be read.
   async function savedBrief(dealId, dealNumber) {
     if (!dealId || !readBriefNote) return null;
@@ -468,7 +470,10 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
     const answers = (q.answers || 0) + 1;
     await db.markAnswered({ id: q.id, answeredBy: userEmail, answers }).catch((e) => log('ERROR', 'could not mark question answered', { question: q.id, error: errorFields(e) }));
     log('INFO', 'answer relayed', { dealNumber, question: q.id, role: q.role, topic: q.topic, answers, savedToHubSpot: saved, chars: answer.length });
-    return SAY.relayed(dealNumber, saved);
+    // An answer that promises something later is noted for a check-in (commitJob.js); the
+    // answerer is told when, so a misread time is seen at once.
+    const noted = onAnswer ? await Promise.resolve(onAnswer({ question: q, answer, userEmail, answeredBy, dealNumber })).catch(() => null) : null;
+    return `${SAY.relayed(dealNumber, saved)}${noted ? ` ${noted}` : ''}`;
   }
 
   // Send on a clarify card: the question so far plus the detail typed in, routed again.

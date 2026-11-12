@@ -8,3 +8,7 @@
 test/
 scripts/
 *.md
+
+# Avatar source files; only assets/avatar-256.png is served.
+assets/basecamp_avatar.png
+assets/basecamp-avatar 1.png

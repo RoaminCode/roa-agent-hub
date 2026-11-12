@@ -107,12 +107,33 @@ test('a due reminder is sent once, to the person, as a card; its words are clear
   assert.deepStrictEqual([rem.status, rem.what], ['sent', null]);
 });
 
-test('a reminder that cannot be sent is marked failed and logged, not retried', async () => {
+test('a reminder that cannot be sent keeps its words and is tried again, three times in all, then given up on', async () => {
   const h = await harness({ sendFails: true });
   await h.remind();
+  const rem = () => Object.values(h.data.reminders)[0];
   assert.strictEqual(await h.tick(new Date('2026-11-07T21:03:00Z')), 0);
-  assert.deepStrictEqual([Object.values(h.data.reminders)[0].status, Object.values(h.data.reminders)[0].what], ['failed', null]);
-  assert.ok(h.logs.some((l) => l[1] === 'reminder could not be sent'));
+  assert.deepStrictEqual([rem().status, rem().tries, rem().what], ['pending', 1, 'let the Roamer know if we got the awning arm ordered']);
+  await h.tick(new Date('2026-11-07T21:08:00Z'));
+  await h.tick(new Date('2026-11-07T21:13:00Z'));
+  assert.deepStrictEqual([rem().status, rem().what], ['failed', null]);
+  assert.ok(h.logs.some((l) => l[1] === 'reminder could not be sent, gave up'));
+  assert.strictEqual(await h.tick(new Date('2026-11-07T21:18:00Z')), 0, 'not tried a fourth time');
+});
+
+test('the last try is plain text, in case the card was the problem; a reminder left mid-send is picked up again', async () => {
+  const h = await harness();
+  await h.remind();
+  const [id] = Object.keys(h.data.reminders);
+  h.data.reminders[id].tries = 2;
+  assert.strictEqual(await h.tick(new Date('2026-11-07T21:03:00Z')), 1);
+  assert.deepStrictEqual(h.sent, [['spaces/DM-5', 'Reminder (deal 90001): let the Roamer know if we got the awning arm ordered']]);
+
+  const stuck = await harness();
+  await stuck.remind();
+  const [sid] = Object.keys(stuck.data.reminders);
+  Object.assign(stuck.data.reminders[sid], { status: 'sending', claimedAt: '2026-11-07T21:01:00.000Z' });
+  assert.strictEqual(await stuck.tick(new Date('2026-11-07T21:05:00Z')), 0, 'a run may still be sending it');
+  assert.strictEqual(await stuck.tick(new Date('2026-11-07T21:15:00Z')), 1, 'left for over ten minutes, it is sent');
 });
 
 test('the reminder card offers a text draft and the space on a deal, and neither without one', () => {

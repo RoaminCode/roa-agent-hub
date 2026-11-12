@@ -367,9 +367,11 @@ function createDealContext({ hubspot, db = null }) {
 
     const records = {};
     let missing = 0;
-    for (const [type, source] of Object.entries(SOURCES)) {
-      const ids = await associatedIds('contacts', contact.id, type);
-      const read = await batchRead(type, ids, source.props);
+    // Calls, texts, emails, and notes are read side by side: four waits become one.
+    const reads = await Promise.all(
+      Object.entries(SOURCES).map(async ([type, source]) => [type, await batchRead(type, await associatedIds('contacts', contact.id, type), source.props)]),
+    );
+    for (const [type, read] of reads) {
       records[type] = read.records;
       missing += read.missing;
     }
@@ -431,7 +433,8 @@ function createDealContext({ hubspot, db = null }) {
     const deal = await findDeal(store, dealNumber);
     if (!deal || deal.duplicate) return null;
     const record = await recordOf(deal.id);
-    const note = await findBriefNote(deal.id, record, record && record.contactId);
+    // Basecamp's record already names the Roamer and the space; the note is read only without it.
+    const note = record && record.contactId ? null : await findBriefNote(deal.id, record, record && record.contactId);
     let contactId = (record && record.contactId) || (note && note.signature && note.signature.contactId) || null;
     let contactCount = null;
     if (!contactId) {
