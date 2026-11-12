@@ -206,6 +206,20 @@ Updating a brief: this time you receive the deal's current brief, written earlie
 // The parts of a brief an update can name.
 const PARTS = SCHEMA.required;
 
+// Parts added to the brief after briefs were already saved (Blake, 2026-11-12). A saved
+// brief without one stays valid, so adding a part does not force a full paid read of every
+// deal: the card leaves the part off, and the deal's next update is told it is missing and
+// writes it, at an update's cost. A new part goes in SCHEMA (properties and required, with
+// its instructions in SYSTEM) and here, as name: (value) => whether the value is the right
+// type. It also needs its line in the HubSpot note (agents/briefNote.js, written and read
+// back, left unset when the line is absent) and a card that draws without it. Removing or
+// renaming a part, or changing an existing part's type, still forces the full read
+// (test/briefGuard.test.js). Empty until the first such part is added.
+const OPTIONAL_PARTS = {};
+const absent = (v) => v === undefined || v === null;
+// The optional parts a saved brief does not have yet.
+const missingParts = (brief, optional = OPTIONAL_PARTS) => Object.keys(optional).filter((p) => absent(brief[p]));
+
 const UPDATE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -220,9 +234,14 @@ const UPDATE_SCHEMA = {
 
 // The current brief and the new items, in the same record format as a full brief. The brief
 // goes in as compact JSON: indenting it only adds tokens to read.
-function formatUpdate({ context, brief, newItems }) {
+// When the brief was saved before a part existed, the update is asked to write that part too.
+function formatUpdate({ context, brief, newItems, optional = OPTIONAL_PARTS }) {
   const record = formatRecord({ ...context, items: newItems, omitted: 0, clipped: newItems.filter((i) => i.clipped).length, missing: 0 });
-  return `<current_brief>\n${escapeRecord(JSON.stringify(brief))}\n</current_brief>\n\nRecord items added since the brief was written:\n\n${record}`;
+  const missing = missingParts(brief, optional);
+  const fill = missing.length
+    ? `\n\nThe current brief was written before these parts existed: ${missing.join(', ')}. Write each one now, from what the current brief and the new items show, and name each in "changed". Where they show nothing for a part, write it empty.`
+    : '';
+  return `<current_brief>\n${escapeRecord(JSON.stringify(brief))}\n</current_brief>${fill}\n\nRecord items added since the brief was written:\n\n${record}`;
 }
 
 // Lists that can rightly come back empty: every question answered, every commitment kept.
@@ -233,15 +252,23 @@ const isEmpty = (v) => (typeof v === 'string' ? !v.trim() : Array.isArray(v) && 
 // update does not hold together: it names a part that is not one, or hands back empty a part
 // that had something in it (the model named it and then did not write it), or the result is
 // not a brief. Basecamp then rereads the whole record instead of saving a damaged brief.
-function applyChanges(saved, out) {
+// An optional part the saved brief did not have is taken from the update whether or not
+// the update named it, and may come back empty (the record may show nothing for it). One
+// the update did not write stays missing and is asked for again next time.
+function applyChanges(saved, out, optional = OPTIONAL_PARTS) {
   if (!out || !Array.isArray(out.changed) || out.brief === null || typeof out.brief !== 'object') return null;
   const merged = { ...saved };
   for (const part of new Set(out.changed)) {
-    if (!PARTS.includes(part)) return null;
-    if (isEmpty(out.brief[part]) && !isEmpty(saved[part]) && !MAY_EMPTY.has(part)) return null;
+    if (!PARTS.includes(part) && !(part in optional)) return null;
+    if (isEmpty(out.brief[part]) && !absent(saved[part]) && !isEmpty(saved[part]) && !MAY_EMPTY.has(part)) return null;
+    // Named but not written: the update does not hold together.
+    if (absent(out.brief[part])) return null;
     merged[part] = out.brief[part];
   }
-  return isBrief(merged) ? merged : null;
+  for (const part of missingParts(saved, optional)) {
+    if (!absent(out.brief[part]) && optional[part](out.brief[part])) merged[part] = out.brief[part];
+  }
+  return isBrief(merged, { saved: true, optional }) ? merged : null;
 }
 
 // { ok: true, rebuild, brief, newSince, usage } or { ok: false, reason, usage }.
@@ -282,7 +309,15 @@ const isText = (v) => typeof v === 'string';
 const listOf = (v, ok) => Array.isArray(v) && v.every((x) => x !== null && typeof x === 'object' && ok(x));
 const isItem = (i) => isText(i.detail) && isText(i.date) && CHANNELS.includes(i.channel);
 
-function isBrief(b) {
+// `saved`: the brief was read back from a saved note, so an optional part it was written
+// before may be missing. A brief a model just wrote in full must have every part.
+function isBrief(b, { saved = false, optional = OPTIONAL_PARTS } = {}) {
+  return (
+    isCore(b) && Object.entries(optional).every(([part, ok]) => (saved && absent(b[part])) || (!absent(b[part]) && ok(b[part])))
+  );
+}
+
+function isCore(b) {
   return (
     b !== null &&
     typeof b === 'object' &&
@@ -386,4 +421,4 @@ function renderBrief({ dealNumber, context, brief, now }) {
   return text;
 }
 
-module.exports = { writeBrief, updateBrief, formatUpdate, applyChanges, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, SYSTEM, SCHEMA, MODEL, capBrief, CAPS, CALL_LIMITS };
+module.exports = { writeBrief, updateBrief, formatUpdate, applyChanges, UPDATE_SCHEMA, renderBrief, formatRecord, basisLine, stampLine, writtenAt, recordDate, noDashes, shortDate, isBrief, OPTIONAL_PARTS, missingParts, SYSTEM, SCHEMA, MODEL, capBrief, CAPS, CALL_LIMITS };

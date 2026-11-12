@@ -8,6 +8,9 @@
 // Blake's call, 2026-11-12: these are frozen during live testing and shipped together as one
 // release, tried first on a branch with /brief in Claude Code (no API credits).
 //
+// Adding a part is the exception: registered in OPTIONAL_PARTS (agents/roamerBrief.js), a
+// saved brief without it stays valid and the next update fills it in, so nothing here fails.
+//
 // If a test here fails, the change forces that sweep. Do not just update the pinned value:
 // tell Blake what it will cost, add it to the batch, and update the pin only in the release
 // that ships the batch. A change to the instructions' wording alone does not fail here and
@@ -16,7 +19,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createHash } = require('crypto');
-const { SCHEMA, isBrief } = require('../src/agents/roamerBrief');
+const { SCHEMA, isBrief, OPTIONAL_PARTS } = require('../src/agents/roamerBrief');
 const { briefSignature } = require('../src/agents/briefNote');
 const { createDealContext } = require('../src/hubspot/dealContext');
 
@@ -44,9 +47,23 @@ const SAVED_BRIEF = {
   open_questions: ['Which hitch do they need?'],
 };
 
+// The shape every saved brief must have: the schema without the optional parts, which a
+// saved brief may lack (OPTIONAL_PARTS in agents/roamerBrief.js). Adding a part there does
+// not fail this guard; removing, renaming, or retyping any other part does.
+function requiredShape(schema, optional) {
+  const properties = Object.fromEntries(Object.entries(schema.properties).filter(([k]) => !(k in optional)));
+  return shapeOf({ ...schema, properties, required: schema.required.filter((k) => !(k in optional)) });
+}
+
 test('guard: the shape of a saved brief has not changed', () => {
-  assert.strictEqual(hash(shapeOf(SCHEMA)), 'cfbf292df6751523', COST);
-  assert.strictEqual(isBrief(SAVED_BRIEF), true, COST);
+  assert.strictEqual(hash(requiredShape(SCHEMA, OPTIONAL_PARTS)), 'cfbf292df6751523', COST);
+  assert.strictEqual(isBrief(SAVED_BRIEF, { saved: true }), true, COST);
+});
+
+test('guard: every optional part is in the schema, so a full read always writes it', () => {
+  for (const part of Object.keys(OPTIONAL_PARTS)) {
+    assert.ok(SCHEMA.required.includes(part) && part in SCHEMA.properties, `optional part "${part}" must be in SCHEMA.properties and SCHEMA.required`);
+  }
 });
 
 // One of each kind of raw HubSpot record the rules treat differently. Scrubbed: no real
@@ -97,4 +114,40 @@ test('guard: the record a brief is built from reads the same for the same HubSpo
   const context = await createDealContext({ hubspot: fakeHubSpot })({ store: 'UT', dealNumber: '90001' });
   const sig = briefSignature(context);
   assert.deepStrictEqual({ itemCount: sig.itemCount, newestAt: sig.newestAt, ids: sig.ids, content: sig.content }, { itemCount: 8, newestAt: '2026-10-09T10:00:00Z', ids: '1ef9015201444d61', content: '4a4b0af21a9afbf8' }, COST);
+});
+
+// How an optional part behaves, shown with a made-up one ("trade_in", a string). None is
+// registered yet; these pass the registry in by hand.
+const { applyChanges, formatUpdate, missingParts } = require('../src/agents/roamerBrief');
+const TRADE_IN = { trade_in: (v) => typeof v === 'string' };
+const CONTEXT = { deal: { id: 'd1', properties: {} }, contact: { properties: {} }, items: [], omitted: 0, clipped: 0, missing: 0 };
+
+test('a saved brief written before an optional part existed stays valid; one a model just wrote must have it', () => {
+  assert.strictEqual(isBrief(SAVED_BRIEF, { saved: true, optional: TRADE_IN }), true, 'no full read is forced');
+  assert.strictEqual(isBrief(SAVED_BRIEF, { optional: TRADE_IN }), false, 'a full read always writes every part');
+  assert.strictEqual(isBrief({ ...SAVED_BRIEF, trade_in: 'A 2019 teardrop' }, { optional: TRADE_IN }), true);
+  assert.strictEqual(isBrief({ ...SAVED_BRIEF, trade_in: 7 }, { saved: true, optional: TRADE_IN }), false, 'present, it must be the right type');
+  assert.deepStrictEqual(missingParts(SAVED_BRIEF, TRADE_IN), ['trade_in']);
+  assert.deepStrictEqual(missingParts({ ...SAVED_BRIEF, trade_in: '' }, TRADE_IN), []);
+});
+
+test('the next update is told which parts are missing, and fills them in', () => {
+  const asked = formatUpdate({ context: CONTEXT, brief: SAVED_BRIEF, newItems: [], optional: TRADE_IN });
+  assert.ok(asked.includes('written before these parts existed: trade_in'));
+  assert.ok(!formatUpdate({ context: CONTEXT, brief: { ...SAVED_BRIEF, trade_in: 'x' }, newItems: [], optional: TRADE_IN }).includes('before these parts existed'));
+  assert.ok(!formatUpdate({ context: CONTEXT, brief: SAVED_BRIEF, newItems: [] }).includes('before these parts existed'), 'nothing is asked while no optional part is registered');
+
+  // Written and named, written without being named, and written empty are all taken.
+  const named = applyChanges(SAVED_BRIEF, { changed: ['trade_in'], brief: { trade_in: 'A 2019 teardrop' } }, TRADE_IN);
+  assert.strictEqual(named.trade_in, 'A 2019 teardrop');
+  assert.strictEqual(named.headline, SAVED_BRIEF.headline, 'every other part is kept as it was');
+  assert.strictEqual(applyChanges(SAVED_BRIEF, { changed: [], brief: { trade_in: 'A 2019 teardrop' } }, TRADE_IN).trade_in, 'A 2019 teardrop');
+  assert.strictEqual(applyChanges(SAVED_BRIEF, { changed: ['trade_in'], brief: { trade_in: '' } }, TRADE_IN).trade_in, '');
+  // Not written, or the wrong type: the brief stays valid without it and is asked again next time.
+  const skipped = applyChanges(SAVED_BRIEF, { changed: ['who'], brief: { who: 'A couple, first trailer.' } }, TRADE_IN);
+  assert.deepStrictEqual([skipped.who, 'trade_in' in skipped], ['A couple, first trailer.', false]);
+  assert.strictEqual('trade_in' in applyChanges(SAVED_BRIEF, { changed: [], brief: { trade_in: 7 } }, TRADE_IN), false);
+  // A part that had something in it still may not come back empty or unwritten.
+  assert.strictEqual(applyChanges({ ...SAVED_BRIEF, trade_in: 'A 2019 teardrop' }, { changed: ['trade_in'], brief: { trade_in: '' } }, TRADE_IN), null);
+  assert.strictEqual(applyChanges(SAVED_BRIEF, { changed: ['who'], brief: {} }, TRADE_IN), null);
 });

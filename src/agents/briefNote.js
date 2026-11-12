@@ -127,7 +127,8 @@ function parseBriefNote(text) {
       return null;
     }
   }
-  if (!signature || !brief.headline || !isBrief(brief)) return null;
+  // Read back from a saved note: a part added since it was written may be missing.
+  if (!signature || !brief.headline || !isBrief(brief, { saved: true })) return null;
   return { brief, signature, spaceName };
 }
 
