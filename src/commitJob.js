@@ -21,6 +21,7 @@ const { errorFields } = require('./errors');
 const { readPromise, checkKept } = require('./agents/commitment');
 const { dueFor, nextOpen, isOpen } = require('./workHours');
 const { whenLabel } = require('./remindJob');
+const { createSinceReader } = require('./sinceThen');
 
 // The furthest ahead a promise is tracked, as with reminders.
 const MAX_AHEAD_MS = 60 * 24 * 60 * 60 * 1000;
@@ -101,29 +102,8 @@ function createCommitments({ anthropic, db, qaNotes = null, loadContext = null, 
 
   // What was said in the deal's space and logged in HubSpot since the promise, oldest
   // first. A source that can't be read is logged and left out; the check goes on with the rest.
-  async function since(c) {
-    const from = new Date(c.promisedAt);
-    const entries = [];
-    const deal = c.dealId ? await db.getDeal(c.dealId) : null;
-    if (deal && deal.spaceName && listSpaceMessages) {
-      try {
-        for (const m of await listSpaceMessages(deal.spaceName, from)) entries.push({ source: 'space', channel: 'message', who: m.who, at: m.at, text: m.text });
-      } catch (err) {
-        log('WARNING', "could not read the deal space's messages for a commitment", { dealNumber: c.dealNumber, error: errorFields(err) });
-      }
-    }
-    if (c.dealNumber && loadContext) {
-      try {
-        const ctx = await loadContext({ store: (deal && deal.store) || 'UT', dealNumber: c.dealNumber, rememberPick: true });
-        for (const i of (ctx && ctx.items) || []) {
-          if (i.at && Date.parse(i.at) > from.getTime()) entries.push({ source: 'hubspot', channel: i.channel, who: i.who, at: i.at, text: i.text });
-        }
-      } catch (err) {
-        log('WARNING', 'could not read HubSpot for a commitment', { dealNumber: c.dealNumber, error: errorFields(err) });
-      }
-    }
-    return entries.filter((e) => e.text).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  }
+  const readSince = createSinceReader({ db, loadContext, listSpaceMessages, log });
+  const since = (c) => readSince({ dealId: c.dealId, dealNumber: c.dealNumber, from: new Date(c.promisedAt), forWhat: 'a commitment' });
 
   // What kept the promise, filed as the answer in the topic's Q&A note.
   async function fileAnswer(c, entry) {

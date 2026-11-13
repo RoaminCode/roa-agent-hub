@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { createSpaceNotes, renderSpaceNote, SAY, MAX_CHARS } = require('../src/spaceNotes');
+const { createSpaceNotes, createNoteEditor, renderSpaceNote, parseSpaceNote, noteCard, SAY, MAX_CHARS } = require('../src/spaceNotes');
 const { createRouter, MESSAGES } = require('../src/router');
 const { parseEvent } = require('../src/chat/events');
 const { createDb } = require('../src/db');
@@ -101,7 +101,7 @@ test('the router saves notes for anyone allowed, even off BRIEF_USERS or with br
     const res = await r({ headers, body: inSpace('casey@example.com', 'note Pat wants Saturday') });
     assert.deepStrictEqual(res.body, { text: 'ok' });
   }
-  assert.deepStrictEqual(saved[0], { spaceName: 'spaces/DEAL', spaceDisplayName: '90001 · Pat Sample', isDirectMessage: false, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Pat wants Saturday' });
+  assert.deepStrictEqual(saved[0], { spaceName: 'spaces/DEAL', spaceDisplayName: '90001 · Pat Sample', isDirectMessage: false, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Pat wants Saturday', card: true });
 
   const r = createRouter({ verify: accept, allowedUsers: ['casey@example.com'], saveSpaceNote });
   const stranger = await r({ headers, body: inSpace('nobody@example.com', 'note hi') });
@@ -184,6 +184,12 @@ test('"Save to HubSpot" on a message saves the whole message, crediting its writ
     '<p><strong>Note from the deal space</strong></p><p>x</p><p>Written by Sam Service, saved by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT.</p>',
   );
   assert.ok(renderSpaceNote({ text: 'x', userEmail: 'a@example.com', now: NOW, writtenBy: null }).includes('Written by a Team Member, saved by a@example.com'));
+
+  // "/note" and a line break is sent by Chat as plain text, so the command never ran. Saved
+  // this way, the note is the lines after it, with their line breaks.
+  action.chat.appCommandPayload.message.text = '/note\nSolar: 2 panels\nAwning: ordered';
+  await r({ headers: { authorization: 'x' }, body: action });
+  assert.strictEqual(notes[1].text, 'Solar: 2 panels\nAwning: ordered');
 });
 
 test('a note in a direct message names its deal and is saved there', async () => {
@@ -212,4 +218,131 @@ test('a note in a direct message names its deal and is saved there', async () =>
 test('saving your own message says "Added by", not written and saved by the same person', () => {
   const html = renderSpaceNote({ text: 'x', userDisplayName: 'Casey Coach', userEmail: 'casey@example.com', now: NOW, writtenBy: 'Casey Coach' });
   assert.ok(html.includes('<p>Added by Casey Coach (casey@example.com) in Google Chat'));
+});
+
+// A saved note and its editor: HubSpot holds one note ('555'), as Basecamp wrote it.
+async function editing({ body = null, failUpdate = null } = {}) {
+  const { db } = await linkedDb({ contactId: '77' });
+  const store = { body: null, timestamp: NOW.toISOString(), updates: 0 };
+  const save = createSpaceNotes({ db, createNote: async (n) => ((store.body = n.body), '555'), log: () => {}, endpoint: 'https://b.example', now: () => NOW });
+  const card = await save({ spaceName: 'spaces/DEAL', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Solar: 2 panels & <b>bold</b>\nAwning: ordered', card: true });
+  if (body !== null) store.body = body;
+  const redrawn = [];
+  const hubspot = {
+    get: async () => ({ properties: { hs_note_body: store.body, hs_timestamp: store.timestamp } }),
+    updateNote: async ({ noteId, body: next, timestamp, isOurs }) => {
+      if (failUpdate) throw failUpdate;
+      assert.ok(isOurs(store.body));
+      store.updates += 1;
+      Object.assign(store, { body: next, timestamp, noteId });
+    },
+  };
+  const editor = createNoteEditor({ db, hubspot, updateMessage: async (name, message) => redrawn.push([name, message]), log: () => {}, endpoint: 'https://b.example', now: () => new Date('2026-11-07T18:05:00Z') });
+  const button = card.cardsV2[0].card.sections[1].widgets[1].buttonList.buttons[0];
+  const params = Object.fromEntries(button.onClick.action.parameters.map((p) => [p.key, p.value]));
+  return { card, button, params, store, editor, redrawn, db };
+}
+
+test('a saved note comes back as a card with its words, who added it, and Edit note', async () => {
+  const { card, button, params } = await editing();
+  const [words, foot] = card.cardsV2[0].card.sections;
+  assert.strictEqual(card.fallbackText, SAY.saved('90001', false));
+  assert.strictEqual(words.widgets.length, 1);
+  assert.strictEqual(words.collapsible, undefined);
+  assert.strictEqual(words.widgets[0].textParagraph.text, 'Solar: 2 panels &amp; &lt;b&gt;bold&lt;/b&gt;<br>Awning: ordered');
+  // The name and time; the email stays in HubSpot's note.
+  assert.strictEqual(foot.widgets[0].textParagraph.text, '<i>Added by Casey Coach in Google Chat, Nov 7, 9:50 AM MT.</i>');
+
+  // A long note shows its start; the rest opens with "Show more".
+  const lines = noteCard({ noteId: '1', dealNumber: '90001', text: 'a\nb\nc\nd\ne\nf', signature: 's', endpoint: 'e' }).cardsV2[0].card.sections[0];
+  assert.deepStrictEqual(lines.widgets.map((w) => w.textParagraph.text), ['a<br>b<br>c<br>d', 'e<br>f']);
+  assert.deepStrictEqual([lines.collapsible, lines.uncollapsibleWidgetsCount], [true, 1]);
+  const long = noteCard({ noteId: '1', dealNumber: '90001', text: 'word '.repeat(120).trim(), signature: 's', endpoint: 'e' }).cardsV2[0].card.sections[0];
+  assert.strictEqual(long.widgets.length, 2);
+  assert.strictEqual(long.widgets.map((w) => w.textParagraph.text).join(' '), 'word '.repeat(120).trim());
+  assert.strictEqual(button.text, 'Edit note');
+  assert.strictEqual(button.onClick.action.interaction, 'OPEN_DIALOG');
+  // The words do not ride on the button.
+  assert.deepStrictEqual(params, { action: 'noteEdit', id: '555', n: '90001', o: '0' });
+});
+
+test('Edit note opens with the words from HubSpot, and Save replaces the note and redraws the card', async () => {
+  const { params, store, editor, redrawn, db } = await editing();
+  const { dialog } = await editor.review({ params, userEmail: 'casey@example.com', messageName: 'spaces/DEAL/messages/abc' });
+  const [input, buttons] = dialog.sections[0].widgets;
+  assert.strictEqual(input.textInput.value, 'Solar: 2 panels & <b>bold</b>\nAwning: ordered');
+  assert.strictEqual(input.textInput.type, 'MULTIPLE_LINE');
+  const saveParams = Object.fromEntries(buttons.buttonList.buttons[0].onClick.action.parameters.map((p) => [p.key, p.value]));
+  assert.strictEqual(saveParams.c, 'spaces/DEAL/messages/abc');
+
+  const said = await editor.save({ params: saveParams, formInputs: { note: 'Solar: 3 panels\nAwning: here' }, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach' });
+  assert.strictEqual(said, null);
+  assert.strictEqual(
+    store.body,
+    '<p><strong>Note from the deal space</strong></p><p>Solar: 3 panels<br>Awning: here</p><p>Added by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT. Edited by Casey Coach, Nov 7, 11:05 AM MT.</p>',
+  );
+  // The note keeps its own time in HubSpot's timeline.
+  assert.strictEqual(store.timestamp, NOW.toISOString());
+  assert.strictEqual(redrawn[0][0], 'spaces/DEAL/messages/abc');
+  assert.strictEqual(redrawn[0][1].cardsV2[0].card.sections[0].widgets[0].textParagraph.text, 'Solar: 3 panels<br>Awning: here');
+  assert.ok((await db.getSpaceNote('555')).editedAt);
+
+  // A second edit keeps one "Edited by" line; the same words again change nothing.
+  await editor.save({ params: saveParams, formInputs: { note: 'Solar: 4 panels' }, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach' });
+  assert.strictEqual(store.body.match(/Edited by/g).length, 1);
+  assert.strictEqual(await editor.save({ params: saveParams, formInputs: { note: 'Solar: 4 panels' }, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach' }), null);
+  assert.strictEqual(store.updates, 2);
+});
+
+test('Edit note is for the person who added the note, and never touches a note changed in HubSpot', async () => {
+  const mine = await editing();
+  assert.deepStrictEqual(await mine.editor.review({ params: mine.params, userEmail: 'sam@example.com', messageName: 'm' }), { notice: SAY.notYours });
+  assert.strictEqual(await mine.editor.save({ params: mine.params, formInputs: { note: 'x' }, userEmail: 'sam@example.com' }), SAY.notYours);
+  assert.strictEqual(await mine.editor.save({ params: mine.params, formInputs: { note: '  ' }, userEmail: 'casey@example.com' }), SAY.editEmpty);
+  assert.strictEqual(await mine.editor.save({ params: mine.params, formInputs: { note: 'x'.repeat(MAX_CHARS + 1) }, userEmail: 'casey@example.com' }), SAY.editTooLong);
+  // A note Basecamp has no record of.
+  assert.deepStrictEqual(await mine.editor.review({ params: { ...mine.params, id: '999' }, userEmail: 'casey@example.com', messageName: 'm' }), { notice: SAY.editGone });
+  assert.strictEqual(mine.store.updates, 0);
+
+  const changed = await editing({ body: '<p>Someone rewrote this in HubSpot</p>' });
+  assert.deepStrictEqual(await changed.editor.review({ params: changed.params, userEmail: 'casey@example.com', messageName: 'm' }), { notice: SAY.editChanged });
+  assert.strictEqual(await changed.editor.save({ params: changed.params, formInputs: { note: 'x' }, userEmail: 'casey@example.com' }), SAY.editChanged);
+
+  const failing = await editing({ failUpdate: new Error('boom') });
+  assert.strictEqual(await failing.editor.save({ params: failing.params, formInputs: { note: 'x' }, userEmail: 'casey@example.com' }), SAY.editFailed);
+  assert.strictEqual(failing.redrawn.length, 0);
+
+  assert.strictEqual(parseSpaceNote('<p><strong>Basecamp Q&amp;A: awning</strong></p><p>x</p><p>y</p>'), null);
+  assert.strictEqual(parseSpaceNote('<p><strong>Note from Basecamp</strong></p><p>a<br/>b</p><p>sig</p>').text, 'a\nb');
+});
+
+test('the router opens the edit box, saves it, and posts only what needs saying', async () => {
+  const notices = [];
+  const calls = [];
+  const r = createRouter({
+    verify: async () => true,
+    allowedUsers: ['casey@example.com'],
+    postNotice: (n) => notices.push(n),
+    reviewNote: async (a) => (calls.push(['review', a]), a.params.id === '1' ? { dialog: { header: { title: 'Edit note' } } } : { notice: SAY.notYours }),
+    saveNoteEdit: async (a) => (calls.push(['save', a]), a.formInputs.note === 'bad' ? SAY.editFailed : null),
+  });
+  const tap = (parameters, formInputs = {}) =>
+    r({
+      headers: { authorization: 'x' },
+      body: {
+        commonEventObject: { hostApp: 'CHAT', parameters, formInputs: Object.fromEntries(Object.entries(formInputs).map(([k, v]) => [k, { stringInputs: { value: [v] } }])) },
+        chat: { user: { email: 'casey@example.com', name: 'users/1', displayName: 'Casey Coach' }, eventTime: 't', buttonClickedPayload: { space: { name: 'spaces/DEAL', spaceType: 'SPACE' }, message: { name: 'spaces/DEAL/messages/abc', thread: { name: 'spaces/DEAL/threads/t' } } } },
+      },
+    });
+  const close = { action: { navigations: [{ endNavigation: { action: 'CLOSE_DIALOG' } }] } };
+  assert.deepStrictEqual((await tap({ action: 'noteEdit', id: '1', n: '90001' })).body, { action: { navigations: [{ pushCard: { header: { title: 'Edit note' } } }] } });
+  assert.strictEqual(calls[0][1].messageName, 'spaces/DEAL/messages/abc');
+  assert.deepStrictEqual((await tap({ action: 'noteEdit', id: '2', n: '90001' })).body, close);
+  assert.deepStrictEqual(notices, [{ spaceName: 'spaces/DEAL', threadName: 'spaces/DEAL/threads/t', text: SAY.notYours }]);
+  assert.deepStrictEqual((await tap({ action: 'noteSave', id: '1', n: '90001' }, { note: 'new words' })).body, close);
+  assert.strictEqual(notices.length, 1);
+  await tap({ action: 'noteSave', id: '1', n: '90001' }, { note: 'bad' });
+  assert.strictEqual(notices[1].text, SAY.editFailed);
+  assert.deepStrictEqual((await tap({ action: 'noteCancel' })).body, close);
+  assert.strictEqual(calls.length, 4);
 });

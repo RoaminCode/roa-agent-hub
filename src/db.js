@@ -15,7 +15,8 @@
 //   spaces/{spaceId}        spaceName, dealId, dealNumber, store, how, status, linkedAt,
 //                           linkedBy (status "ready" or "gone")
 //   accessRequests/{auto}   dealId, spaceName, user, at
-//   spaceNotes/{noteId}     dealId, spaceName, user, at, chars
+//   spaceNotes/{noteId}     dealId, spaceName, user, at, chars, editedAt (when its words were
+//                           replaced with Edit note)
 //   people/{email}          userName (Chat id), seenAt
 //   textSends/{card}        dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card, at,
 //                           status ("sending", "sent", "unknown"), claimedAt; keyed by the
@@ -37,7 +38,9 @@
 //                           dueAt, dealId, dealNumber, spaceUri, status ("pending",
 //                           "sending", "sent", "failed"), tries, claimedAt, sentAt, at.
 //                           `what` is the person's own words, kept only until the reminder
-//                           is sent or given up on, then cleared
+//                           is sent or given up on, then cleared. From its card, once sent:
+//                           outcome ("complete": the person marked it done; "again": they
+//                           asked to be reminded again, which adds a new reminder), closedAt
 //   commitments/{auto}      questionId, dealId, dealNumber, noteId, topic, by (email),
 //                           byName, what, promisedAt, dueAt, sendAt, status ("pending",
 //                           "checking", "kept", "followed_up", "failed"), keptBy ("answer",
@@ -206,6 +209,17 @@ function createDb({ firestore, now = () => new Date() }) {
 
   async function recordSpaceNote({ noteId, dealId, spaceName, user, chars }) {
     await firestore.collection('spaceNotes').doc(String(noteId)).set({ dealId: dealDocId(dealId), spaceName, user, chars, at: stamp() });
+  }
+
+  // A note Basecamp saved, for Edit note: who added it. Null when there is none.
+  async function getSpaceNote(noteId) {
+    if (!/^\d{1,20}$/.test(String(noteId || ''))) return null;
+    const snap = await firestore.collection('spaceNotes').doc(String(noteId)).get();
+    return snap.exists ? snap.data() : null;
+  }
+
+  async function markSpaceNoteEdited({ noteId, chars }) {
+    await firestore.collection('spaceNotes').doc(String(noteId)).set({ chars, editedAt: stamp() }, { merge: true });
   }
 
   // A person's Chat id ("users/123") by their email, so Basecamp can reach their direct
@@ -433,6 +447,27 @@ function createDb({ firestore, now = () => new Date() }) {
   async function finishReminder(id, status) {
     await reminders.doc(String(id)).set({ status, what: null, sentAt: stamp() }, { merge: true });
   }
+  async function getReminder(id) {
+    if (!/^[\w-]{1,64}$/.test(String(id || ''))) return null;
+    const snap = await reminders.doc(String(id)).get();
+    return snap.exists ? { id: String(id), ...snap.data() } : null;
+  }
+  // Closes a sent reminder from its card: "complete" (the person marked it done) or "again"
+  // (they asked to be reminded again). True only for the first tap, so a double tap saves
+  // one note or sets one new reminder.
+  async function closeReminder(id, outcome) {
+    const ref = reminders.doc(String(id));
+    return firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.data().status !== 'sent' || snap.data().outcome) return false;
+      tx.set(ref, { outcome, closedAt: stamp() }, { merge: true });
+      return true;
+    });
+  }
+  // Undoes a close whose work then failed (the note could not be saved), so it can be tried again.
+  async function reopenReminder(id) {
+    await reminders.doc(String(id)).set({ outcome: null, closedAt: null }, { merge: true });
+  }
   // A send that failed: back to pending with its words kept, to try again on the next
   // timer run. Returns how many times it has now been tried.
   async function retryReminder(id) {
@@ -549,7 +584,7 @@ function createDb({ firestore, now = () => new Date() }) {
     return snap.exists ? snap.data() : null;
   }
 
-  return { addSpend, getSpend, addReminder, dueReminders, claimReminder, finishReminder, retryReminder, addCommitment, dueCommitments, claimCommitment, releaseCommitment, finishCommitment, keepCommitmentsFor, getQuestion, setReviewerThread, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
+  return { addSpend, getSpend, addReminder, dueReminders, claimReminder, finishReminder, retryReminder, getReminder, closeReminder, reopenReminder,addCommitment, dueCommitments, claimCommitment, releaseCommitment, finishCommitment, keepCommitmentsFor, getQuestion, setReviewerThread, getDeal, getSpace, recordBrief, recordDelivery, claimDelivery, releaseDeliveryClaim, claimSpace, releaseClaim, linkSpace, markBriefPosted, markSpaceGone, listDealSpaces, recordAccessRequest, recordSpaceNote, getSpaceNote, markSpaceNoteEdited, rememberPerson, getPerson, recordQuestion, findQuestionByReviewerThread, markAnswered, listDealQuestions, recordReuse, recordReuseVerdict, recordRouteVerdict, listWowIdeas, useWowIdea, claimOnce, undoOnce, withLock, recordTextSend, claimTextSend, releaseTextSend, markTextSendUnknown, textSentFromCard };
 }
 
 module.exports = { createDb, CLAIM_MS, STALE_MS };

@@ -30,6 +30,8 @@ const MESSAGES = {
   overLimit: "Basecamp's AI reached today's spending limit and is paused until tomorrow. Home, notes, and approving texts still work.",
   notApprover: "Approving and sending texts isn't switched on for you yet, so nothing was sent. Blake can add you.",
   costOff: "Cost tracking isn't switched on yet.",
+  remindChecking: "Checking the deal space and the Roamer's HubSpot record. It will be here in a moment.",
+  remindCheckOff: "Checking if a reminder is done isn't switched on yet.",
   factsWorking: (n) => `Looking up deal ${n} in LightSpeed. It will be here in a moment.`,
   factsOff: "LightSpeed lookups aren't switched on yet.",
   roWorking: (n) => `Looking up repair order ${n} in LightSpeed. It will be here in a moment.`,
@@ -111,6 +113,9 @@ function log(severity, message, fields = {}) {
 // LightSpeed and posts it where it was asked (factsJob.js), in that thread when asked in a
 // deal's space; left out, LightSpeed lookups are off.
 // `startRo({ spaceName, roNumber, store, userEmail })` does the same for one repair order.
+// A reminder card's buttons (remindJob.js): `completeReminder` and `remindAgain` return
+// { done, text }; `startRemindCheck({ id, what, spaceName, threadName, userEmail })` looks
+// for the reminder done and posts what it found; left out, Check if done is off.
 // saveSpaceNote({ spaceName, spaceDisplayName, userEmail, userDisplayName, text }) saves a
 // note from a deal space and returns the reply; see spaceNotes.js. It spends no AI credits,
 // so it needs only ALLOWED_USERS, and works while briefs are paused.
@@ -124,7 +129,7 @@ function log(severity, message, fields = {}) {
 // reply; when it answers a routed question it returns the reply, else null.
 // seenPerson({ email, userName }) is told who sent each allowed event, so Basecamp can
 // later reach that person's direct message.
-function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, startFacts = null, startRo = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
+function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, startFacts = null, startRo = null, aiUsers, textApprovers, aiPaused = false, overDailyLimit = async () => false, showCost = async () => MESSAGES.costOff, briefUsers, startBrief = () => {}, startSpace = () => {}, useSpace = () => {}, requestAccess = () => {}, askQuestion = async () => "Questions aren't switched on yet.", relayAnswer = async () => null, reviewNote = async () => ({ notice: "Editing notes isn't switched on yet." }), saveNoteEdit = async () => "Editing notes isn't switched on yet.", clarifyQuestion = async () => "Questions aren't switched on yet.", reuseVerdict = async () => "Questions aren't switched on yet.", answerCard = async () => "Questions aren't switched on yet.", startNew = () => {}, startText = async () => "Texts aren't switched on yet.", reviewText = async () => null, sendText = async () => "Texts aren't switched on yet.", postNotice = () => {}, startWow = () => {}, chooseWow = async () => "WOW plans aren't switched on yet.", listWowIdeas = async () => "WOW plans aren't switched on yet.", setReminder = async () => "Reminders aren't switched on yet.", completeReminder = async () => ({ done: false, text: "Reminders aren't switched on yet." }), remindAgain = async () => ({ done: false, text: "Reminders aren't switched on yet." }), startRemindCheck = null, seenPerson = () => {}, saveSpaceNote = async () => "Notes aren't switched on yet.", buildHome = async () => renderNotAllowedHome(), now = Date.now, briefsPaused = false }) {
   const allowed = new Set((allowedUsers || []).map((u) => u.toLowerCase()));
   const lower = (users) => new Set(users.map((u) => u.toLowerCase()));
   const aiList = aiUsers || briefUsers;
@@ -280,6 +285,23 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
       return { status: 200, body: closeDialog() };
     }
 
+    // Edit note on a saved note's card: opens a box with the note's words; Save replaces the
+    // note in HubSpot and redraws the card. Only the person who added the note; no AI. A
+    // dialog's reply can't carry a message, so anything to say is posted under the card.
+    if (event.type === 'CARD_CLICKED' && ['noteEdit', 'noteSave', 'noteCancel'].includes(event.parameters.action)) {
+      const action = event.parameters.action;
+      if (action === 'noteCancel') return { status: 200, body: closeDialog() };
+      if (action === 'noteEdit') {
+        const r = await reviewNote({ params: event.parameters, userEmail: event.userEmail, messageName: event.messageName });
+        if (r.dialog) return { status: 200, body: dialogFor(r.dialog) };
+        postNotice({ spaceName: event.spaceName, threadName: event.threadName, text: r.notice });
+        return { status: 200, body: closeDialog() };
+      }
+      const said = await saveNoteEdit({ params: event.parameters, formInputs: event.formInputs, userEmail: event.userEmail, userDisplayName: event.userDisplayName });
+      if (said) postNotice({ spaceName: event.spaceName, threadName: event.threadName, text: said });
+      return { status: 200, body: closeDialog() };
+    }
+
     // "Draft a text" on a reminder about a deal: the reminder's words start a /text draft in
     // this direct message (one short AI call, so it needs the brief permission).
     if (event.type === 'CARD_CLICKED' && event.parameters.action === 'remindText') {
@@ -292,6 +314,41 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
       if (!/^\d{3,8}$/.test(n)) return { status: 200, body: {} };
       const said = await startText({ spaceName: event.spaceName, isDirectMessage: true, userEmail: event.userEmail, text: `${n} ${String(event.parameters.m || '')}` });
       return { status: 200, body: replyFor(event, said) };
+    }
+
+    // The rest of a reminder card's buttons. The card lives in the person's own direct
+    // message, and each job checks the reminder is theirs. Mark complete and Remind me again
+    // use no AI: the card is replaced by what happened, or, when it could not be done, a
+    // line is posted under it and the card stays.
+    if (event.type === 'CARD_CLICKED' && ['remindDone', 'remindAgain'].includes(event.parameters.action)) {
+      const id = String(event.parameters.id || '');
+      const what = String(event.parameters.m || '');
+      const r =
+        event.parameters.action === 'remindDone'
+          ? await completeReminder({ id, what, found: event.formInputs.found, spaceName: event.spaceName, userEmail: event.userEmail, userDisplayName: event.userDisplayName })
+          : await remindAgain({ id, what, which: String(event.parameters.w || ''), userEmail: event.userEmail });
+      return { status: 200, body: r.done ? updateMessageFor(event, r.text) : replyFor(event, r.text) };
+    }
+    // Check if done reads the deal space and HubSpot and may take one short AI call, so it
+    // needs the brief permission. Not awaited: the answer is posted under the card.
+    if (event.type === 'CARD_CLICKED' && event.parameters.action === 'remindCheck') {
+      const off = briefsOffFor(event.userEmail);
+      if (off) {
+        logRefused(off, event.userEmail);
+        return { status: 200, body: replyFor(event, MESSAGES[off]) };
+      }
+      if (!startRemindCheck || !event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.remindCheckOff) };
+      startRemindCheck({ id: String(event.parameters.id || ''), what: String(event.parameters.m || ''), spaceName: event.spaceName, threadName: event.threadName, userEmail: event.userEmail });
+      return { status: 200, body: replyFor(event, MESSAGES.remindChecking) };
+    }
+    // Deal facts for the reminder's deal, from LightSpeed. No AI. In the person's direct
+    // message only, where the card is.
+    if (event.type === 'CARD_CLICKED' && event.parameters.action === 'remindFacts') {
+      const n = String(event.parameters.n || '');
+      if (!/^\d{3,8}$/.test(n) || !event.isDirectMessage) return { status: 200, body: {} };
+      if (!startFacts) return { status: 200, body: replyFor(event, MESSAGES.factsOff) };
+      startFacts({ spaceName: event.spaceName, dealNumber: n, store: 'UT', userEmail: event.userEmail, threadName: event.threadName });
+      return { status: 200, body: replyFor(event, MESSAGES.factsWorking(n)) };
     }
 
     // "Use this one" on a WOW idea: saved to the Delivery record, remembered in the library. No AI.
@@ -373,7 +430,9 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
       // HubSpot" on a message saves the whole message, credited to whoever wrote it.
       let cmd;
       if (['note', 'ask', 'wow', 'text', 'new', 'remind'].includes(slash)) cmd = { command: slash, text: event.text };
-      else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText, writtenBy: event.senderDisplayName };
+      // A message typed as "/note" and a line break is sent by Chat as plain text, not as
+      // the command, so Basecamp never hears of it; saving it this way drops that first word.
+      else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText.replace(/^\/note\b:?\s*/i, ''), writtenBy: event.senderDisplayName };
       else if (slash === 'wowQuick') cmd = { command: 'wow', text: '' };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
@@ -415,6 +474,8 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
           userEmail: event.userEmail,
           userDisplayName: event.userDisplayName,
           text: cmd.text,
+          // Saved, the reply is the note's card, with Edit note.
+          card: true,
           ...(cmd.writtenBy !== undefined ? { writtenBy: cmd.writtenBy } : {}),
         });
         return { status: 200, body: replyFor(event, said) };

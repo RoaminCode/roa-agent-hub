@@ -44,7 +44,7 @@ const { createOpenDeals } = require('./hubspot/openDeals');
 const { createBriefJob, createBriefSource, createNoteKeeper } = require('./briefJob');
 const { createSpaceJob, createAccessRequests, createDealSpaceIndex } = require('./spaceJob');
 const { createSpaces } = require('./chat/spaces');
-const { createSpaceNotes } = require('./spaceNotes');
+const { createSpaceNotes, createNoteEditor } = require('./spaceNotes');
 const { createBriefNoteSaver } = require('./hubspot/briefNotes');
 const { createDb } = require('./db');
 const { createQuestionRouter } = require('./askJob');
@@ -54,6 +54,7 @@ const { createTexts } = require('./textJob');
 const { createWhatsNew } = require('./newJob');
 const { createReminders } = require('./remindJob');
 const { createCommitments } = require('./commitJob');
+const { createSinceReader } = require('./sinceThen');
 const { createAloware } = require('./aloware');
 const { createSheetLibrary, createDbLibrary } = require('./wowLibrary');
 const { createDeliveries, withDeliveryRecord } = require('./hubspot/deliveries');
@@ -151,6 +152,7 @@ function features(audience, { aiPaused = false } = {}) {
   let listWowIdeas = async () => "WOW plans aren't switched on yet.";
   let setReminder = async () => "Reminders aren't switched on yet.";
   let dueReminders = async () => 0;
+  let startRemindCheck = null;
   let dueCommitments = async () => 0;
   if (!hubspot || !ANTHROPIC_API_KEY) {
     log('WARNING', 'briefs are off: HUBSPOT_ACCESS_TOKEN or ANTHROPIC_API_KEY is not set');
@@ -210,8 +212,10 @@ function features(audience, { aiPaused = false } = {}) {
     }
 
     // "/remind": a person's own reminders, sent by Basecamp when Cloud Scheduler calls /tasks/tick.
-    const reminders = createReminders({ anthropic, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience });
+    // "Check if done" on a reminder's card reads the deal space and HubSpot since it was set.
+    const reminders = createReminders({ anthropic, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience, readSince: createSinceReader({ db, loadContext, listSpaceMessages: spaces.listMessages, log }) });
     setReminder = reminders.remind;
+    startRemindCheck = later('reminder check', async (job) => sendMessage(job.spaceName, await reminders.check(job), { threadName: job.threadName || null }));
     // The WOW idea library: the team's sheet when WOW_SHEET_ID is set, else the database.
     const sheetId = process.env.WOW_SHEET_ID;
     const library = sheetId ? createSheetLibrary({ sheetId }) : createDbLibrary({ db });
@@ -257,10 +261,6 @@ function features(audience, { aiPaused = false } = {}) {
     };
   }
 
-  // Sending a reminder that is due uses no AI and no HubSpot, so it is wired outside both:
-  // a missing key must not hold back reminders people already set.
-  dueReminders = createReminders({ anthropic: null, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience }).due;
-
   // "facts <deal#>": the deal as LightSpeed has it. Posted where it was asked, when
   // LightSpeed answers. "ro <number>" is one repair order, through the same function.
   let startFacts = null;
@@ -274,8 +274,15 @@ function features(audience, { aiPaused = false } = {}) {
 
   // Notes from deal spaces need HubSpot only, no AI.
   const saveSpaceNote = hubspot
-    ? createSpaceNotes({ db, createNote: hubspot.createNote, findDealSpace, log })
+    ? createSpaceNotes({ db, createNote: hubspot.createNote, findDealSpace, log, endpoint: audience })
     : async () => "Notes aren't switched on yet.";
+  // Edit note on a saved note's card: HubSpot only, no AI.
+  const noteEditor = hubspot ? createNoteEditor({ db, hubspot, updateMessage: createMessageUpdater(), log, endpoint: audience }) : null;
+  // Sending a reminder that is due uses no AI and no HubSpot, so it is wired outside both:
+  // a missing key must not hold back reminders people already set. Mark complete and Remind
+  // me again on its card use no AI either; Mark complete saves its note when HubSpot is on.
+  const sentReminders = createReminders({ anthropic: null, db, findDealSpace, findDirectMessage, sendMessage, log, endpoint: audience, saveNote: hubspot ? saveSpaceNote : null });
+  dueReminders = sentReminders.due;
   const requestAccess = later(
     'access request',
     hubspot ? createAccessRequests({ findDealSpace, spaces, db, sendMessage, findDirectMessage, log }) : async () => {},
@@ -341,7 +348,7 @@ function features(audience, { aiPaused = false } = {}) {
     return deal && deal.spaceName === spaceName ? String(space.dealNumber) : null;
   };
 
-  return { dealOfSpace, startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, dueReminders, dueCommitments, seenPerson, saveSpaceNote, buildHome, startFacts, startRo, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
+  return { dealOfSpace, startBrief, startSpace, useSpace, requestAccess, askQuestion, relayAnswer, clarifyQuestion, reuseVerdict, answerCard, startNew, startText, reviewText, sendText, postNotice, startWow, chooseWow, listWowIdeas, setReminder, completeReminder: sentReminders.complete, remindAgain: sentReminders.again, startRemindCheck, dueReminders, dueCommitments, seenPerson, saveSpaceNote, ...(noteEditor ? { reviewNote: noteEditor.review, saveNoteEdit: noteEditor.save } : {}), buildHome, startFacts, startRo, showCost: () => meter.report(7), overDailyLimit: meter.overLimit };
 }
 
 function start() {
