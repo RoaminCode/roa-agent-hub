@@ -440,9 +440,10 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
         return { status: 200, body: replyFor(event, said) };
       }
       if (cmd.command === 'ask') {
-        // Answered in the request (one short AI call), so the reply lands in the question's thread.
-        const said = await askQuestion({ spaceName: event.spaceName, threadName: event.threadName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, userDisplayName: event.userDisplayName, text: cmd.text });
-        return { status: 200, body: replyFor(event, said) };
+        // Answered in the request (one short AI call). In a space Basecamp posts the question
+        // back itself, so the answer has a thread to land in, and null comes back: no reply.
+        const said = await askQuestion({ spaceName: event.spaceName, threadName: event.threadName, isDirectMessage: event.isDirectMessage, userEmail: event.userEmail, userDisplayName: event.userDisplayName, text: cmd.text, ...(event.isDirectMessage ? {} : { ownThread: true }) });
+        return { status: 200, body: said === null ? {} : replyFor(event, said) };
       }
       if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
       if (cmd.command === 'use') {
@@ -465,7 +466,7 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
       const inDealSpace = !event.isDirectMessage && String(await Promise.resolve(dealOfSpace(event.spaceName)).catch(() => '')) === cmd.dealNumber;
       if (!event.isDirectMessage && !inDealSpace) return { status: 200, body: replyFor(event, MESSAGES.directOnly(cmd.dealNumber)) };
       // Not awaited: the brief outlives this request and posts itself when done.
-      startBrief({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail, ...(inDealSpace ? { inDealSpace } : {}) });
+      startBrief({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail, ...(inDealSpace ? { inDealSpace, threadName: event.threadName } : {}) });
       return { status: 200, body: replyFor(event, MESSAGES.working(cmd.dealNumber)) };
     }
 

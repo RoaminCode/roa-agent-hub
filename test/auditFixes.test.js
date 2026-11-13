@@ -118,7 +118,7 @@ test("a deal's own space may ask for its brief; any other space is pointed to a 
   const r = createRouter({ verify: accept, allowedUsers: ['blake@example.com'], startBrief: (job) => started.push(job), dealOfSpace: async (spaceName) => (spaceName === 'spaces/DEAL' ? '90001' : null) });
   const own = await r({ headers: { authorization: 'x' }, body: inSpace('brief 90001') });
   assert.deepStrictEqual(own.body, { text: MESSAGES.working('90001') });
-  assert.deepStrictEqual(started, [{ spaceName: 'spaces/DEAL', dealNumber: '90001', store: 'UT', userEmail: 'blake@example.com', inDealSpace: true }]);
+  assert.deepStrictEqual(started, [{ spaceName: 'spaces/DEAL', dealNumber: '90001', store: 'UT', userEmail: 'blake@example.com', inDealSpace: true, threadName: 'spaces/DEAL/threads/1' }]);
   const other = await r({ headers: { authorization: 'x' }, body: inSpace('brief 90002') });
   assert.deepStrictEqual(other.body, { text: MESSAGES.directOnly('90002') });
   const unlinked = await r({ headers: { authorization: 'x' }, body: inSpace('brief 90001', 'spaces/OTHER') });
@@ -132,14 +132,14 @@ test("in a deal's space the brief uses the Roamer already picked, and never post
   const run = createBriefJob({
     loadContext: async (args) => (loads.push(args), { found: true, deal: { id: '1' }, choices: [{ id: '7', name: 'Pat Sample' }], contactCount: 2 }),
     anthropic: {},
-    sendMessage: async (space, message) => sent.push([space, message]),
+    sendMessage: async (space, message, opts) => sent.push(opts ? [space, message, opts] : [space, message]),
     log: () => {},
     endpoint: 'https://example.com/',
     getBrief: async () => null,
   });
-  await run({ spaceName: 'spaces/DEAL', dealNumber: '90001', inDealSpace: true });
+  await run({ spaceName: 'spaces/DEAL', dealNumber: '90001', inDealSpace: true, threadName: 'spaces/DEAL/threads/1' });
   assert.deepStrictEqual(loads, [{ store: 'UT', dealNumber: '90001', contactId: undefined, rememberPick: true }]);
-  assert.deepStrictEqual(sent, [['spaces/DEAL', SORRY.pickInDirect('90001')]]);
+  assert.deepStrictEqual(sent, [['spaces/DEAL', SORRY.pickInDirect('90001'), { threadName: 'spaces/DEAL/threads/1' }]], 'posted in the thread it was asked in');
   assert.ok(!JSON.stringify(sent).includes('Pat Sample'));
 });
 

@@ -367,3 +367,29 @@ test('two answers added to one Q&A note at once are both kept', async () => {
   await Promise.all([notes.addAnswer({ noteId: '555', answer: 'Tuesday', answeredBy: 'A', at: NOW }), notes.addAnswer({ noteId: '555', answer: 'Wednesday', answeredBy: 'B', at: NOW })]);
   assert.ok(body.includes('Tuesday') && body.includes('Wednesday'));
 });
+
+test("a question a person asks in a space is posted back by Basecamp, and the answer lands in that thread", async () => {
+  const { ask, relay, sent, data } = await harness();
+  assert.strictEqual(await ask({ ownThread: true }), null, 'nothing more to reply: the question is already posted back');
+  assert.deepStrictEqual(sent.at(-1), ['spaces/DEAL', SAY.asked('Casey Coach', 'Has the awning arm come in?', 'Parts Manager'), null]);
+  const [q] = Object.values(data.questions);
+  assert.strictEqual(q.originThread, 'spaces/DEAL/threads/t2', "Basecamp's own thread, not the person's");
+  await relay({ threadName: 'spaces/DM-9/threads/t1', userEmail: 'blake@example.com', userDisplayName: 'Blake Locke', text: 'Arrives Tuesday.' });
+  assert.deepStrictEqual(sent.at(-1), ['spaces/DEAL', '*Answer from Blake Locke:* Arrives Tuesday.', 'spaces/DEAL/threads/t2']);
+});
+
+test("in a direct message a question is not posted back", async () => {
+  const { ask, sent } = await harness();
+  const before = sent.length;
+  assert.strictEqual(await ask({ ownThread: true, isDirectMessage: true, spaceName: 'spaces/DM-5', threadName: null, text: 'What is the plan?' }) === null, false);
+  assert.ok(!sent.slice(before).some(([space]) => space === 'spaces/DM-5'));
+});
+
+test('the router sends no second reply when the question was posted back in its space', async () => {
+  const asked = [];
+  const r = createRouter({ verify: async () => true, allowedUsers: ['casey@example.com'], aiUsers: ['casey@example.com'], askQuestion: async (q) => (asked.push(q), null) });
+  const event = { type: 'MESSAGE', space: { name: 'spaces/DEAL', spaceType: 'SPACE' }, user: { email: 'casey@example.com', displayName: 'Casey Coach' }, message: { name: 'spaces/DEAL/messages/1', text: '@Basecamp ask Has the title come in?', argumentText: 'ask Has the title come in?', thread: { name: 'spaces/DEAL/threads/1' } } };
+  const res = await r({ headers: { authorization: 'x' }, body: event });
+  assert.deepStrictEqual(res.body, {});
+  assert.strictEqual(asked[0].ownThread, true);
+});

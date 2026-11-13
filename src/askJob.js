@@ -42,6 +42,8 @@ const SAY = {
     role === UNSURE
       ? "Shadow mode: I couldn't tell who owns this one, so I sent it to Blake to route."
       : `Shadow mode: this would go to the ${role}. I sent it to Blake for now.`,
+  // Posted in the space by Basecamp, so the answer has a thread of Basecamp's own to land in.
+  asked: (who, question, role) => `*Question from ${who}:* ${question}\n${SAY.routed(role)}`,
   noReviewer: "I couldn't reach Blake to route this. Nothing was sent; Blake can see what happened in the logs.",
   failed: "I couldn't route that question. Nothing was sent; Blake can see what happened in the logs.",
   noCredits: "I couldn't route that question: Basecamp's AI credits have run out. Nothing was sent.",
@@ -293,7 +295,11 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
   // Returns the reply to post where the question was asked: text, or a clarify card.
   // `threadName` is the thread it was asked in, where the answer will be posted.
   // `attempt` counts the clarify cards already answered for this question.
-  async function ask({ spaceName, threadName = null, isDirectMessage, userEmail, userDisplayName, text, attempt = 0 }) {
+  // `ownThread`: the question is a person's own message in a space. Chat puts a reply to the
+  // thread of a person's slash command in a new thread (seen live 2026-11-12), while a reply
+  // to a thread Basecamp started lands in it. So Basecamp posts the question back itself,
+  // the answer goes under that, and null is returned: there is nothing more to reply.
+  async function ask({ spaceName, threadName = null, isDirectMessage, userEmail, userDisplayName, text, attempt = 0, ownThread = false }) {
     const question = String(text || '').trim();
     if (!question) return SAY.empty;
     if (question.length > MAX_CHARS) return SAY.tooLong;
@@ -401,12 +407,24 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
       const ctx = { role: routed.role, reason: routed.reason, topic: routed.topic, who, dealNumber, spaceUri, question };
       const sent = await sendMessage(dm, reviewCard(ctx, { reuse, endpoint }));
 
+      let originThread = threadName;
+      let postedBack = false;
+      if (ownThread && !isDirectMessage) {
+        const receipt = await sendMessage(spaceName, SAY.asked(nameOf(userDisplayName, userEmail), question, routed.role)).catch(
+          (e) => (log('WARNING', 'could not post the question back in its space', { dealNumber, error: errorFields(e) }), null),
+        );
+        if (receipt && receipt.threadName) {
+          originThread = receipt.threadName;
+          postedBack = true;
+        }
+      }
+
       // Blake has it by now; failing to record it must not say otherwise.
       const questionId = await db
         .recordQuestion({
           dealId,
           spaceName,
-          originThread: threadName,
+          originThread,
           reviewerThread: sent && sent.threadName,
           noteId,
           topic: routed.topic,
@@ -436,7 +454,7 @@ function createQuestionRouter({ anthropic, db, sendMessage, findDirectMessage, r
         ...cost,
         ms: Date.now() - started,
       });
-      return SAY.routed(routed.role);
+      return postedBack ? null : SAY.routed(routed.role);
     } catch (err) {
       log('ERROR', isOutOfCredits(err) ? 'question failed: out of AI credits' : 'question failed', { dealNumber, step, error: errorFields(err), ms: Date.now() - started });
       return isOutOfCredits(err) ? SAY.noCredits : SAY.failed;

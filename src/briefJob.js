@@ -129,26 +129,28 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, e
   // `contactId` is the Roamer picked from the contact picker, when the deal has several.
   // `inDealSpace`: asked for in the deal's own space, where the Roamer picked for its brief
   // is used again, and the contact picker (which names contacts) is never posted.
-  return async function runBrief({ spaceName, dealNumber, store = 'UT', announce, contactId, inDealSpace = false }) {
+  // `threadName`: the thread it was asked in, in a deal space, so the brief answers there.
+  return async function runBrief({ spaceName, dealNumber, store = 'UT', announce, contactId, inDealSpace = false, threadName = null }) {
     const started = Date.now();
+    const say = (message) => (threadName ? sendMessage(spaceName, message, { threadName }) : sendMessage(spaceName, message));
     try {
-      if (announce) await sendMessage(spaceName, announce);
+      if (announce) await say(announce);
       const context = await loadContext({ store, dealNumber, contactId, ...(inDealSpace ? { rememberPick: true } : {}) });
-      if (context.duplicate) return await sendMessage(spaceName, SORRY.duplicate(dealNumber, store));
-      if (!context.found) return await sendMessage(spaceName, SORRY.notFound(dealNumber, store));
-      if (context.notOnDeal) return await sendMessage(spaceName, SORRY.notOnDeal(dealNumber));
-      if (context.choices && inDealSpace) return await sendMessage(spaceName, SORRY.pickInDirect(dealNumber));
+      if (context.duplicate) return await say(SORRY.duplicate(dealNumber, store));
+      if (!context.found) return await say(SORRY.notFound(dealNumber, store));
+      if (context.notOnDeal) return await say(SORRY.notOnDeal(dealNumber));
+      if (context.choices && inDealSpace) return await say(SORRY.pickInDirect(dealNumber));
       if (context.choices) {
-        return await sendMessage(spaceName, renderContactChoice({ dealNumber, store, choices: context.choices, contactCount: context.contactCount, endpoint }));
+        return await say(renderContactChoice({ dealNumber, store, choices: context.choices, contactCount: context.contactCount, endpoint }));
       }
       if (!context.contact) {
         log('WARNING', 'deal has no Roamer contact', { dealNumber, store });
-        return await sendMessage(spaceName, SORRY.noContact(dealNumber));
+        return await say(SORRY.noContact(dealNumber));
       }
 
       const got = await getBrief({ context, dealNumber, started });
-      if (!got) return await sendMessage(spaceName, SORRY.failed(dealNumber));
-      await sendMessage(spaceName, renderBriefCard({ dealNumber, context, brief: got.brief, avatarUrl }));
+      if (!got) return await say(SORRY.failed(dealNumber));
+      await say(renderBriefCard({ dealNumber, context, brief: got.brief, avatarUrl }));
       // The card is out first; a note that fails to save is logged, and the next brief
       // simply writes a fresh one.
       if (!got.reused) await keepNote({ context, brief: got.brief, dealNumber, mode: got.mode });
@@ -156,7 +158,7 @@ function createBriefJob({ loadContext, anthropic, sendMessage, log, avatarUrl, e
       // Out of credits gets its own log line, so it can be found and alerted on by name.
       const noCredits = isOutOfCredits(err);
       log('ERROR', noCredits ? 'brief failed: out of AI credits' : 'brief failed', { dealNumber, error: errorFields(err), ms: Date.now() - started });
-      await sendMessage(spaceName, noCredits ? SORRY.noCredits : SORRY.failed(dealNumber)).catch((e) =>
+      await say(noCredits ? SORRY.noCredits : SORRY.failed(dealNumber)).catch((e) =>
         log('ERROR', 'could not post brief failure', { dealNumber, error: errorFields(e) }),
       );
     }
