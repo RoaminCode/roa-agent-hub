@@ -36,6 +36,7 @@ The rules for deal spaces, deal watches, commitments, reminders, handoffs, and w
 - Open, Blake's calls: the follow-up's wording (a first draft is in `SAY.followUp`); whether a promise with no day should be tracked at all; whether a promise in a `/note` should count.
 
 ## Deal Knowledge
+- Fact or status is judged by what the source says, not how the question is worded (Blake, 2026-11-12): something recorded as done, decided, confirmed, or clarified is a fact and is used at any age; something still open, pending, in progress, or scheduled is a status. An answer too old to use is still shown on the routed card, in quotes, with why it was not used.
 - Answers and explicit notes are saved as attributed, timestamped notes on the Delivery record. Facts are reused; status notes expire after 48 hours. Commitments ("tomorrow") get a check at that time.
 - Mods from a call: Basecamp writes the list as a note labeled "From the call, not yet matched to the deal". When mods appear on the deal it compares them; a match updates the label, a mismatch asks the Service Advisor and corrects the note. If nothing appears after a reasonable window, it asks.
 - No HubSpot tasks. Team Members do not use them; accountability lives in deal space notifications.

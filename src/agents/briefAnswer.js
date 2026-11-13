@@ -17,7 +17,7 @@ Decide one of:
 - "answered": the brief states the answer to this question. Give the answer in one short sentence, in the brief's own words as far as possible; which part of the brief it came from (for example "Key facts: Tow vehicle", "Mods", "Commitments and next steps", "Who they are"); and the date of the source item when the brief gives one (YYYY-MM-DD), else empty.
 - "not_in_brief": the brief does not answer it, only touches on it, or would need a guess.
 
-Also say whether the answer is a "fact" (stays true, such as a tow vehicle, a color chosen, who is coming) or a "status" (true only for now, such as whether a part arrived, when something is scheduled, whether work is done). Use "fact" when not answering.
+Also say whether the answer is a "fact" (stays true: a tow vehicle, a color chosen, who is coming, or anything the brief records as already done, decided, confirmed, or clarified) or a "status" (true only for now: something the brief shows as still open, pending, in progress, or scheduled, such as a part not yet arrived or a question not yet settled). Judge by what the brief says, not by how the question is worded: "Has X been done?" answered by "X was done" is a fact, and answered by "X is still open" is a status. Use "fact" when not answering.
 
 Rules:
 - Match by meaning, not wording. "What's the Roamer towing with?" is answered by a tow vehicle.

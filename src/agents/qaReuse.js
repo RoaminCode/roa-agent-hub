@@ -17,7 +17,7 @@ Decide one of:
 - "follow_up": the question is about the same thing as an earlier topic but asks for something the earlier answers don't cover, or something newer (for example tracking, a new date, whether it arrived). Give that topic note's id.
 - "new": no earlier topic is about the same thing.
 
-Also say whether the answer you would reuse is a "fact" (stays true, such as a part number, a price agreed, a color chosen) or a "status" (true only for now, such as where a part is, when something will arrive, whether work is done). Use "fact" when not reusing.
+Also say whether the answer you would reuse is a "fact" (stays true: a part number, a price agreed, a color chosen, or anything the answer records as already done, decided, confirmed, or clarified) or a "status" (true only for now: something still open, pending, in progress, or scheduled, such as where a part is or when something will arrive). Judge by what the earlier answer says, not by how the question is worded: "Has X been done?" answered by "X was done" is a fact, and answered by "X is still open" is a status. Use "fact" when not reusing.
 
 Rules:
 - Match by meaning, not wording. "Did we get tracking on the awning arm?" is a follow-up on an "awning arm" topic.

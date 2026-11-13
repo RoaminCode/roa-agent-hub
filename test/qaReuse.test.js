@@ -186,7 +186,7 @@ test('a status from the brief counts only within 48 hours of its source, and nev
   for (const sourceDate of ['2026-11-01', '']) {
     const h = await harness({ ok: true, decision: 'new', noteId: '' }, { inBrief: { ...FROM_BRIEF, kind: 'status', sourceDate } });
     await h.ask();
-    assert.ok(textOf(h.sent[0][1]).includes('The brief has an answer'), h.sent[0][1]);
+    assert.ok(textOf(h.sent[0][1]).includes(`The brief says: "${FROM_BRIEF.answer}"`), 'the answer it knows is shown, though not used');
     assert.ok(textOf(h.sent[0][1]).includes('more than 48 hours old'));
     assert.strictEqual(h.sent.length, 1, 'no verdict card');
   }

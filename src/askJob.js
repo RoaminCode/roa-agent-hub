@@ -122,6 +122,7 @@ function reviewMessage({ role, reason, topic, who, dealNumber, spaceUri, questio
 }
 
 // What Basecamp would have done with an earlier answer or the brief, for Blake to judge.
+// An answer too old to use is still shown, with why it was not used (Blake, 2026-11-12).
 function reuseLine(reuse) {
   if (reuse.source === 'lightspeed') {
     return `*Basecamp would answer from LightSpeed:* "${reuse.answer}" (LightSpeed's ${reuse.part || 'deal facts'}, read just now, ${reuse.kind}). Mark below whether that is right.`;
@@ -130,13 +131,13 @@ function reuseLine(reuse) {
     const from = `the brief's ${reuse.part || 'details'}${reuse.answeredOn ? `, from ${reuse.answeredOn}` : ''}, ${reuse.kind}`;
     return reuse.stillGood
       ? `*Basecamp would answer from the brief:* "${reuse.answer}" (${from}). Mark below whether that is right.`
-      : `The brief has an answer (${from}), but it is a status more than 48 hours old, so Basecamp would not use it.`;
+      : `The brief says: "${reuse.answer}" (${from}). That is a status more than 48 hours old, so Basecamp would not use it.`;
   }
   if (reuse.decision === 'answered' && reuse.stillGood) {
     return `*Basecamp would answer:* "${reuse.answer}" (${reuse.answeredBy}, ${reuse.answeredOn}, ${reuse.kind}). Mark below whether that is right.`;
   }
   if (reuse.decision === 'answered') {
-    return `An earlier answer (${reuse.answeredBy}, ${reuse.answeredOn}) is a status more than 48 hours old, so Basecamp would not reuse it; filed with that topic's questions.`;
+    return `An earlier answer says: "${reuse.answer}" (${reuse.answeredBy}, ${reuse.answeredOn}). That is a status more than 48 hours old, so Basecamp would not reuse it; filed with that topic's questions.`;
   }
   return "A follow-up on an earlier topic; filed in that topic's Q&A note.";
 }
