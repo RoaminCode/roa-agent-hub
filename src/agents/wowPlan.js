@@ -98,8 +98,12 @@ const noDashes = (text) => String(text).replace(/\s*[–—]\s*/g, ', ');
 
 // { ok: true, suggestions, usage } or { ok: false, reason, usage }. A library id it names
 // must be one it was given; otherwise the suggestion counts as new.
+const MAX_TOKENS = 5000;
+
 async function suggestWow({ anthropic, brief, ideas, standards, dealId = null }) {
-  const r = await runStructured({ anthropic, job: 'wow', model: MODEL, maxTokens: 2000, timeout: 60 * 1000, system: systemFor(standards && standards.length ? standards : STANDARD_AT_DELIVERY), schema: SCHEMA, user: formatWowInput({ brief, ideas }), dealId });
+  // The model thinks before it writes and that thinking counts toward the limit: at 2000 a
+  // large record (deal 51380, 2026-11-11) was cut off every time, with nothing to show.
+  const r = await runStructured({ anthropic, job: 'wow', model: MODEL, maxTokens: MAX_TOKENS, timeout: 90 * 1000, system: systemFor(standards && standards.length ? standards : STANDARD_AT_DELIVERY), schema: SCHEMA, user: formatWowInput({ brief, ideas }), dealId });
   if (!r.ok) return r;
   const { out, usage, costUsd } = r;
   if (!Array.isArray(out.suggestions) || !out.suggestions.length) return { ok: false, reason: 'bad_output', usage, costUsd };
