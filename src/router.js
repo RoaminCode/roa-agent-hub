@@ -33,8 +33,8 @@ const MESSAGES = {
   factsWorking: (n) => `Looking up deal ${n} in LightSpeed. It will be here in a moment.`,
   factsOff: "LightSpeed lookups aren't switched on yet.",
   roWorking: (n) => `Looking up repair order ${n} in LightSpeed. It will be here in a moment.`,
-  roDirectOnly: (n) => `Repair orders stay private for now: ask me for "ro ${n}" in a direct message with me.`,
-  factsDirectOnly: (n) => `Deal facts stay private for now: ask me for "facts ${n}" in a direct message with me.`,
+  roDirectOnly: (n) => `Repair orders stay private: ask me for "ro ${n}" in a direct message with me, or in a deal's space.`,
+  factsDirectOnly: (n) => `Deal facts stay private: ask me for "facts ${n}" in a direct message with me, or in that deal's own space.`,
   directOnly: (n) => `Roamer briefs stay private: ask me for deal ${n} in a direct message with me, or in that deal's own space.`,
   unknownStore: (s) => `I only know the Utah Experience Center (UT) so far, not ${s}.`,
 };
@@ -107,8 +107,9 @@ function log(severity, message, fields = {}) {
 // `briefUsers` and `briefsPaused` are the earlier names of the first and third, still read.
 // `dealOfSpace(spaceName)` is the number of the deal a space is linked to, or null, so a
 // deal's own space may ask for its brief.
-// `startFacts({ spaceName, dealNumber, store, userEmail })` looks a deal up in LightSpeed and
-// posts it where it was asked (factsJob.js); left out, LightSpeed lookups are off.
+// `startFacts({ spaceName, dealNumber, store, userEmail, threadName })` looks a deal up in
+// LightSpeed and posts it where it was asked (factsJob.js), in that thread when asked in a
+// deal's space; left out, LightSpeed lookups are off.
 // `startRo({ spaceName, roNumber, store, userEmail })` does the same for one repair order.
 // saveSpaceNote({ spaceName, spaceDisplayName, userEmail, userDisplayName, text }) saves a
 // note from a deal space and returns the reply; see spaceNotes.js. It spends no AI credits,
@@ -381,21 +382,27 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
         if (!event.isDirectMessage || (mayBrief && !mayBrief.has(event.userEmail))) return { status: 200, body: replyFor(event, MESSAGES.help) };
         return { status: 200, body: replyFor(event, await showCost()) };
       }
-      // The deal as LightSpeed has it, read live. No AI, so it needs no credits; in a direct
-      // message only, like a brief. Not awaited: LightSpeed can take several seconds.
+      // The deal as LightSpeed has it, read live. No AI, so it needs no credits. Posted where
+      // a brief may be: a direct message, or the deal's own space, for that deal and no other
+      // (Blake's call, 2026-11-13). In the space it lands in the thread it was asked in. Not
+      // awaited: LightSpeed can take several seconds.
       if (cmd.command === 'facts') {
         if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
-        if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.factsDirectOnly(cmd.dealNumber)) };
+        const spaceDeal = event.isDirectMessage ? null : await Promise.resolve(dealOfSpace(event.spaceName)).catch(() => null);
+        if (!event.isDirectMessage && String(spaceDeal || '') !== cmd.dealNumber) return { status: 200, body: replyFor(event, MESSAGES.factsDirectOnly(cmd.dealNumber)) };
         if (!startFacts) return { status: 200, body: replyFor(event, MESSAGES.factsOff) };
-        startFacts({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail });
+        startFacts({ spaceName: event.spaceName, dealNumber: cmd.dealNumber, store: cmd.store, userEmail: event.userEmail, ...(event.isDirectMessage ? {} : { threadName: event.threadName }) });
         return { status: 200, body: replyFor(event, MESSAGES.factsWorking(cmd.dealNumber)) };
       }
-      // One repair order as LightSpeed has it. The same rules as deal facts.
+      // One repair order as LightSpeed has it: in a direct message, or in any deal's space
+      // (the facts card there points to it). A repair order's number does not say which deal
+      // it is on, so it is not checked against the space's deal.
       if (cmd.command === 'ro') {
         if (!STORES.has(cmd.store)) return { status: 200, body: replyFor(event, MESSAGES.unknownStore(cmd.store)) };
-        if (!event.isDirectMessage) return { status: 200, body: replyFor(event, MESSAGES.roDirectOnly(cmd.roNumber)) };
+        const spaceDeal = event.isDirectMessage ? null : await Promise.resolve(dealOfSpace(event.spaceName)).catch(() => null);
+        if (!event.isDirectMessage && !spaceDeal) return { status: 200, body: replyFor(event, MESSAGES.roDirectOnly(cmd.roNumber)) };
         if (!startRo) return { status: 200, body: replyFor(event, MESSAGES.factsOff) };
-        startRo({ spaceName: event.spaceName, roNumber: cmd.roNumber, store: cmd.store, userEmail: event.userEmail });
+        startRo({ spaceName: event.spaceName, roNumber: cmd.roNumber, store: cmd.store, userEmail: event.userEmail, ...(event.isDirectMessage ? {} : { threadName: event.threadName }) });
         return { status: 200, body: replyFor(event, MESSAGES.roWorking(cmd.roNumber)) };
       }
       if (cmd.command === 'note') {

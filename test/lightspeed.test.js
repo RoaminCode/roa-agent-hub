@@ -119,6 +119,38 @@ test('the router: "facts <deal#>" works in a direct message for anyone allowed, 
   assert.deepStrictEqual((await off({ headers, body: msg('DIRECT_MESSAGE', 'facts 90001') })).body, { text: MESSAGES.factsOff });
 });
 
+test('the router: deal facts post in that deal\'s own space only, and a repair order in any deal\'s space', async () => {
+  const facts = [];
+  const ros = [];
+  const headers = { authorization: 'x' };
+  const msg = (space, text) => ({ type: 'MESSAGE', space: { name: space, spaceType: 'SPACE' }, user: { email: 'c@example.com', name: 'users/5' }, message: { name: `${space}/messages/1`, text, thread: { name: `${space}/threads/T1` } } });
+  const r = createRouter({
+    verify: async () => true,
+    allowedUsers: ['c@example.com'],
+    aiUsers: [],
+    startFacts: (j) => facts.push(j),
+    startRo: (j) => ros.push(j),
+    dealOfSpace: async (spaceName) => {
+      if (spaceName === 'spaces/BROKEN') throw new Error('database down');
+      return spaceName === 'spaces/DEAL' ? '90001' : null;
+    },
+  });
+  // The deal's own space: the card goes to the thread it was asked in.
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/DEAL', 'facts 90001') })).body, { text: MESSAGES.factsWorking('90001') });
+  assert.deepStrictEqual(facts, [{ spaceName: 'spaces/DEAL', dealNumber: '90001', store: 'UT', userEmail: 'c@example.com', threadName: 'spaces/DEAL/threads/T1' }]);
+  // Another deal there, a space with no deal, and a space that could not be checked: refused.
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/DEAL', 'facts 90002') })).body, { text: MESSAGES.factsDirectOnly('90002') });
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/OTHER', 'facts 90001') })).body, { text: MESSAGES.factsDirectOnly('90001') });
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/BROKEN', 'facts 90001') })).body, { text: MESSAGES.factsDirectOnly('90001') });
+  assert.strictEqual(facts.length, 1);
+  // A repair order: any deal's space, never a space with no deal.
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/DEAL', 'ro 10001') })).body, { text: MESSAGES.roWorking('10001') });
+  assert.deepStrictEqual(ros, [{ spaceName: 'spaces/DEAL', roNumber: '10001', store: 'UT', userEmail: 'c@example.com', threadName: 'spaces/DEAL/threads/T1' }]);
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/OTHER', 'ro 10001') })).body, { text: MESSAGES.roDirectOnly('10001') });
+  assert.deepStrictEqual((await r({ headers, body: msg('spaces/BROKEN', 'ro 10001') })).body, { text: MESSAGES.roDirectOnly('10001') });
+  assert.strictEqual(ros.length, 1);
+});
+
 // A repair order as the function returns it: made-up values, the function's real shape.
 const SESSION = (start, end, hrs, loggedOut = true) => ({ technician: 'Terry Tech', start, end, hours: hrs, loggedOut, saleType: 'internal' });
 const OPEN_RO = { roNumber: '10001', paid: null, clock: { sessions: [SESSION('2026-11-07T08:00:00', '2026-11-07T10:30:00', 2.5), SESSION('2026-11-10T13:05:00', null, 0.5, false)], totalHours: 3, technicians: ['Terry Tech'], lastActivity: '2026-11-10T13:05:00', clockedOn: true, truncated: false } };

@@ -266,8 +266,8 @@ function features(audience, { aiPaused = false } = {}) {
   let startFacts = null;
   let startRo = null;
   if (facts) {
-    startFacts = later('facts', async (job) => sendMessage(job.spaceName, await facts(job)));
-    startRo = later('repair order', async (job) => sendMessage(job.spaceName, await facts.repairOrder(job)));
+    startFacts = later('facts', async (job) => sendMessage(job.spaceName, await facts(job), { threadName: job.threadName || null }));
+    startRo = later('repair order', async (job) => sendMessage(job.spaceName, await facts.repairOrder(job), { threadName: job.threadName || null }));
   } else {
     log('WARNING', 'LightSpeed lookups are off: RJB_LOOKUP_URL is not set');
   }

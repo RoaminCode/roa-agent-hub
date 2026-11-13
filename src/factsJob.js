@@ -1,6 +1,7 @@
 'use strict';
 
-// "facts <deal#>" and "ro <number>" in a direct message: the deal, or one repair order, as
+// "facts <deal#>" and "ro <number>", in a direct message or a deal's space (the router
+// decides where; facts only in that deal's own space): the deal, or one repair order, as
 // LightSpeed has it right now, read live through the integration's read-only lookup
 // (lightspeed/lookup.js). No AI. It is how deal facts are checked against LightSpeed before
 // any agent is trusted with them, and what a deal space will pin later. LightSpeed is the
@@ -19,7 +20,6 @@ const { label } = require('./chat/style');
 const SAY = {
   working: (n) => `Looking up deal ${n} in LightSpeed. It will be here in a moment.`,
   off: "LightSpeed lookups aren't switched on yet.",
-  directOnly: (n) => `Deal facts stay private for now: ask me for "facts ${n}" in a direct message with me.`,
   notFound: (n, store) => `LightSpeed has no ${store} deal ${n}. Check the number and try again.`,
   storeOff: (store) => `LightSpeed lookups are not switched on for ${store} yet, only Utah.`,
   slow: (n) => `LightSpeed took too long to answer for deal ${n}. Try again in a minute.`,

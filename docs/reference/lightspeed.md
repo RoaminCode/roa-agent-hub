@@ -25,7 +25,7 @@ How the hub reads LightSpeed deal facts. Read before touching `src/lightspeed/`,
 - Never returned: any dollar amount, rate, or cost; the Roamer; invoice and warranty claim numbers; usernames.
 - A repair order that is neither paid nor clocked comes back with `paid: null` and no sessions. That means open with no tech time yet, or a wrong number; LightSpeed cannot tell those apart and Basecamp says so.
 - Tech time shows work happened, never that a job is finished. Every card says this, and an agent must never turn tech time into "done".
-- In the hub: `ro <number>` in a direct message shows one repair order; the facts card shows where each of the deal's repair orders stands (up to 6).
+- In the hub: `ro <number>` in a direct message or in any deal's space shows one repair order (a repair order's number does not say which deal it is on, so it is not checked against the space's deal); the facts card shows where each of the deal's repair orders stands (up to 6).
 - Tried on two real Utah deals 2026-11-11: the deal read took about a second, each repair order about a third of a second.
 
 ## What comes back for a deal (the allowlist lives in the integration project, `src/rjb/dealLookup.ts`)
@@ -41,7 +41,7 @@ How the hub reads LightSpeed deal facts. Read before touching `src/lightspeed/`,
 ## In the hub
 
 - `src/lightspeed/rjbView.js` trims an answer to the RJB view (version 2): deal, unit, mods, prep (PDI and findings), parts line count, and flags for things worth a look (a line not on a repair order, a PDI line mislabeled).
-- `facts <deal#>` in a direct message (`src/factsJob.js`) shows that view as a card, read live, with no AI. Anyone on `ALLOWED_USERS` may use it; it spends nothing. It is the tool for proving deal facts before an agent is trusted with them.
+- `facts <deal#>` (`src/factsJob.js`) shows that view as a card, read live, with no AI. It posts where a brief may: a direct message with Basecamp, or the deal's own space, for that deal only, in the thread it was asked in (Blake's call, 2026-11-13; before that a direct message only). Asked anywhere else, Basecamp points to a direct message or that deal's own space. Nothing is posted into a space unasked. Anyone on `ALLOWED_USERS` may use it; it spends nothing. It is the tool for proving deal facts before an agent is trusted with them.
 - `/ask` on a deal reads the same view and repair orders (`facts.read`) and offers Blake a suggested answer from them (`src/agents/factsAnswer.js`; detail in `features.md`). This is how answers from LightSpeed get proven in shadow mode.
 - Known quirks in real data (2026-11-11): a clock left on overnight inflates total tech hours (repair order 11009: 21.07 hours recorded, 4.38 without one 16.69 hour session); a paid repair order's "in" date can fall after its work was closed (11044); resolution and tech notes usually hold the same text. The clock's sessions carry a labor line id (`ROLaborID`) that matches a paid repair order's job lines but not a deal's labor lines, so hours on an open repair order cannot be tied to a job title. Blake chose to wait for LightSpeed to open `OpenServiceDet` rather than show hours by untitled line (2026-11-11).
 - Repair orders: no LightSpeed feed exposes per-job completion. Labor lines carry a repair-order-level `rostatus` only. Per-job "done" needs `OpenServiceDet` access from LightSpeed or an ROA-side record (integration review, 2026-10-30).
