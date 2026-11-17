@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-11-13
+Last updated: 2026-11-16
 
 ## Read first: AI credits and permissions
 
@@ -22,13 +22,17 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
 
 ## Where things stand
 
-- **Live:** Cloud Run service `basecamp`, `us-central1`, revision `basecamp-00087-j9c` (deployed 2026-11-13 from commit `d17d616` on `main`), https://basecamp-732941376364.us-central1.run.app. Service account `basecamp-router`, max 2 instances, CPU always allocated. Shadow mode for everything except approved texts, which are on but in test mode (`TEXT_TEST_TO`, Blake's phone, set in Cloud Run only) until Shane approves. Blake is live testing. Coby, Kevin, and Kenny were added by hand to the 51297 space on 2026-11-13 (the Utah team for every Utah deal space for now, without the Sales Coach and Delivery Coach); adding them automatically is not built.
+- **Live:** Cloud Run service `basecamp`, `us-central1`, revision `basecamp-00088-lsr` (deployed 2026-11-16 from commit `f29db15` on `main`), https://basecamp-732941376364.us-central1.run.app. Service account `basecamp-router`, max 2 instances, CPU always allocated. Shadow mode for everything except approved texts, which are on but in test mode (`TEXT_TEST_TO`, Blake's phone, set in Cloud Run only) until Shane approves. Blake is live testing. Coby, Kevin, and Kenny were added by hand to the 51297 space on 2026-11-13 (the Utah team for every Utah deal space for now, without the Sales Coach and Delivery Coach); adding them automatically is not built.
 - **Seen working live on 2026-11-12 (Blake):** `facts` correct and fast; a deal space opened with its brief and Delivery record (51297); `/ask` answered correctly from LightSpeed (the mods on a deal) and marked right; the 48 hour rule held back a stale status; routing went to the right role; `brief <deal#>` in the deal's own space reused the saved brief; a promise in an answer ("in about 10 minutes") was noted with the right time; `/remind` set.
 - **Seen in the logs 2026-11-13:** the first commitment check-in went out at 8 AM Mountain for deal 51297, after reading the space and HubSpot with no error (nothing had been said since the promise). A read of the 51297 space's messages as `basecamp-router` also worked from the laptop.
+- **Seen in the logs 2026-11-16:** the timer ran every 5 minutes from 2026-11-12 on, every run answered 200, no gap and no `tick failed`. It has sent one commitment check-in (51297) and one reminder (51422), each within 6 seconds of due. The live revision before this one saw almost no use: three Chat events, one LightSpeed lookup, one note. Six lines of "recorded deal space cannot be read; home offers a new one" on 2026-11-13 were not traced. No `TICK_SIGNER` override is set on the service.
+- **Deployed 2026-11-16, not yet seen working live:**
+  - Edit note for the writer as well as the saver. It depends on Chat sending the writer's email with a Save to HubSpot action, which is not confirmed: after one such save, read the "chat event shape" log line for `message.sender.email`, then have the writer tap Edit note. Without the email the note stays the saver's alone.
+  - Remind me again opens the old reminder again when the new one cannot be set (tests only; it needs Firestore to fail).
 - **Deployed 2026-11-13, not yet seen working live:**
   - `facts <deal#>` in that deal's own space, and `ro <number>` in any deal's space.
   - The reminder card: Mark complete (saves a HubSpot note on a deal), Check if done (one short Haiku call), Remind me again, Deal facts.
-  - The note card: a saved note is answered with a card and an Edit note button, for the person who added it. Notes saved before this deploy have no card.
+  - The note card: a saved note is answered with a card and an Edit note button. Notes saved before this deploy have no card.
   - Save to HubSpot on a message typed as "/note" and a line break (Chat sends that as plain text, so the command never runs).
 - **Deployed 2026-11-12, not yet seen working live:**
   - A commitment check that finds the promise kept and stays quiet.
@@ -36,10 +40,11 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
   - Fact or status judged by what the source says, and a too-old answer quoted on the routed card.
   - `/wow` with a 5,000 token limit. It was cut off at 2,000 on deal 51380 every time; run it there again.
   - The audit fixes proven by tests only: the brief's 3 minute limit, HubSpot read retry, the WOW row lookup, reminder retries, the Anthropic SDK at 1.8.0. Status of all 41 findings: https://claude.ai/artifact/2FNNEg8byXfTCraFzT7pgR
-- **Branch `brief-next`** (pushed, not deployed; rebase it onto `main` before working on it): optional brief parts, so a part added to the brief later does not force a full read of every deal. No part is registered yet. Brief changes collect on this branch and ship as one batch.
+- **Branch `brief-next`** (not deployed; rebased onto `main` 2026-11-16 on the office computer only, so GitHub still holds the copy from before the rebase and pushing it needs `--force-with-lease`, which Blake has not asked for; rebase it onto `main` again before working on it). It holds two things: optional brief parts, so a part added later does not force a full read of every deal (no part is registered yet), and the reworded note catch (2026-11-16): a note edited after its brief was written is corrected in an update, not reread in full. The catch is proven by tests only. Before it ships: run the rules reviewer on the branch, and one paid update (about $0.10) on a deal whose note was edited after its brief was written. Brief changes collect on this branch and ship as one batch.
+- **Claude Code agents** (`.claude/agents/`, 2026-11-16; they load when a session starts): `rules-reviewer` reads a diff against `CLAUDE.md` and this file, read only; give it the diff in a file and one line on what the change is for. Run it before every deploy. `live-log-checker` reads the service's logs for a stated window after a live try; its limit to `gcloud logging read` on `roa-agent-hub` is by instruction, not enforced. The reviewer's first two runs found one real bug and cleared one deploy; the log checker has not had a real run.
 - **Env vars on the service:** `CHAT_AUDIENCE`, `PROJECT_NUMBER` (732941376364), `ALLOWED_USERS`, `BRIEF_USERS`, `TEXT_APPROVERS`, `SHADOW_REVIEWER` (blake@rvsofamerica.com), `WOW_SHEET_ID`, `TEXTS_LIVE=true`, `TEXT_TEST_TO`, `RJB_LOOKUP_URL`, `AI_DAILY_LIMIT_USD=2`. Secrets: `HUBSPOT_ACCESS_TOKEN`, `ANTHROPIC_API_KEY`, `ALOWARE_API_TOKEN`.
 - **Deploy:** `npm run deploy` (loads the server, runs the tests, then `gcloud run deploy basecamp --source . --region us-central1 --project roa-agent-hub`; env vars and secrets are kept). gcloud's default project on the laptop is `hs-ls-integration`; always pass `--project roa-agent-hub`. GitHub runs the tests on every push.
-- **Tests:** 370 pass on `main` (`npm test`). Firestore is faked in `test/fakeFirestore.js`. `test/briefGuard.test.js` fails when a change would force a full paid read of every deal's brief.
+- **Tests:** 372 pass on `main`, 377 on `brief-next` (`npm test`). Firestore is faked in `test/fakeFirestore.js`. `test/briefGuard.test.js` fails when a change would force a full paid read of every deal's brief.
 - **Chat app "Basecamp":** App Home on; Blake, Coby, Shane, Kenny, and Kevin are allowed. The Workspace admin install is complete (Blake, 2026-11-12). Commands: `/note` (1), `/ask` (2), `/wow` (3), Save to HubSpot message action (4), `/text` (5), WOW ideas quick command (6), `/new` (7), `/remind` (8). `facts` works in a direct message or that deal's own space; `ro` in a direct message or any deal's space.
 - **What works on the live revision** (detail in `docs/reference/features.md`): briefs with reuse and incremental updates; App Home; deal spaces; Delivery records found or created when a space opens; notes; `/ask` routed to Blake with a suggested answer from earlier answers, LightSpeed, or the brief; commitment check-ins; `/new`; `/wow`; `/text` in test mode; `/remind` and the 5-minute timer; `facts` and `ro`; `cost`.
 - **Data:** HubSpot is the record (Basecamp writes notes and creates Delivery records, nothing else). Firestore holds Basecamp's own ids, timestamps, statuses, the text send log, pending reminders, commitments, and AI spend. The ROA WOW Ideas sheet holds the idea library. LightSpeed is read live, read-only, through `rjbDealLookup`; nothing from it is stored. Call transcript text is not reachable (404); briefs read call summaries.
@@ -47,7 +52,7 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
 
 ## Next steps
 
-1. **Try what was deployed 2026-11-13,** in this order: save a multi-line note in the 51297 space, tap Edit note, change it, and check the HubSpot note kept its place and says "Edited by"; set a reminder a few minutes out on 51297 and Mark complete with something typed in the box; set another and tap Check if done (the only one that spends credits); `facts 51297` in the 51297 space, and another deal's number there, which must be refused.
+1. **Try what was deployed 2026-11-13 and 2026-11-16,** and hand the `live-log-checker` agent the time window afterward. First the Edit note check for a writer (above). Then, in this order: save a multi-line note in the 51297 space, tap Edit note, change it, and check the HubSpot note kept its place and says "Edited by"; set a reminder a few minutes out on 51297 and Mark complete with something typed in the box; set another and tap Check if done (the only one that spends credits); `facts 51297` in the 51297 space, and another deal's number there, which must be refused.
 2. **Test the kept path for commitments:** answer a question with a promise and post in the deal space that it was done before it comes due; no check-in should arrive and the Q&A note should gain that message, "found by Basecamp". The check-in's wording is a first draft (`SAY.followUp` in `src/commitJob.js`).
 3. **Decide on reading space talk for promises** (Blake asked 2026-11-13; not built). Claude's advice: use the 5-minute timer, not a daily read; an AI call only when a person has posted something new; track promises only, never infer reminders; start with promises that name a day or time; keep check-ins in shadow mode; tell the team Basecamp reads the space first.
 4. **Decide whether Basecamp adds the Utah team** (Coby, Kevin, Kenny) when it opens a Utah deal space. It can (`addMember` in `src/chat/spaces.js`); today it adds only whoever opened the space.
@@ -61,6 +66,8 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
 
 Smaller, waiting on real use or on Blake:
 - Edit note does not keep the earlier wording (the note says who edited it and when). Watch how it is used for a week, then decide whether the old words should be kept.
+- Until `brief-next` ships, editing a note that a saved brief already read makes that deal's next brief a full read ($0.11 to $0.26). An edit before any brief has read the note costs nothing extra.
+- From the rules reviewer, not fixed: Check if done has no guard against a double tap (each tap is one paid call, bounded by the daily limit). Mark complete and Remind me again close a reminder and then do their work in separate steps; one transaction in `src/db.js` would close the last gap. A note's signature decides "same person" by display name while the edit right goes by email.
 - Q&A answers in the space: the bar is 10 Right or Wrong verdicts on real Team Member questions, at most 1 Wrong. Blake's own test questions do not count.
 - First live text: a real, low-stakes message with the logs watched; then remove `TEXT_TEST_TO`. Choosing the line from the Roamer's SMS history is next.
 - Try the contact picker on the first Utah deal with two contacts.
@@ -109,13 +116,14 @@ Stable detail lives in `docs/reference/`, not here:
 - When a call has both HubSpot's summary and Aloware's, the brief reads Aloware's only (2026-11-11): on real Utah calls Aloware named the Team Member and the Roamer correctly where HubSpot's summary got names wrong. The rules for what the record leaves out are in `docs/reference/features.md`.
 - The brief's last list is Commitments and next steps (Blake, 2026-11-08).
 - The brief's shape and the record rules are frozen between releases (Blake, 2026-11-12): either change forces a full paid read of every deal (about $0.18 a deal). Wording-only prompt changes force nothing. Brief changes collect on `brief-next`, are tried by hand with `/brief`, and ship as one batch. A part added later is registered as optional so saved briefs stay valid. Steps in `docs/reference/features.md`, "Changing the brief".
-- Balance due and other finance terms stay out of Basecamp (Blake, 2026-11-12): one Finance Manager manages them and will not ask Basecamp.
+- Basecamp shows no balance due or other finance terms from LightSpeed (Blake, 2026-11-12): one Finance Manager manages them and will not ask Basecamp. A finance question asked with `/ask` is still routed to the Finance Manager, and a promise in its answer is tracked like any other; Blake saw this on 51297 and said it is fine (2026-11-16). No code keeps finance topics out of routing or commitments.
 
 **Questions and commitments**
 - A promise in an answer to a routed question is tracked and checked at its due time; one check-in, to Blake in shadow mode (built and deployed 2026-11-12; rules in `docs/reference/deal-spaces-and-routing.md`).
 - Fact or status is judged by what the source says, not how the question is worded: recorded as done, decided, confirmed, or clarified is a fact, used at any age. An answer too old to use is still quoted on the card (Blake, 2026-11-12).
 - `facts` is allowed in a direct message or that deal's own space, and `ro` in a direct message or any deal's space, always on request; nothing is posted into a space automatically (Blake, 2026-11-13).
 - A person's own reminder is closed on their word (Mark complete). "Completion is detected, never reported" is the rule for Basecamp's nudges to the team. Check if done never closes a reminder itself, and its answer goes to the person who asked, not to Blake (Blake, 2026-11-13).
+- A note reworded after its brief was written is corrected in a brief update, not reread in full: any note, at most 3 at once; every other edit is still a full read (Blake, 2026-11-16; on `brief-next`, detail in `docs/reference/features.md`).
 - A saved note is shown as a card with Edit note; the person who saved it can edit it, and so can the person who wrote the words when a Teammate saved their message (Blake, 2026-11-16), and Basecamp never edits a note changed in HubSpot (Blake, 2026-11-13).
 
 **Briefs, deal spaces, texts, Home, the clock**
@@ -153,7 +161,7 @@ Stable detail lives in `docs/reference/`, not here:
 - Clone: `git clone https://RoaminCode@github.com/RoaminCode/roa-agent-hub.git` into `C:\Users\Support\Documents\Claude\Projects\roa-agent-hub`, then `npm install`.
 - Set the commit identity for this repo: `git config user.name "RoaminCode"` and `git config user.email "258948938+RoaminCode@users.noreply.github.com"`.
 - Git must be signed in to GitHub as RoaminCode, not the personal account. Keep `RoaminCode@` in the remote URL.
-- gcloud must be installed and signed in as blake@rvsofamerica.com (`gcloud auth login`; the sign-in expires). Find its path with `where gcloud`. On the office computer it is under `C:\Users\Support\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin`.
+- gcloud must be installed and signed in as blake@rvsofamerica.com (`gcloud auth login`; the sign-in expires, last renewed on the office computer 2026-11-16). Find its path with `where gcloud`. On the office computer it is under `C:\Users\Support\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin`.
 - To change a list of people on the service from PowerShell, pass the whole flag as one argument: `$v = '^#^NAME=a@x.com,b@x.com'`, then `gcloud run services update basecamp --region us-central1 --project roa-agent-hub "--update-env-vars=$v"`.
 - For live Chat checks, Blake can act as `basecamp-router` until 2026-11-19 07:00 UTC (`gcloud auth print-access-token --impersonate-service-account=basecamp-router@roa-agent-hub.iam.gserviceaccount.com --scopes=<a Chat scope>`). Chat scopes only, never cloud-platform or Secret Manager. After it expires, ask Blake before adding it again.
 - Rules Claude has been given that are easy to lose between computers: verify how a role works before asserting it (what a command shows, what Team Members actually ask); never guess a person's email address.
