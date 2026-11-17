@@ -8,9 +8,9 @@ Blake was given $10 of Anthropic API credits for Shane's test of the Roamer brie
 
 1. **Never put `ANTHROPIC_API_KEY` on a laptop** (no `.env`, no shell variable): Claude Code would bill that key instead of the subscription. The key lives only in Secret Manager. `npm test` uses fakes and never spends.
 2. **Three permissions, three lists, each fails closed (unset means nobody):**
-   - `AI_USERS`: who may spend AI credits (briefs, `/ask`, `/wow`, `/new`, `/remind`, a `/text` draft, opening a space). `BRIEF_USERS`, its earlier name, is read when `AI_USERS` is unset.
+   - `AI_USERS`: who may spend AI credits (briefs, `/ask`, `/wow`, `/new`, `/remind`, a `/text` draft, opening a space, Check if done on a reminder). `BRIEF_USERS`, its earlier name, is read when `AI_USERS` is unset.
    - `TEXT_APPROVERS`: who may approve and send a text to a Roamer. Being on `AI_USERS` does not grant it.
-   - `ALLOWED_USERS`: who may use Basecamp at all (Home, `/note`, Save to HubSpot, Request access).
+   - `ALLOWED_USERS`: who may use Basecamp at all (Home, `/note`, Save to HubSpot, Edit note, Request access, and a reminder card's Mark complete, Remind me again, and Deal facts).
 3. **`AI_PAUSED=true` stops every AI job** without a deploy (`BRIEFS_PAUSED` is its earlier name). Text approvals, Home, and notes stay on.
 4. **`AI_DAILY_LIMIT_USD`** stops AI jobs for the rest of the day (Utah time) once the day's spend reaches it, and tells Blake once. It is one shared total for everyone, not per person, so one person can use it up; spend is recorded by job, model, and deal, not by person. Set to $2 (Blake, 2026-11-12).
 5. **`cost` in a direct message with Basecamp** shows the last 7 days of AI spend by job and by day (AI users only, no AI call).
@@ -116,7 +116,7 @@ Stable detail lives in `docs/reference/`, not here:
 - Fact or status is judged by what the source says, not how the question is worded: recorded as done, decided, confirmed, or clarified is a fact, used at any age. An answer too old to use is still quoted on the card (Blake, 2026-11-12).
 - `facts` is allowed in a direct message or that deal's own space, and `ro` in a direct message or any deal's space, always on request; nothing is posted into a space automatically (Blake, 2026-11-13).
 - A person's own reminder is closed on their word (Mark complete). "Completion is detected, never reported" is the rule for Basecamp's nudges to the team. Check if done never closes a reminder itself, and its answer goes to the person who asked, not to Blake (Blake, 2026-11-13).
-- A saved note is shown as a card with Edit note; only the person who added it can edit it, and Basecamp never edits a note changed in HubSpot (Blake, 2026-11-13).
+- A saved note is shown as a card with Edit note; the person who saved it can edit it, and so can the person who wrote the words when a Teammate saved their message (Blake, 2026-11-16), and Basecamp never edits a note changed in HubSpot (Blake, 2026-11-13).
 
 **Briefs, deal spaces, texts, Home, the clock**
 - Decisions for each are in the matching `docs/reference/` file. The ones most often needed: briefs post only in a direct message or that deal's own space; with several contacts Basecamp asks which is the Roamer; notes go on the Delivery record and the Roamer, never the deal; every approved text is sent as the company (`user_id: -1`) from `src/aloware.js` only; no orange or amber on any card.

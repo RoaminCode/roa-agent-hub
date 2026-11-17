@@ -48,6 +48,8 @@ const SAY = {
   gone: "I couldn't find that reminder, so nothing changed.",
   alreadyClosed: 'That reminder was already closed.',
   closeFailed: "I couldn't do that just now. Nothing changed; Blake can see what happened in the logs.",
+  // Remind me again closed the reminder, then could neither set the new one nor open the old.
+  againLost: "I couldn't set that reminder again, and this one is now closed. Set it again with /remind; Blake can see what happened in the logs.",
   completed: (what, dealNumber, noted) => `Marked complete${dealNumber ? ` (deal ${dealNumber})` : ''}: "${what}"${noted ? '\nSaved as a note in HubSpot.' : ''}`,
   again: (when, what, dealNumber) => `I'll remind you again ${when}${dealNumber ? ` about deal ${dealNumber}` : ''}: "${what}"`,
   checking: (n) => `Checking deal ${n}'s space and the Roamer's HubSpot record. It will be here in a moment.`,
@@ -162,7 +164,20 @@ function createReminders({ anthropic, db, findDealSpace, findDirectMessage, send
       const at = now();
       const dueAt = which === 'tomorrow' ? fromUtah(`${addDays(utahParts(at).day, 1)}T09:00`) : new Date(at.getTime() + 60 * 60 * 1000);
       if (!(await db.closeReminder(r.id, 'again'))) return { done: true, text: SAY.alreadyClosed };
-      await db.addReminder({ userEmail, userName: r.userName, what: words, dueAt, dealId: r.dealId, dealNumber, spaceUri: r.spaceUri });
+      try {
+        await db.addReminder({ userEmail, userName: r.userName, what: words, dueAt, dealId: r.dealId, dealNumber, spaceUri: r.spaceUri });
+      } catch (err) {
+        // The new one was not set: open this one again, as Mark complete does when its note
+        // fails, so "nothing changed" is true and the button can be tapped again.
+        try {
+          await db.reopenReminder(r.id);
+        } catch (again) {
+          // Neither worked: say so, rather than "nothing changed".
+          log('ERROR', 'reminder closed and not set again', { dealNumber, error: errorFields(err), reopen: errorFields(again) });
+          return { done: true, text: SAY.againLost };
+        }
+        throw err;
+      }
       log('INFO', 'reminder set again', { dealNumber, dueAt: dueAt.toISOString(), user: userEmail, which: which === 'tomorrow' ? 'tomorrow' : 'hour' });
       return { done: true, text: SAY.again(whenLabel(dueAt, at), words, dealNumber) };
     } catch (err) {

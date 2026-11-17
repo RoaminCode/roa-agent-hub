@@ -16,6 +16,8 @@ function fromMessage(message) {
     // who wrote it, which may be someone other than the person who chose the action.
     fullText: (message.text || '').trim(),
     senderDisplayName: message.sender && message.sender.displayName ? String(message.sender.displayName) : null,
+    // Their email, when Chat sends it: the writer may edit the note saved from their message.
+    senderEmail: message.sender && message.sender.email ? String(message.sender.email).toLowerCase() : null,
     messageName: message.name || null,
     threadName: message.thread ? message.thread.name : null,
   };

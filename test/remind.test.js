@@ -64,7 +64,7 @@ async function harness({ read, sendFails = false, saveNote = null, readSince = n
     now: () => clock,
   });
   const remind = (over = {}) => r.remind({ spaceName: 'spaces/DEAL', isDirectMessage: false, userEmail: 'casey@example.com', userName: 'users/5', text: 'me let the Roamer know if we got that ordered within the hour', ...over });
-  return { r, remind, sent, logs, data: firestore.data, tick: (at) => ((clock = at), r.due()) };
+  return { r, db, remind, sent, logs, data: firestore.data, tick: (at) => ((clock = at), r.due()) };
 }
 
 test('in a deal space, a reminder is set for that deal and confirmed with its time, and logs never hold its words', async () => {
@@ -240,6 +240,36 @@ test('Remind me again sets the same reminder for an hour on, or 9 AM tomorrow in
   assert.deepStrictEqual(await t.r.again({ id: tid, what: WHAT, which: 'tomorrow', userEmail: CASEY }), { done: true, text: SAY.again('tomorrow at 9:00 AM', WHAT, '90001') });
   assert.strictEqual(Object.values(t.data.reminders)[1].dueAt, '2026-11-08T16:00:00.000Z');
   assert.deepStrictEqual(await t.r.again({ id: tid, what: WHAT, which: 'hour', userEmail: 'other@example.com' }), { done: false, text: SAY.gone });
+});
+
+test('Remind me again leaves the reminder open when the new one cannot be set, so it can be tapped again', async () => {
+  const h = await harness();
+  const id = await sentReminder(h);
+  // The record of the new reminder fails once.
+  const add = h.db.addReminder;
+  h.db.addReminder = async () => {
+    throw new Error('firestore down');
+  };
+  assert.deepStrictEqual(await h.r.again({ id, what: WHAT, which: 'hour', userEmail: CASEY }), { done: false, text: SAY.closeFailed });
+  assert.ok(!h.data.reminders[id].outcome, 'still open');
+  assert.strictEqual(Object.keys(h.data.reminders).length, 1, 'no new reminder');
+  assert.ok(!JSON.stringify(h.logs).includes('awning'));
+  // When the old one cannot be opened again either, the reply says it is closed.
+  const reopen = h.db.reopenReminder;
+  h.db.reopenReminder = async () => {
+    throw new Error('firestore down');
+  };
+  const lost = await harness();
+  const lid = await sentReminder(lost);
+  lost.db.addReminder = h.db.addReminder;
+  lost.db.reopenReminder = h.db.reopenReminder;
+  assert.deepStrictEqual(await lost.r.again({ id: lid, what: WHAT, which: 'hour', userEmail: CASEY }), { done: true, text: SAY.againLost });
+  h.db.reopenReminder = reopen;
+  // The next tap works.
+  h.db.addReminder = add;
+  assert.deepStrictEqual(await h.r.again({ id, what: WHAT, which: 'hour', userEmail: CASEY }), { done: true, text: SAY.again('today at 3:03 PM', WHAT, '90001') });
+  assert.strictEqual(h.data.reminders[id].outcome, 'again');
+  assert.strictEqual(Object.keys(h.data.reminders).length, 2);
 });
 
 test('Check if done reads the deal since the reminder was set, quotes what shows it, and never closes the reminder', async () => {

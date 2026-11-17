@@ -15,8 +15,9 @@
 //   spaces/{spaceId}        spaceName, dealId, dealNumber, store, how, status, linkedAt,
 //                           linkedBy (status "ready" or "gone")
 //   accessRequests/{auto}   dealId, spaceName, user, at
-//   spaceNotes/{noteId}     dealId, spaceName, user, at, chars, editedAt (when its words were
-//                           replaced with Edit note)
+//   spaceNotes/{noteId}     dealId, spaceName, user (who saved it), writer (who wrote it,
+//                           when a Teammate saved their message), at, chars, editedAt
+//                           (when its words were replaced with Edit note)
 //   people/{email}          userName (Chat id), seenAt
 //   textSends/{card}        dealId, approvedBy, lineId, to, wouldGoTo, message, shadow, card, at,
 //                           status ("sending", "sent", "unknown"), claimedAt; keyed by the
@@ -207,11 +208,12 @@ function createDb({ firestore, now = () => new Date() }) {
     await firestore.collection('accessRequests').add({ dealId: dealDocId(dealId), spaceName, user, at: stamp() });
   }
 
-  async function recordSpaceNote({ noteId, dealId, spaceName, user, chars }) {
-    await firestore.collection('spaceNotes').doc(String(noteId)).set({ dealId: dealDocId(dealId), spaceName, user, chars, at: stamp() });
+  async function recordSpaceNote({ noteId, dealId, spaceName, user, writer = null, chars }) {
+    await firestore.collection('spaceNotes').doc(String(noteId)).set({ dealId: dealDocId(dealId), spaceName, user, ...(writer ? { writer } : {}), chars, at: stamp() });
   }
 
-  // A note Basecamp saved, for Edit note: who added it. Null when there is none.
+  // A note Basecamp saved, for Edit note: who saved it (`user`) and, when that was someone
+  // else's message, who wrote it (`writer`). Null when there is none.
   async function getSpaceNote(noteId) {
     if (!/^\d{1,20}$/.test(String(noteId || ''))) return null;
     const snap = await firestore.collection('spaceNotes').doc(String(noteId)).get();

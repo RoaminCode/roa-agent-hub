@@ -286,7 +286,7 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
     }
 
     // Edit note on a saved note's card: opens a box with the note's words; Save replaces the
-    // note in HubSpot and redraws the card. Only the person who added the note; no AI. A
+    // note in HubSpot and redraws the card. Only the person who saved the note or wrote its words; no AI. A
     // dialog's reply can't carry a message, so anything to say is posted under the card.
     if (event.type === 'CARD_CLICKED' && ['noteEdit', 'noteSave', 'noteCancel'].includes(event.parameters.action)) {
       const action = event.parameters.action;
@@ -432,7 +432,7 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
       if (['note', 'ask', 'wow', 'text', 'new', 'remind'].includes(slash)) cmd = { command: slash, text: event.text };
       // A message typed as "/note" and a line break is sent by Chat as plain text, not as
       // the command, so Basecamp never hears of it; saving it this way drops that first word.
-      else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText.replace(/^\/note\b:?\s*/i, ''), writtenBy: event.senderDisplayName };
+      else if (slash === 'saveMessage') cmd = { command: 'note', text: event.fullText.replace(/^\/note\b:?\s*/i, ''), writtenBy: event.senderDisplayName, writerEmail: event.senderEmail };
       else if (slash === 'wowQuick') cmd = { command: 'wow', text: '' };
       else cmd = parseCommand(event.text);
       if (!cmd) return { status: 200, body: replyFor(event, MESSAGES.help) };
@@ -476,7 +476,7 @@ function createRouter({ verify, allowedUsers, dealOfSpace = async () => null, st
           text: cmd.text,
           // Saved, the reply is the note's card, with Edit note.
           card: true,
-          ...(cmd.writtenBy !== undefined ? { writtenBy: cmd.writtenBy } : {}),
+          ...(cmd.writtenBy !== undefined ? { writtenBy: cmd.writtenBy, writerEmail: cmd.writerEmail || null } : {}),
         });
         return { status: 200, body: replyFor(event, said) };
       }

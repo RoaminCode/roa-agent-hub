@@ -8,7 +8,8 @@
 // note's text.
 //
 // With `card: true` (the router's "note" command) the reply is a card showing the note with
-// an Edit note button (Blake, 2026-11-13). Editing is for the person who added the note: the
+// an Edit note button (Blake, 2026-11-13). Editing is for the person who saved the note, and the Teammate
+// who wrote it when it was saved from their message (Blake, 2026-11-16): the
 // button opens a box holding the note's words, read back from HubSpot, and saving replaces
 // the note there, keeps its place in the timeline, and adds "Edited by" to its signature.
 
@@ -36,7 +37,7 @@ const SAY = {
   failed: (n) => `I couldn't save that note to deal ${n}. Nothing was saved; Blake can see what happened in the logs.`,
   failedHere: "I couldn't save that note. Nothing was saved; Blake can see what happened in the logs.",
   editOff: "Editing notes isn't switched on yet.",
-  notYours: 'Only the person who added a note can edit it here.',
+  notYours: 'Only the person who wrote a note, or the person who saved it, can edit it here.',
   editGone: "I couldn't find that note in HubSpot, so there is nothing to edit.",
   // The note no longer reads as Basecamp wrote it (someone changed it in HubSpot).
   editChanged: "That note was changed in HubSpot since I saved it, so I can't edit it from here. It can be edited in HubSpot.",
@@ -151,14 +152,15 @@ function renderSpaceNote({ text, userDisplayName, userEmail, now, writtenBy, fro
 function createSpaceNotes({ db, createNote, findDealSpace, log, endpoint = '', now = () => new Date() }) {
   // Saves the note on the deal's Delivery record and its Roamer and records it. Returns the
   // reply: a line of text, or with `card` the note's card.
-  async function write({ dealId, contactId, deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, writtenBy, fromSpace, card }) {
+  async function write({ dealId, contactId, deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, writtenBy, writerEmail, fromSpace, card }) {
     const at = now();
     // Also on the Roamer's contact, so the next brief reads it (and is rewritten, not reused).
     // On the Roamer and the deal's Delivery record, never the deal itself. `dealId` is kept
     // only in Basecamp's records.
     const id = await createNote({ contactId: contactId || null, deliveryId: deliveryId || null, body: renderSpaceNote({ text: note, userDisplayName, userEmail, now: at, writtenBy, fromSpace }), timestamp: at.toISOString() });
     // The note is in HubSpot by now; failing to record it here must not say otherwise.
-    await db.recordSpaceNote({ noteId: id, dealId, spaceName, user: userEmail, chars: note.length }).catch((e) => log('ERROR', 'could not record space note', { dealNumber, noteId: id, error: errorFields(e) }));
+    // `writer` is kept only when someone saved another person's message: both may edit it.
+    await db.recordSpaceNote({ noteId: id, dealId, spaceName, user: userEmail, writer: writerEmail && writerEmail !== userEmail ? writerEmail : null, chars: note.length }).catch((e) => log('ERROR', 'could not record space note', { dealNumber, noteId: id, error: errorFields(e) }));
     log('INFO', 'space note saved', { dealNumber, space: spaceName, noteId: id, user: userEmail, chars: note.length });
     if (card) return noteCard({ noteId: id, dealNumber, onDelivery: Boolean(deliveryId), text: note, signature: signatureOf({ userDisplayName, userEmail, now: at, writtenBy }), endpoint });
     return SAY.saved(dealNumber, Boolean(deliveryId));
@@ -187,7 +189,8 @@ function createSpaceNotes({ db, createNote, findDealSpace, log, endpoint = '', n
   }
 
   // Returns the reply to post where the note was sent.
-  return async function saveSpaceNote({ spaceName, isDirectMessage = false, userEmail, userDisplayName, text, writtenBy, card = false }) {
+  // `writerEmail` is who wrote the message, when someone else saved it ("Save to HubSpot").
+  return async function saveSpaceNote({ spaceName, isDirectMessage = false, userEmail, userDisplayName, text, writtenBy, writerEmail = null, card = false }) {
     if (isDirectMessage) return saveDirect({ spaceName, userEmail, userDisplayName, text: String(text || '').trim(), card });
     const note = String(text || '').trim();
     if (!note) return SAY.empty;
@@ -203,7 +206,7 @@ function createSpaceNotes({ db, createNote, findDealSpace, log, endpoint = '', n
         return SAY.notDealSpace;
       }
       dealNumber = space.dealNumber;
-      return await write({ dealId: space.dealId, contactId: deal.contactId, deliveryId: deal.deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, writtenBy, fromSpace: true, card });
+      return await write({ dealId: space.dealId, contactId: deal.contactId, deliveryId: deal.deliveryId, dealNumber, spaceName, note, userEmail, userDisplayName, writtenBy, writerEmail, fromSpace: true, card });
     } catch (err) {
       log('ERROR', 'space note failed', { dealNumber, space: spaceName, error: errorFields(err) });
       return dealNumber ? SAY.failed(dealNumber) : SAY.failedHere;
@@ -213,14 +216,16 @@ function createSpaceNotes({ db, createNote, findDealSpace, log, endpoint = '', n
 
 // Edit note. `hubspot` is the client (get, updateNote); `updateMessage(name, message)`
 // redraws the note's card. Both steps check the note is one Basecamp recorded and that the
-// person tapping is the one who added it.
+// person tapping saved it or wrote its words (Blake, 2026-11-16: the writer of a message a
+// Teammate saved may edit the note too). A note saved before the writer was recorded, or
+// whose writer Chat did not name, is the saver's alone.
 function createNoteEditor({ db, hubspot, updateMessage = async () => {}, log, endpoint = '', now = () => new Date() }) {
   // The note as HubSpot has it now: { parts, timestamp }, or a line saying why not.
   async function current(noteId, userEmail) {
     if (!/^\d{1,20}$/.test(noteId)) return SAY.editGone;
     const record = await db.getSpaceNote(noteId);
     if (!record) return SAY.editGone;
-    if (record.user !== userEmail) return SAY.notYours;
+    if (!userEmail || (record.user !== userEmail && record.writer !== userEmail)) return SAY.notYours;
     let found;
     try {
       found = await hubspot.get(`/crm/v3/objects/notes/${noteId}?properties=hs_note_body,hs_timestamp`);

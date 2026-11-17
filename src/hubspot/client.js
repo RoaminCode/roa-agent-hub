@@ -103,7 +103,9 @@ function createHubSpotClient({ token, fetchImpl = fetch, wait = sleep, timeoutMs
   }
 
   // Replaces a note's body, but only after reading the note and `isOurs(body)` agreeing
-  // it is Basecamp's own. A Team Member's note is never overwritten.
+  // it is Basecamp's own: a brief or Q&A note, or a note a Team Member saved through
+  // Basecamp (Edit note replaces its words). A note written in HubSpot, or changed there
+  // since Basecamp saved it, is never overwritten.
   async function updateNote({ noteId, body, timestamp, isOurs }) {
     if (!/^\d+$/.test(String(noteId))) throw safeError('updateNote: invalid note id');
     if (typeof isOurs !== 'function') throw safeError("updateNote: a check that the note is Basecamp's own is required");

@@ -172,13 +172,14 @@ test('"Save to HubSpot" on a message saves the whole message, crediting its writ
       appCommandPayload: {
         appCommandMetadata: { appCommandId: 4, appCommandType: 'MESSAGE_ACTION' },
         space: { name: 'spaces/DEAL', spaceType: 'SPACE' },
-        message: { text: 'Roamer wants delivery moved to Saturday', sender: { displayName: 'Sam Service' } },
+        message: { text: 'Roamer wants delivery moved to Saturday', sender: { displayName: 'Sam Service', email: 'Sam@Example.com' } },
       },
     },
   };
   await r({ headers: { authorization: 'x' }, body: action });
   assert.strictEqual(notes[0].text, 'Roamer wants delivery moved to Saturday');
   assert.strictEqual(notes[0].writtenBy, 'Sam Service');
+  assert.strictEqual(notes[0].writerEmail, 'sam@example.com');
   assert.strictEqual(
     renderSpaceNote({ text: 'x', userDisplayName: 'Casey Coach', userEmail: 'casey@example.com', now: NOW, writtenBy: 'Sam Service' }),
     '<p><strong>Note from the deal space</strong></p><p>x</p><p>Written by Sam Service, saved by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT.</p>',
@@ -221,11 +222,11 @@ test('saving your own message says "Added by", not written and saved by the same
 });
 
 // A saved note and its editor: HubSpot holds one note ('555'), as Basecamp wrote it.
-async function editing({ body = null, failUpdate = null } = {}) {
+async function editing({ body = null, failUpdate = null, writer = null } = {}) {
   const { db } = await linkedDb({ contactId: '77' });
   const store = { body: null, timestamp: NOW.toISOString(), updates: 0 };
   const save = createSpaceNotes({ db, createNote: async (n) => ((store.body = n.body), '555'), log: () => {}, endpoint: 'https://b.example', now: () => NOW });
-  const card = await save({ spaceName: 'spaces/DEAL', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Solar: 2 panels & <b>bold</b>\nAwning: ordered', card: true });
+  const card = await save({ spaceName: 'spaces/DEAL', userEmail: 'casey@example.com', userDisplayName: 'Casey Coach', text: 'Solar: 2 panels & <b>bold</b>\nAwning: ordered', card: true, ...(writer ? { writtenBy: writer.name, writerEmail: writer.email } : {}) });
   if (body !== null) store.body = body;
   const redrawn = [];
   const hubspot = {
@@ -292,6 +293,26 @@ test('Edit note opens with the words from HubSpot, and Save replaces the note an
   assert.strictEqual(store.body.match(/Edited by/g).length, 1);
   assert.strictEqual(await editor.save({ params: saveParams, formInputs: { note: 'Solar: 4 panels' }, userEmail: 'casey@example.com', userDisplayName: 'Casey Coach' }), null);
   assert.strictEqual(store.updates, 2);
+});
+
+test('Edit note is also for the person who wrote a message a Teammate saved', async () => {
+  const saved = await editing({ writer: { name: 'Sam Service', email: 'sam@example.com' } });
+  assert.strictEqual((await saved.db.getSpaceNote('555')).writer, 'sam@example.com');
+  // The writer opens it and saves; the note still says who wrote it and who saved it.
+  assert.ok((await saved.editor.review({ params: saved.params, userEmail: 'sam@example.com', messageName: 'm' })).dialog);
+  assert.strictEqual(await saved.editor.save({ params: saved.params, formInputs: { note: 'Solar: 3 panels' }, userEmail: 'sam@example.com', userDisplayName: 'Sam Service' }), null);
+  assert.ok(saved.store.body.endsWith('<p>Written by Sam Service, saved by Casey Coach (casey@example.com) in Google Chat, Nov 7, 9:50 AM MT. Edited by Sam Service, Nov 7, 11:05 AM MT.</p>'));
+  // So does the saver; anyone else does not, nor a tap with no email.
+  assert.ok((await saved.editor.review({ params: saved.params, userEmail: 'casey@example.com', messageName: 'm' })).dialog);
+  assert.deepStrictEqual(await saved.editor.review({ params: saved.params, userEmail: 'other@example.com', messageName: 'm' }), { notice: SAY.notYours });
+  assert.deepStrictEqual(await saved.editor.review({ params: saved.params, userEmail: null, messageName: 'm' }), { notice: SAY.notYours });
+
+  // A person's own note records no writer, and a writer Chat did not name is not guessed.
+  const own = await editing();
+  assert.strictEqual((await own.db.getSpaceNote('555')).writer, undefined);
+  const unnamed = await editing({ writer: { name: 'Sam Service', email: null } });
+  assert.strictEqual((await unnamed.db.getSpaceNote('555')).writer, undefined);
+  assert.deepStrictEqual(await unnamed.editor.review({ params: unnamed.params, userEmail: 'sam@example.com', messageName: 'm' }), { notice: SAY.notYours });
 });
 
 test('Edit note is for the person who added the note, and never touches a note changed in HubSpot', async () => {
